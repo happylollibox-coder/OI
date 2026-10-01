@@ -15,6 +15,25 @@
 -- ceiling view. Two are REPORTS (INFO) by design: the overdue-appointment counter, whose cause is
 -- upstream of the register (the park-era settle_due, diagnosed, not applied), and the days-since
 -- counter, which is a clock on the orchestrator (New York), not a verdict on the ledger.
+-- v27.152 (2026-10-01): c23–c32, the next-week money plan's checks (plan Task 5, NEXT_WEEK_MONEY.md
+-- §6) and two ALARMS for a night that was not saved. WHY NOW: SP_BUILD_NEXT_WEEK_PLAN failed every
+-- pass from 2026-08-29 to 2026-09-28; LOG_PIPELINE_RUNS logged every failure and no surface told
+-- Ori. The plan checks read the plan's latest partition, the proposal snapshot and the gate table —
+-- small — never the judgement view and never a ceiling view. Three depart from the Task 5 draft
+-- because the draft's forms read RED on a healthy partition (measured 2026-10-01 before deploy:
+-- draft window test 0 but fails after 22:00 Los Angeles by the acceptance's own finding, draft pot
+-- test 7, draft move test 152; the acceptance suite's v27.147 forms 0, 0, 0), so each takes the
+-- form FACT_PLAN_NEXT_WEEK_acceptance.sql already holds: C01 (the age-2 fence), C03 (holdout spend
+-- is outside the pot) and C06 (one move per CANDIDATE). c28 is restated for P-14c: the guard is a
+-- clock and a last-day test, not a veto — a demotion under its preconditions is legitimate iff the
+-- judge published guard_released_by, and this check READS that column and never re-derives the
+-- guard (the builder vetoed every partition for a month by re-deriving it). c26 is a REPORT until
+-- plan Task 3 ships, because no engine PLAN writes proposals today and the check would otherwise
+-- assert ownership the plan does not yet hold. The two alarms: plan_partition_fresh (a night the
+-- plan step reached and did not save, or any night older than yesterday) and pipeline_step_failing
+-- (ANY procedure whose three most recent runs all logged FAIL — the generic form of the outage,
+-- which it would have named on day 1). V_DAILY_BRIEF reads this view's RED rows into one SYSTEM
+-- line (section_rank 7), so the alarm reaches the one query Ori reads every morning.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -378,6 +397,256 @@ c22 AS (  -- REPORTS: days since the seat step last ran inside an orchestrator p
            ' (snapshot ', COALESCE((SELECT CAST(MAX(snapshot_date) AS STRING) FROM ks), 'none'), ')')
   FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
   WHERE procedure_name = 'SP_MAINTAIN_FAMILY_SEATS' AND status = 'OK'
+),
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+-- c23–c32: the next-week money plan (v27.152, NEXT_WEEK_MONEY.md §6 "Health") and the two
+-- alarms for a night that was not saved. Sources: FACT_PLAN_NEXT_WEEK's latest partition (`pl`,
+-- live rows `plb`), FACT_ENGINE_PROPOSALS' latest partition (`fep`), T_ENGINE_PREFLIGHT (`pf`,
+-- above) and LOG_PIPELINE_RUNS. Tolerance $0.01 on a reconciliation, the acceptance suite's own.
+-- EMPTINESS IS RED, NOT GREEN: a check that counts violations over an empty partition finds none,
+-- and an empty partition is the very failure these checks exist to catch, so every partition
+-- check says RED when it read no rows (the threshold column says so on each).
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+pl AS (
+  SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+),
+plb AS (SELECT * FROM pl WHERE is_live_plan),
+fep AS (
+  SELECT * FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
+  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`)
+),
+c23 AS (  -- the window is complete days only, fenced to age 2, and exactly window_days long
+  -- The Task 5 draft asserted window_to = watermark - 1, which is P-10 without the P-14a fence and
+  -- fails by construction after 22:00 Los Angeles, when FN_ADS_ANCHOR_CAP() advances and the
+  -- fence gives up a day (FACT_PLAN_NEXT_WEEK_acceptance.sql C01). The fence is the convention.
+  SELECT 'plan_window_complete_days' AS check_name,
+    CAST(COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY), DATE_SUB(as_of, INTERVAL 2 DAY))
+                 OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days) AS FLOAT64),
+    'rows whose window touches the filling day, breaks the age-2 fence, or is not window_days long · red > 0 (P-10, P-14a); red when the partition is empty',
+    CASE WHEN COUNT(*) = 0 THEN 'RED'
+         WHEN COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY), DATE_SUB(as_of, INTERVAL 2 DAY))
+                      OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days) > 0 THEN 'RED'
+         ELSE 'GREEN' END,
+    CONCAT('plan of ', COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM pl), 'none'),
+           ' · window ', COALESCE((SELECT CAST(MAX(window_days) AS STRING) FROM pl), '-'),
+           ' complete days ending ', COALESCE((SELECT CAST(MAX(window_to) AS STRING) FROM pl), '-'),
+           ' · state ', COALESCE((SELECT MAX(calendar_state) FROM pl), '-'),
+           ' · ', CAST(COUNT(*) AS STRING), ' rows, both plans')
+  FROM pl
+),
+pot_rec AS (  -- the pot and the allowance per (plan, family), the acceptance's C03/C04 form
+  -- Holdout spend is OUTSIDE the pot (the builder's own arithmetic): the draft summed every good
+  -- row and read 7 families off by more than a cent on a partition the acceptance passes.
+  SELECT plan, family, MAX(pot_per_day) AS pot, MAX(allowance_target_per_day) AS alw,
+         MAX(allowance_share) AS share, MAX(allowance_ramped_per_day) AS ramped,
+         SAFE_DIVIDE(SUM(IF(side = 'GOOD' AND NOT COALESCE(holdout, FALSE), w_sp, 0)), MAX(window_days)) AS good
+  FROM pl GROUP BY 1, 2
+),
+c24 AS (  -- the pot and the allowance reconcile to the cent
+  SELECT 'plan_pot_reconciliation',
+    CAST(COUNTIF(ABS(pot - good) > 0.01 OR ABS(alw - share * pot) > 0.01) AS FLOAT64),
+    'plan x family rows whose pot or allowance is off by more than a cent · red > 0 (P-2); red when the partition is empty',
+    CASE WHEN COUNT(*) = 0 THEN 'RED'
+         WHEN COUNTIF(ABS(pot - good) > 0.01 OR ABS(alw - share * pot) > 0.01) > 0 THEN 'RED'
+         ELSE 'GREEN' END,
+    -- the per-family line is built one level down: an aggregate may not enclose another
+    CONCAT('per family, live plan: ',
+           COALESCE((SELECT STRING_AGG(line, ', ' ORDER BY line) FROM (
+                       SELECT FORMAT('%s pot $%.2f/d allowance $%.2f/d', COALESCE(p.family, '(no family)'),
+                                     COALESCE(p.pot, 0), COALESCE(p.ramped, 0)) AS line
+                       FROM pot_rec p JOIN (SELECT DISTINCT plan FROM plb) l USING (plan))), 'none'))
+  FROM pot_rec
+),
+c25 AS (  -- one move per CANDIDATE, none on the good side, none where there is nothing to repair
+  -- The draft demanded one of four moves on EVERY not-good row and read 152 violations on a
+  -- healthy partition: a keyword with no spend, no clicks and no probe nomination has nothing to
+  -- repair and carries NONE by spec §9 (v27.135). This is the acceptance's C06 (v27.147).
+  SELECT 'plan_one_move_per_notgood',
+    CAST(COUNTIF(side = 'GOOD' AND move != 'NONE')
+       + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'PARK', 'HOLD_AT_PARK', 'PAUSE'))
+       + COUNTIF(NOT is_candidate AND COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE_HOLDOUT')
+       + COUNTIF(NOT is_candidate AND NOT COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE')
+       + COUNTIF(move IS NULL) AS FLOAT64),
+    'live-plan rows: good side carrying a move, candidates carrying none of the five, non-candidates carrying one, rows with no move · red > 0 (P-4, §9); red when the live plan is empty',
+    CASE WHEN COUNT(*) = 0 THEN 'RED'
+         WHEN COUNTIF(side = 'GOOD' AND move != 'NONE')
+            + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'PARK', 'HOLD_AT_PARK', 'PAUSE'))
+            + COUNTIF(NOT is_candidate AND COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE_HOLDOUT')
+            + COUNTIF(NOT is_candidate AND NOT COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE')
+            + COUNTIF(move IS NULL) > 0 THEN 'RED'
+         ELSE 'GREEN' END,
+    CONCAT('moves on the live plan: ',
+           COALESCE((SELECT STRING_AGG(CONCAT(move, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC, move)
+                     FROM (SELECT COALESCE(move, '(null)') AS move, COUNT(*) n FROM plb GROUP BY 1)), 'none'),
+           ' · ', CAST(COUNTIF(is_candidate) AS STRING), ' candidates')
+  FROM plb
+),
+c26 AS (  -- REPORTS until plan Task 3 ships: foreign GO rows on money levers inside live-plan campaigns
+  -- The draft asserted P-11 (nothing but PLAN and LOW_STOCK moves money in a plan family) with
+  -- red > 0. Measured 2026-10-01: no engine PLAN has written a proposal and no row carries
+  -- hold_source = 'PLAN' — plan Task 3 (ownership and the preflight) is not built, so the plan
+  -- owns nothing at the gate and a RED here would be a verdict on work that does not exist. It
+  -- counts the rows a RED would count, as a number, and says so; when Task 3 ships, the status
+  -- becomes IF(count > 0, 'RED', 'GREEN') and this comment is retired.
+  SELECT 'plan_ownership_no_foreign_go',
+    CAST((SELECT COUNTIF(engine NOT IN ('PLAN', 'LOW_STOCK') AND lever IN ('BID', 'BUDGET') AND verdict = 'GO'
+                         AND campaign_id IN (SELECT DISTINCT campaign_id FROM plb)) FROM pf) AS FLOAT64),
+    'GO rows on a money lever from an engine other than PLAN or LOW_STOCK, inside a live-plan campaign · INFO (reports) until plan Task 3 ships, then red > 0 (P-11)',
+    'INFO',
+    CONCAT('plan Task 3 is NOT built — no engine PLAN writes proposals and no proposal carries hold_source PLAN, so the plan holds no ownership at the gate yet · foreign GO rows on money levers inside live-plan campaigns, by engine: ',
+           COALESCE((SELECT STRING_AGG(CONCAT(engine, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC, engine)
+                     FROM (SELECT engine, COUNT(*) n FROM pf
+                           WHERE engine NOT IN ('PLAN', 'LOW_STOCK') AND lever IN ('BID', 'BUDGET') AND verdict = 'GO'
+                             AND campaign_id IN (SELECT DISTINCT campaign_id FROM plb)
+                           GROUP BY 1)), 'none'),
+           ' · held by the plan today: ', CAST((SELECT COUNTIF(hold_source = 'PLAN') FROM fep) AS STRING), ' proposal(s)',
+           ' · live-plan campaigns: ', CAST((SELECT COUNT(DISTINCT campaign_id) FROM plb) AS STRING))
+),
+c27 AS (  -- both plans are written every night
+  SELECT 'plan_both_plans_written',
+    CAST((SELECT COUNT(DISTINCT plan) FROM pl) AS FLOAT64),
+    'distinct plans in the latest partition · must be 2 (A shadow + B live); red otherwise, red when the partition is empty (P-9)',
+    IF((SELECT COUNT(DISTINCT plan) FROM pl) = 2, 'GREEN', 'RED'),
+    CONCAT('live plan is ', COALESCE((SELECT MAX(plan) FROM plb), 'none'),
+           ' · rows A/B: ', CAST((SELECT COUNTIF(plan = 'A') FROM pl) AS STRING), '/',
+           CAST((SELECT COUNTIF(plan = 'B') FROM pl) AS STRING),
+           ' · partition ', COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM pl), 'none'))
+),
+guard AS (  -- the P-14b/P-14c ledger on the live plan, counted once for c28
+  -- under_guard = the guard's PRECONDITIONS (demoted, was good, served, unsettled). A row under
+  -- them is legitimate iff the judge published why it released it: guard_released_by is READ,
+  -- never re-derived (the builder re-derived it and vetoed every partition 2026-08-29..09-28).
+  SELECT COUNT(*) AS n_rows,
+         COUNTIF(under_guard) AS n_under,
+         COUNTIF(under_guard AND guard_released_by = 'LAST_DAY_NOT_STRONG') AS n_lds,
+         COUNTIF(under_guard AND guard_released_by = 'HOLD_EXPIRED') AS n_exp,
+         COUNTIF(under_guard AND COALESCE(guard_released_by, '') NOT IN ('HOLD_EXPIRED', 'LAST_DAY_NOT_STRONG')) AS n_no_release,
+         COUNTIF(under_guard AND guard_released_by IS NULL) AS n_null_release,
+         COUNTIF(verdict = 'HELD_UNSETTLED') AS n_held,
+         COUNTIF(verdict = 'HELD_UNSETTLED' AND NOT COALESCE(last_day_strong, FALSE)) AS n_held_weak,
+         SAFE_DIVIDE(SUM(IF(verdict = 'HELD_UNSETTLED', w_sp, 0)), MAX(window_days)) AS held_per_day
+  FROM (SELECT *, (side = 'NOT_GOOD' AND COALESCE(was_good, FALSE) AND COALESCE(served, FALSE)
+                   AND NOT COALESCE(settled, FALSE)) AS under_guard
+        FROM plb)
+),
+c28 AS (  -- P-14b is a clock and P-14c a last-day test, not a veto: every release is PUBLISHED, every hold is EARNED
+  SELECT 'plan_settle_guard_holds',
+    CAST(n_no_release + n_held_weak AS FLOAT64),
+    'live-plan rows demoted under the guard preconditions (not-good, was good, served, unsettled) with no release the judge published (HOLD_EXPIRED | LAST_DAY_NOT_STRONG), plus HELD_UNSETTLED rows whose last day was not very good · red > 0 (P-14b, P-14c); red when the live plan is empty',
+    CASE WHEN n_rows = 0 THEN 'RED' WHEN n_no_release + n_held_weak > 0 THEN 'RED' ELSE 'GREEN' END,
+    CONCAT('under the guard preconditions: ', CAST(n_under AS STRING),
+           ' — released by LAST_DAY_NOT_STRONG ', CAST(n_lds AS STRING),
+           ', HOLD_EXPIRED ', CAST(n_exp AS STRING),
+           ', no release published ', CAST(n_null_release AS STRING),
+           ', unknown reason ', CAST(n_no_release - n_null_release AS STRING),
+           ' · held (HELD_UNSETTLED): ', CAST(n_held AS STRING),
+           ', of which last day not very good ', CAST(n_held_weak AS STRING),
+           ' · the hold is $', FORMAT('%.2f', COALESCE(held_per_day, 0)),
+           '/day of window spend the not-good side does not see yet')
+  FROM guard
+),
+c29 AS (  -- REPORTS: how much of the correction the curve could actually answer for
+  SELECT 'plan_settle_curve_coverage',
+    CAST(SAFE_DIVIDE(COUNTIF(COALESCE(settle_curve_available, FALSE)), NULLIF(COUNT(*), 0)) AS FLOAT64),
+    'share of live-plan rows whose settle curve could answer · INFO (reports); 0 means the plan rests on the guard alone (P-14a)',
+    'INFO',
+    CONCAT(CAST(COUNTIF(NOT COALESCE(settle_curve_available, FALSE)) AS STRING),
+           ' row(s) uncorrected because the curve could not answer · smallest factor applied ',
+           FORMAT('%.3f', COALESCE(MIN(settle_factor_min), 1.0)),
+           ' · arms: ',
+           COALESCE((SELECT STRING_AGG(CONCAT(settle_arm, ' ', CAST(n AS STRING)), ', ' ORDER BY n DESC, settle_arm)
+                     FROM (SELECT COALESCE(settle_arm, '(null)') AS settle_arm, COUNT(*) n FROM plb GROUP BY 1)), 'none'))
+  FROM plb
+),
+c30 AS (  -- REPORTS: how far the live plan sits behind the proposal snapshot
+  SELECT 'plan_proposal_lag_days',
+    CAST(DATE_DIFF((SELECT MAX(snapshot_date) FROM fep),
+                   COALESCE((SELECT MAX(as_of) FROM plb), DATE '1900-01-01'), DAY) AS FLOAT64),
+    'days between the latest proposal snapshot and the latest live plan · INFO (reports); amber > 2; red when no live plan exists',
+    CASE WHEN (SELECT MAX(as_of) FROM plb) IS NULL THEN 'RED'
+         WHEN DATE_DIFF((SELECT MAX(snapshot_date) FROM fep), (SELECT MAX(as_of) FROM plb), DAY) > 2 THEN 'AMBER'
+         ELSE 'INFO' END,
+    CONCAT('proposals of ', COALESCE((SELECT CAST(MAX(snapshot_date) AS STRING) FROM fep), 'none'),
+           ' · live plan of ', COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM plb), 'none'),
+           ' · the proposal snapshot (Task 20.6) runs before the plan (20.8c) inside one pass, so the proposals read the plan an earlier pass wrote — one pass of lag is by design (open ruling for Ori)')
+),
+plan_clock AS (  -- the day the plan step was last REACHED (OK or FAIL) and the latest plan saved
+  -- The orchestrator passes three times a day (about 01:35, 04:10 and 12:40 New York) and the
+  -- plan step writes as_of = CURRENT_DATE('America/Los_Angeles'), so a plan for Los Angeles day D
+  -- first exists after the 04:10 New York pass. "MAX(as_of) < today" alone is therefore RED every
+  -- day between midnight and that pass for no reason. The due date is the LATER of two days: the
+  -- Los Angeles day of the last LOG_PIPELINE_RUNS row the plan step itself logged (a pass that
+  -- reached the step and did not save a partition for its own day is the outage — OK or FAIL,
+  -- because an OK that saved nothing is the same failure), and yesterday (so a dead orchestrator
+  -- is RED the next morning). A hand CALL leaves no row and does not move the clock.
+  SELECT GREATEST(COALESCE((SELECT MAX(DATE(started_at, 'America/Los_Angeles'))
+                            FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+                            WHERE procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN'
+                              AND run_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)), DATE '1900-01-01'),
+                  DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)) AS due,
+         (SELECT MAX(started_at) FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+          WHERE procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN'
+            AND run_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)) AS last_reached_at,
+         (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AS last_plan
+),
+c31 AS (  -- ALARM: a night the plan was not saved
+  SELECT 'plan_partition_fresh',
+    CAST(IF(last_plan IS NULL, NULL, GREATEST(DATE_DIFF(due, last_plan, DAY), 0)) AS FLOAT64),
+    'nights with no plan partition, up to the later of yesterday and the Los Angeles day the plan step last ran (OK or FAIL) · red > 0; red when no plan was ever saved',
+    CASE WHEN last_plan IS NULL THEN 'RED' WHEN last_plan < due THEN 'RED' ELSE 'GREEN' END,
+    CONCAT('last plan ', COALESCE(CAST(last_plan AS STRING), 'never'), ', ',
+           IF(last_plan IS NULL, 'every night',
+              CONCAT(CAST(GREATEST(DATE_DIFF(due, last_plan, DAY), 0) AS STRING), ' night(s)')),
+           ' missing · a plan is due for every night up to ', CAST(due AS STRING),
+           ' · the plan step last ran ',
+           COALESCE(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', last_reached_at, 'America/Los_Angeles'), 'never in 7 days'),
+           ' Los Angeles · the step is SP_BUILD_NEXT_WEEK_PLAN (Refresh Task 20.8c); its error, if it failed, is on pipeline_step_failing and in LOG_PIPELINE_RUNS; nothing re-runs it by itself')
+  FROM plan_clock
+),
+pr AS (  -- every procedure's runs in the last 30 days, newest first
+  -- Declared constants: 30 days is the memory (older failures belong to a step nothing runs
+  -- any more, which the freshness checks own); 3 runs is the streak (the pass runs three times a
+  -- day, so a step broken for one night fails three runs and is named the next morning).
+  SELECT procedure_name, status, error_message, started_at,
+         ROW_NUMBER() OVER (PARTITION BY procedure_name ORDER BY started_at DESC) AS rn
+  FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+  WHERE run_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+),
+pipe_fail AS (  -- procedures whose three most recent runs all logged FAIL, with the streak behind them
+  SELECT f.procedure_name, f.last_error, f.last_started,
+         s.n_streak, s.streak_since
+  FROM (SELECT procedure_name,
+               ARRAY_AGG(IF(rn = 1, SUBSTR(COALESCE(error_message, '(no message)'), 1, 120), NULL) IGNORE NULLS)[SAFE_OFFSET(0)] AS last_error,
+               MAX(IF(rn = 1, started_at, NULL)) AS last_started
+        FROM pr WHERE rn <= 3
+        GROUP BY 1
+        HAVING COUNT(*) = 3 AND COUNTIF(status = 'FAIL') = 3) f
+  JOIN (SELECT p.procedure_name,
+               COUNTIF(p.rn < COALESCE(o.first_ok_rn, 2147483647)) AS n_streak,
+               MIN(IF(p.rn < COALESCE(o.first_ok_rn, 2147483647), p.started_at, NULL)) AS streak_since
+        FROM pr p
+        LEFT JOIN (SELECT procedure_name, MIN(IF(status != 'FAIL', rn, NULL)) AS first_ok_rn
+                   FROM pr GROUP BY 1) o USING (procedure_name)
+        GROUP BY 1) s USING (procedure_name)
+),
+c32 AS (  -- ALARM, GENERIC: a step that fails three runs running is a step nobody is running by hand
+  -- This is the check that would have named SP_BUILD_NEXT_WEEK_PLAN on 2026-08-29, the first
+  -- night of its month-long outage. It names ANY procedure, so the next outage needs no new check.
+  SELECT 'pipeline_step_failing',
+    CAST((SELECT COUNT(*) FROM pipe_fail) AS FLOAT64),
+    'procedures whose three most recent runs (last 30 days, by started_at) all logged FAIL · red > 0',
+    IF((SELECT COUNT(*) FROM pipe_fail) > 0, 'RED', 'GREEN'),
+    COALESCE((SELECT STRING_AGG(CONCAT(procedure_name, ': ', last_error,
+                                       ' [', CAST(n_streak AS STRING), ' run(s) failing in a row since ',
+                                       FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', streak_since, 'America/New_York'), ' New York]'),
+                                '; ' ORDER BY last_started DESC) FROM pipe_fail),
+             CONCAT('no step has failed its last three runs · ',
+                    CAST((SELECT COUNT(DISTINCT procedure_name) FROM pr) AS STRING), ' procedures logged in the last 30 days · ',
+                    CAST((SELECT COUNTIF(status = 'FAIL') FROM pr) AS STRING), ' FAIL row(s) among ',
+                    CAST((SELECT COUNT(*) FROM pr) AS STRING), ' runs · last run ',
+                    COALESCE((SELECT FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', MAX(started_at), 'America/New_York') FROM pr), 'never'),
+                    ' New York'))
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6
@@ -386,4 +655,7 @@ UNION ALL SELECT * FROM c10 UNION ALL SELECT * FROM c11 UNION ALL SELECT * FROM 
 UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
 UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
 UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
-UNION ALL SELECT * FROM c22;
+UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM c24
+UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM c27
+UNION ALL SELECT * FROM c28 UNION ALL SELECT * FROM c29 UNION ALL SELECT * FROM c30
+UNION ALL SELECT * FROM c31 UNION ALL SELECT * FROM c32;

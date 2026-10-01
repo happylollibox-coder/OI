@@ -10,7 +10,8 @@ purpose is to make it better. meaning if after a change it became worse this is 
 |---|---|
 | `FACT_ENGINE_PROPOSALS` | The engine's memory of its own **opinions** — one row per (day, engine, instruction), applied or not. Partitioned by `snapshot_date`. |
 | `SP_SNAPSHOT_ENGINE_PROPOSALS` | Writes today's partition (delete-today-then-insert, idempotent). One single-view scan per INSERT — planner-ceiling doctrine. Orchestrator Task 20.6. |
-| `V_DAILY_BRIEF` | The one-query answer. Six sections, uniform row shape. |
+| `V_DAILY_BRIEF` | The one-query answer. Seven sections, uniform row shape. |
+| `V_ENGINE_HEALTH` | The engine's standing self-check. The SYSTEM section reads it LIVE (never an image) and folds its RED rows into one line. Spec: `architecture/ENGINE_HEALTH.md`. |
 | `T_FAMILY_SEAT_REGISTER` | The family seat register's once-per-pass image, built by `SP_REFRESH_CUBE_TABLES` step 0c. The SEATS section reads it — not the live view — so the brief, the Weekly Run front page and the `SeatRegister` cube all quote one image. Spec: `architecture/FAMILY_SEAT_REGISTER.md`. |
 | `SP_ENGINE_PREFLIGHT` | Not a brief object, but the brief now reads its verdict. Nothing reaches PLANNED that the gate refused. Spec: `architecture/ENGINE_PREFLIGHT.md`. |
 
@@ -70,6 +71,31 @@ ORDER BY section_rank, campaign_name;
   unlogged drift, its own finding); (3) **conflict flag** — a key any engine instructs in today's
   proposal snapshot demotes to `REVIEW` naming the conflict (single-home: the live engine outranks
   a scorecard remedy; low stock outranks everything).
+
+- **SYSTEM** — one line, always present (v27.152, 2026-10-01; section_rank 7, appended): how many
+  of `V_ENGINE_HEALTH`'s checks are RED and which, with the board's own detail quoted for the two
+  that mean **a night was not saved** — `plan_partition_fresh` (the last plan date and the nights
+  missing) and `pipeline_step_failing` (the failing step, the first 120 characters of its latest
+  error, the length of the streak) — and every other RED named by name. `campaign_name` is
+  `V_ENGINE_HEALTH` (where to read on), `from_value` the RED count, `to_value` 0 (a quiet board
+  is the goal state), `status` RED iff any check is RED. The action says A NIGHT WAS NOT SAVED when
+  either alarm is RED, because that is the one state in which PLANNED above is quoting a plan
+  older than it looks.
+
+  **Why it is here and not only on the board.** `SP_BUILD_NEXT_WEEK_PLAN` failed every pass from
+  2026-08-29 to 2026-09-28. `LOG_PIPELINE_RUNS` logged every failure, the Admin sidebar dot
+  reflected it, and this query — the one Ori reads every morning — said nothing. The board already
+  carried three REDs nobody acted on, so a RED there is necessary and not sufficient; this line is
+  the sufficient half. It reads the board LIVE, never an image, because an image goes stale exactly
+  when the pipeline that builds it stops — the failure it exists to report. The cost is one more
+  read of the board inside the brief (one `V_CHANGE_SCORECARD` arm beside the brief's own two);
+  measured at deploy and recorded in the task report, not pinned here.
+
+  **One row, always.** On a healthy board it reads `SYSTEM: 0 checks RED` with the last plan date
+  and the last run, so a reader can tell "quiet because healthy" from "quiet because the line
+  broke"; on an empty board it says the board is empty rather than that nothing is wrong.
+  Asserted, with its negative controls as standing checks, by
+  `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (C04, C05, C07).
 
 ## One keyword, one price (v27.102, 2026-08-21)
 

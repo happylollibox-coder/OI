@@ -1215,4 +1215,63 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
 
 ## 5. The plan book (Task 4) — to be written
 
-## 6. Grading, health and the surfaces (Tasks 5–7) — to be written
+## 6. Grading, health and the surfaces (Tasks 5–7) — health built v27.152; grading and the surfaces to be written
+
+### Health (Task 5's second half, v27.152, 2026-10-01)
+
+**What happened, and why this half shipped before the grade.** `SP_BUILD_NEXT_WEEK_PLAN`
+failed every pass from 2026-08-29 to 2026-09-28 — first on the P-14b assertion the builder
+re-derived from the guard's preconditions (§2, "the guard's clock"), then on §9's seat-number
+stability (C23). `LOG_PIPELINE_RUNS` logged every one of those failures. The Admin page's sidebar
+dot reflected the latest pass. Nothing on `V_DAILY_BRIEF` — the one query Ori reads every morning
+— said a word, and `V_ENGINE_HEALTH` already showed three REDs nobody acted on, so a RED there is
+necessary and not sufficient. The grade (`V_PLAN_SCORECARD`, Task 5's first half) is still to be
+built; what shipped first is the alarm, because a learning system that does not notice it stopped
+saving its decisions is not learning.
+
+**The checks** live on `V_ENGINE_HEALTH` (c23–c32; the board's ritual query is in
+`ENGINE_HEALTH.md`, which also carries each check's threshold in words). They read the plan's
+latest partition, the proposal snapshot and the gate table — never `V_PLAN_WINDOW_JUDGMENT`,
+which re-anchors the moment the ads watermark moves, and never a ceiling view. Every partition
+check reads RED on an empty partition rather than vacuously green.
+
+| check | reads | status |
+|---|---|---|
+| `plan_window_complete_days` | the fence: `window_to = LEAST(watermark − 1, as_of − 2)` and `window_days` long (the Task 5 draft's `watermark − 1` fails after 22:00 Los Angeles — §2 "why it is fenced") | red > 0 |
+| `plan_pot_reconciliation` | pot = good-side spend outside the holdout, allowance = share × pot, to the cent (the acceptance's C03/C04 form; the draft counted holdout spend into the pot) | red > 0 |
+| `plan_one_move_per_notgood` | one move per CANDIDATE, NONE on the good side and on rows with nothing to repair (§9 v27.135, the acceptance's C06 form; the draft read 152 violations on a healthy partition) | red > 0 |
+| `plan_ownership_no_foreign_go` | foreign GO rows on money levers inside live-plan campaigns — **a REPORT until Task 3 ships**, because no engine `PLAN` writes proposals and the plan owns nothing at the gate yet | INFO, then red > 0 |
+| `plan_both_plans_written` | exactly plans A and B in the latest partition | red otherwise |
+| `plan_settle_guard_holds` | **P-14b is a clock and P-14c a last-day test, not a veto.** A live-plan row demoted under the guard's preconditions (not-good, was good, served, unsettled) is legitimate iff the judge published `guard_released_by` as `HOLD_EXPIRED` or `LAST_DAY_NOT_STRONG`; a `HELD_UNSETTLED` row must have earned the hold with a very good last day. The check READS `guard_released_by` and never re-derives the guard — re-deriving it is what vetoed every partition for a month | red > 0 |
+| `plan_settle_curve_coverage` | share of live-plan rows the curve could correct | INFO |
+| `plan_proposal_lag_days` | the proposal snapshot's date against the live plan's | INFO, amber > 2 |
+| `plan_partition_fresh` | **ALARM.** The latest plan is older than the later of yesterday and the Los Angeles day the plan step last ran, OK or FAIL. Not "older than today": the pass runs three times a day and the first that can write today's partition is the 04:10 New York one, so "today" alone would be red between midnight and that pass every day. The detail says the last plan date and the nights missing | red > 0 |
+| `pipeline_step_failing` | **ALARM, GENERIC.** Any procedure whose three most recent runs in the last 30 days all logged FAIL, with the first 120 characters of its latest error and the length of the streak. This is the check that would have named the builder on day 1 of the outage, and the next outage needs no new check | red > 0 |
+
+**The surface.** `V_DAILY_BRIEF` carries one SYSTEM line (section_rank 7, appended) that reads
+the board LIVE — never an image, which goes stale exactly when the pipeline that builds it stops —
+and folds its RED rows into one sentence, the two alarms first and quoted with the board's own
+detail. The action says A NIGHT WAS NOT SAVED when either alarm is RED. `DAILY_BRIEF.md` has the
+row shape and the reasons.
+
+**Deploy and verify.**
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_DAILY_BRIEF.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql)"
+```
+
+The acceptance carries its negative controls as standing checks: a twin of each alarm's
+expression run over doctored temp copies (a healthy step's three most recent runs set to FAIL
+must be named, two of three must not; the latest partition dropped must read RED; a release
+nulled and a hold weakened must each count 1) and tied to the deployed view's live reading so the
+twin cannot drift. The measured results of the first run are in the file's header.
+
+**What this half does not do.** It does not grade the plan (`V_PLAN_SCORECARD`), does not record
+the rule settings' history (the 1.5× `strong_day_mult` and the 1-order `strong_day_min_orders` in
+the judgement view's `k` CTE are still literals), and does not re-run a failed step — nothing
+does; the line says so.
+
+### Grading (Task 5's first half) and the surfaces (Tasks 6–7) — to be written

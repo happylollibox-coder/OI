@@ -29,6 +29,10 @@
 --                  lower — remedy_value is the number) still unrestored, from the last 14 days of
 --                  newly-readable grades. "if after a change it became worse this is not good" —
 --                  this section is that sentence, mechanized.
+--   SYSTEM       — ONE line, always present: how many of V_ENGINE_HEALTH's checks are RED, which
+--                  ones, and — for the two that mean a night was not saved — the board's own
+--                  detail (the last plan date and nights missing; the failing step and its error).
+--                  v27.152, below.
 --
 -- PLANNER NOTE: V_CHANGE_SCORECARD is a ceiling view; FACT_ENGINE_PROPOSALS and the change log
 -- are cheap. The scorecard subtree appears in two UNION arms — kept lean (no further joins on
@@ -135,6 +139,36 @@
 --
 -- The standing assertion for this defect is V_ENGINE_HEALTH's plan_price_ambiguity check, with a
 -- pre-deploy twin in scripts/bigquery/check_one_price_per_key.py.
+--
+-- ##########################################################################
+-- # v27.152 — SYSTEM: the alarm for a night that was not saved reaches HERE. #
+-- ##########################################################################
+-- (2026-10-01.) SP_BUILD_NEXT_WEEK_PLAN failed every pass from 2026-08-29 to 2026-09-28.
+-- LOG_PIPELINE_RUNS recorded every failure; the Admin page's sidebar dot reflected it; nothing on
+-- the one query Ori reads every morning said a word, and V_ENGINE_HEALTH — which now carries the
+-- two alarm checks plan_partition_fresh and pipeline_step_failing — already showed three REDs
+-- nobody acted on, so a RED there is necessary and not sufficient. This section is the sufficient
+-- half: the board's RED rows, read LIVE (never an image — an image goes stale precisely when the
+-- pipeline that builds it stops, which is the failure this line exists to report), folded into one
+-- row at SECTION_RANK 7, APPENDED, so the six existing sections keep their numbers and their order
+-- and the ritual query is byte-identical above it.
+--
+-- ONE ROW, ALWAYS. On a healthy board it reads 'SYSTEM: 0 checks RED' with the last plan date and
+-- the last run, so a reader can tell 'quiet because healthy' from 'quiet because the line broke'
+-- (the SEAT_SURFACE suite's rule: an empty population is a violation of the check that reads it).
+-- The RED list leads with the two alarms and quotes the board's own detail for them —
+-- 'plan_partition_fresh (last plan 2026-09-28, 3 nights missing · ...)',
+-- 'pipeline_step_failing (SP_X: <error> [N runs failing in a row since ...])' — and names every
+-- other RED check by name only; their detail is on the board, one query away. The action column
+-- says A NIGHT WAS NOT SAVED when either alarm is RED, because that is the one state in which the
+-- morning's PLANNED section is quoting a plan older than it looks.
+-- from_value is the RED count and to_value is 0: a quiet board is the goal state (ENGINE_HEALTH.md).
+-- Row shape as every other section; campaign_id and keyword_id NULL, because this names no
+-- campaign and no keyword and no sheet is built from it (the holdout rule has nothing to mark).
+-- Every CONCAT argument is COALESCEd (nothing here may render blank, v27.123).
+-- COST: this view now carries V_ENGINE_HEALTH, which carries one V_CHANGE_SCORECARD arm beside
+-- the brief's own two; measured at deploy (the numbers are in the task report, not here).
+-- Acceptance: scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql (C04, C05).
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_DAILY_BRIEF` AS
 WITH latest AS (
@@ -521,6 +555,57 @@ seats AS (
     -- a family is not a campaign, and no sheet is built from this section.
     CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id
   FROM seat_family s
+),
+
+-- v27.152 SYSTEM. The board, read live and ONCE: one aggregate over V_ENGINE_HEALTH, because a
+-- CTE referenced three times is inlined three times and each copy carries a ceiling-view arm.
+-- pri puts the two alarms first: they are the ones whose detail the line quotes, because they
+-- are the ones that say a night was not saved. The first clause of each alarm's detail — 'last
+-- plan 2026-10-01, 0 night(s) missing', 'no step has failed its last three runs' — is carried on
+-- EVERY morning, so the healthy line still says what it checked and the plan's date is readable
+-- without opening the board.
+health AS (
+  SELECT COUNT(*) AS n_checks,
+         COUNTIF(status = 'RED') AS n_red,
+         COUNTIF(status = 'RED' AND pri <= 2) AS n_alarm,
+         -- STRING_AGG skips NULLs, so only the RED rows join the list; the ORDER BY still ranks them
+         STRING_AGG(IF(status = 'RED',
+                       IF(pri <= 2, CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name),
+                       NULL), '; ' ORDER BY pri, check_name) AS red_list,
+         COALESCE(MAX(IF(check_name = 'plan_partition_fresh',  SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
+                  'plan_partition_fresh is not on the board') AS plan_clause,
+         COALESCE(MAX(IF(check_name = 'pipeline_step_failing', SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
+                  'pipeline_step_failing is not on the board') AS pipe_clause
+  FROM (SELECT check_name, status, detail,
+               CASE check_name WHEN 'pipeline_step_failing' THEN 1
+                               WHEN 'plan_partition_fresh'  THEN 2
+                               ELSE 3 END AS pri
+        FROM `onyga-482313.OI.V_ENGINE_HEALTH`)
+),
+system_health AS (
+  -- an aggregate over zero rows is still one row, so the line exists on a quiet board — and on
+  -- an EMPTY board, where it says so instead of saying nothing is wrong
+  SELECT
+    'SYSTEM' AS section, 7 AS section_rank,
+    'ENGINE HEALTH' AS source,
+    'V_ENGINE_HEALTH' AS campaign_name,
+    FORMAT('%d of %d checks RED', h.n_red, h.n_checks) AS item,
+    CASE WHEN h.n_checks = 0 THEN 'the board is empty — V_ENGINE_HEALTH returned no rows; read the view by hand before trusting anything above this line'
+         WHEN h.n_alarm > 0 THEN 'A NIGHT WAS NOT SAVED — read the failing step\'s error in this line, fix it, and run the step by hand; nothing re-runs it for you, and PLANNED above may be quoting a plan older than it looks'
+         WHEN h.n_red > 0 THEN 'read the RED rows on V_ENGINE_HEALTH — each names what it measures and what breaks when it fires'
+         ELSE 'nothing to do — no check is RED' END AS action,
+    CAST(h.n_red AS FLOAT64) AS from_value,
+    0.0 AS to_value,
+    CASE WHEN h.n_checks = 0 THEN 'RED' WHEN h.n_red > 0 THEN 'RED' ELSE 'GREEN' END AS status,
+    CONCAT('SYSTEM: ', CAST(h.n_red AS STRING), ' check', IF(h.n_red = 1, '', 's'), ' RED',
+           IF(h.n_red > 0,
+              CONCAT(' — ', COALESCE(h.red_list, '(the list could not be built)')),
+              CONCAT(' — every check on the board is green, amber or a report · ',
+                     COALESCE(h.plan_clause, 'no plan clause'), ' · ', COALESCE(h.pipe_clause, 'no pipeline clause'))),
+           ' · ', CAST(h.n_checks AS STRING), ' checks read live from V_ENGINE_HEALTH',
+           '; the board: SELECT check_name, measured, status, threshold, detail FROM V_ENGINE_HEALTH ORDER BY status = \'GREEN\', check_name') AS detail,
+    CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id
+  FROM health h
 )
 
 SELECT * FROM planned
@@ -528,4 +613,5 @@ UNION ALL SELECT * FROM skipped
 UNION ALL SELECT * FROM happened
 UNION ALL SELECT * FROM verdict_new
 UNION ALL SELECT * FROM action_items
-UNION ALL SELECT * FROM seats;
+UNION ALL SELECT * FROM seats
+UNION ALL SELECT * FROM system_health;

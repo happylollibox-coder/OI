@@ -33,6 +33,36 @@ orchestrator's clock; `started_at` is UTC and is converted; amber>1, red>2, red 
 logged). Every one was proven to fire on doctored `TMP_` copies before deploy and read
 GREEN / INFO on the live objects after it; the numbers are the board's, never this file's.
 
+**The next-week money plan's checks and the two alarms (v27.152, 2026-10-01; `plan_*` and
+`pipeline_step_failing`, spec `NEXT_WEEK_MONEY.md` §6).** Why now: `SP_BUILD_NEXT_WEEK_PLAN`
+failed every pass from 2026-08-29 to 2026-09-28, `LOG_PIPELINE_RUNS` logged every failure, and no
+surface Ori reads said a word — while this board already carried three REDs nobody acted on, so a
+RED here is necessary and not sufficient. The sufficient half is `V_DAILY_BRIEF`'s SYSTEM line
+(section_rank 7), which reads this view LIVE and folds its RED rows into one sentence; see
+`DAILY_BRIEF.md`. The checks read the plan's latest partition, the proposal snapshot and the gate
+table — small — never the judgement view and never a ceiling view, and every partition check reads
+RED on an EMPTY partition rather than vacuously green. plan_window_complete_days (the age-2
+fence, the acceptance's C01 form — the Task 5 draft's `watermark − 1` fails after 22:00 Los Angeles;
+red>0) · plan_pot_reconciliation (holdout spend outside the pot, the C03 form; red>0) ·
+plan_one_move_per_notgood (one move per CANDIDATE, the C06 form — the draft read 152 violations on
+a healthy partition; red>0) · plan_ownership_no_foreign_go (INFO: plan Task 3 is not built, no
+engine PLAN writes proposals, so it REPORTS the foreign GO rows on money levers inside live-plan
+campaigns as a number; red>0 once Task 3 ships) · plan_both_plans_written (red unless exactly A
+and B) · plan_settle_guard_holds (P-14b as a clock, P-14c as a last-day test, NOT a veto: red for a
+demotion under the guard's preconditions whose `guard_released_by` the judge did not publish as
+HOLD_EXPIRED or LAST_DAY_NOT_STRONG, and for a HELD_UNSETTLED row whose last day was not very
+good; the check READS the column and never re-derives the guard — the builder re-derived it and
+vetoed every partition for a month) · plan_settle_curve_coverage (INFO) · plan_proposal_lag_days
+(INFO; amber>2) · **plan_partition_fresh** (ALARM; red when the latest plan is older than the later
+of yesterday and the Los Angeles day the plan step last ran, OK or FAIL — "older than today" alone
+would be red every day between midnight and the 04:10 New York pass, which is the first that can
+write today's partition; the detail says the last plan date and the nights missing) ·
+**pipeline_step_failing** (ALARM, GENERIC; red when ANY procedure's three most recent runs in the
+last 30 days all logged FAIL; the detail names each one with the first 120 characters of its latest
+error and the length of the streak — the check that would have named the plan builder on day 1,
+and that needs no new check for the next outage). Acceptance, with the negative controls as standing
+checks: `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql`.
+
 First board 2026-08-16: RED contradiction_rate 31.8 (57/179 — the gate WORKS; the signal is that
 the engines structurally overlap a third of their instructions, mostly LAUNCH proposing on
 LOW_STOCK-owned keys — a future refinement is to stop GENERATING those, not just silencing them)
