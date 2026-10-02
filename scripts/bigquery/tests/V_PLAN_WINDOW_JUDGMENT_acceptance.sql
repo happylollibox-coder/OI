@@ -1,7 +1,8 @@
 -- =============================================================================================
 -- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.135 (2026-08-23); C06
 -- restated 2026-10-02 for P-14c (see C06 below); C12 / C22 restated and G1..G4 added 2026-10-02
--- for the judge's memory, v27.156 (see the v27.156 block below).
+-- for the judge's memory, v27.156 (see the v27.156 block below); C08 / C18 restated and P1..P3
+-- added 2026-10-02 for the judge's prices and ranks, v27.157 (see the v27.157 block below).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -157,6 +158,45 @@
 -- G4 IS NOT VACUOUS ON LIVE (same day, its CTEs run with counting SELECTs): 45 honoured memories
 -- (43 grace, 2 hold), 18 of them with gap windows, 540 gap windows read, 9 at the order floor,
 -- 0 GOOD.
+--
+-- v27.157 (2026-10-02, piece-1 plan Task 3) — THE JUDGE'S PRICES AND RANKS: C08 and C18 restated,
+-- P1..P3 new. 30 checks.
+--   C08 RESTATED for P-19: a price under the row's floor is allowed only where planned_bid_basis is
+--       P19_HELD_AT_CURRENT and the price is the current bid (a current bid already under the floor,
+--       which P-19 holds rather than raises; 5 such rows on 2026-10-02, none a candidate).
+--   C18 RESTATED: the seat promise is matched on "competes for a seat" (P-19 / P-25 seat clauses
+--       name "its current price" / "LIFT's PROBE_START bid", not "the repaired price").
+--   P1  P-19: no non-probe not-good row under the bar is priced above its current bid or costed
+--       above its window spend per day; P19_HELD_AT_CURRENT sits only where it is true; a sentence
+--       names P-19 exactly where the label does (candidates).
+--   P2  P-20: rank_money_burned is published on every candidate and equals its formula, and the
+--       view's deployed ORDER BY ranks by GREATEST(rank_score, 0) then rank_money_burned then
+--       clicks (read from INFORMATION_SCHEMA.VIEWS: an ORDER BY leaves no trace on a row).
+--   P3  P-25: computed from FACT_ENGINE_PROPOSALS itself — a not-good probe with one LIFT
+--       PROBE_START bid is priced at it (capped at GREATEST(2.00, current bid)), costed at
+--       click_goal_day x it, and a candidate's sentence names it; a probe with none keeps
+--       repair_bid_p6 and says so.
+--   Emptiness terms: P1 (no priced non-probe not-good row under the bar), P2 (no candidate without a
+--   positive score, or no definition read), P3 (no not-good probe with a LIFT price).
+-- NEGATIVE CONTROLS (check_judge_memory_controls.py, which now also swaps
+-- `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS` for a copy and inlines each copy as one statement).
+-- Run 2026-10-02 14:23 UTC on the deployed v27.157 view, exit 0, LIVE 30 checks all 0, the 17
+-- Task 2 controls unchanged, and:
+--   NC_P1_RAISED (a P6_REPAIR row under the bar, priced current + $0.05) 1; NC_P1_COST_ABOVE_SPEND
+--   1; HC_P1_AT_BAR_RAISED (a row at or above the bar raised) 0; NC_P1_LABEL_DISHONEST (that row
+--   labelled P19) 2 (it is a candidate: the label and silent-sentence terms both count it);
+--   NC_P1_SENTENCE_SILENT 1; NC_EMPTY_JUDGEMENT P1 1, P2 1, P3 1; NC_P2_SWAPPED (two no-positive
+--   candidates of one family, rank_money_burned swapped) 2; NC_P2_ORDER_BY_CLICKS (v27.156's ORDER
+--   BY) 1; NC_P3_OLD_FORMULA ($0.21, $0.80 a day) 1; NC_P3_SENTENCE_SILENT 1; NC_P3_NO_PRICE_SILENT
+--   (keyword renamed, label left P25) 1; HC_P3_NO_PRICE_SAID 0; NC_C08_UNDER_FLOOR 1;
+--   NC_C08_SUBFLOOR_UNLABELLED 1; NC_C18_PROMISE ("competes for a seat at its current price" on a
+--   non-candidate) 1. The same script on a snapshot of this body run BEFORE deploy read the same,
+--   except P2 one higher on every copy: the deployed definition still ordered by clicks.
+-- RUN DIRECTLY ON THE DEPLOYED VIEW, 2026-10-02 14:12 UTC: 30 rows, every one PASS — and it cost
+-- 1,180,821 slot-seconds over 624 s (job t3_acc_1790950370; bytes 138,149,433), against 75,686 /
+-- 165,826 / 78,252 / 234,068 for the v27.156 file's direct runs earlier the same day: every CTE
+-- that reads j re-evaluates the view. The controls script reads the view ONCE into a temp table and
+-- ran LIVE and 34 doctored copies for 14,145 slot-seconds; prefer it.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -218,10 +258,17 @@ c07 AS (
                  OR (side_b = 'GOOD' AND w_ord < min_orders AND decided_by NOT IN ('P-5','P-14b')))
   FROM j
 ),
+-- C08 RESTATED v27.157: a price under the row's floor is allowed on exactly one kind of row — one
+-- where P-19 held a current bid that was ALREADY under the floor (raising it to the floor would be
+-- the raise P-19 forbids; holding it uploads nothing). READ from planned_bid_basis; P1 checks the
+-- basis is honest.
 c08 AS (
   SELECT 'C08 P-6/P-7 candidate price, seat cost and rank are usable',
          COUNTIF(side_b = 'NOT_GOOD'
-                 AND (planned_bid IS NULL OR planned_bid < bid_floor - 0.005
+                 AND (planned_bid IS NULL
+                      OR (planned_bid < bid_floor - 0.005
+                          AND NOT (planned_bid_basis = 'P19_HELD_AT_CURRENT'
+                                   AND ABS(planned_bid - current_bid) <= 0.005))
                       OR seat_cost_per_day IS NULL OR seat_cost_per_day < 0
                       OR rank_score IS NULL))
   FROM j
@@ -295,10 +342,13 @@ c17 AS (
                  OR (settle_arm = 'HELD_UNSETTLED' AND NOT served))
   FROM j
 ),
+-- C18 v27.157: the seat clause no longer always says "at the repaired price" (P-19 names the current
+-- price, P-25 LIFT's bid), so the promise is matched on "competes for a seat" alone; a row with no
+-- seat says "does not compete", which this does not match.
 c18 AS (
   SELECT 'C18 a seat is promised in words only to a row that competes for one',
          COUNTIF(NOT is_candidate
-                 AND REGEXP_CONTAINS(sentence, r'competes for a seat at the repaired price'))
+                 AND REGEXP_CONTAINS(sentence, r'competes for a seat'))
   FROM j
 ),
 c19 AS (
@@ -473,6 +523,100 @@ g4 AS (
                            AND COALESCE(SAFE_DIVIDE(gp, NULLIF(sp, 0)), -1) >= family_bar,
                            CONCAT(campaign_id, '|', keyword_id, '|', kind), NULL))
   FROM g4_rec
+),
+-- ---------------------------------------------------------------------------------------------
+-- P1..P3 (v27.157, piece-1 plan Task 3): THE JUDGE'S PRICES AND RANKS.
+-- ---------------------------------------------------------------------------------------------
+-- P1: P-19, no raise below the bar. A not-good row that is not a probe and whose corrected return
+-- is under the bar is never priced above its current bid, and never costed above its window spend
+-- per day (the seat cost scales with planned / current). The P19_HELD_AT_CURRENT label is honest:
+-- it sits only on a non-probe row under the bar, priced at its current bid, whose P-6 price
+-- (repair_bid_p6) was a raise. A sentence names P-19 only on such a row, and every candidate on
+-- such a row names it.
+p1 AS (
+  SELECT 'P1 P-19 no not-good row under the bar is priced above its current bid or costed above its spend',
+         COUNTIF(side_b = 'NOT_GOOD' AND NOT is_probe AND COALESCE(ret_corrected, 0) < family_bar
+                 AND (planned_bid > current_bid + 0.005
+                      OR seat_cost_per_day > w_sp / window_days + 0.0001))
+       + COUNTIF(planned_bid_basis = 'P19_HELD_AT_CURRENT'
+                 AND NOT COALESCE(NOT is_probe AND COALESCE(ret_corrected, 0) < family_bar
+                                  AND ABS(planned_bid - current_bid) <= 0.005
+                                  AND repair_bid_p6 > current_bid + 0.005, FALSE))
+       + COUNTIF(is_candidate AND planned_bid_basis = 'P19_HELD_AT_CURRENT'
+                 AND NOT REGEXP_CONTAINS(sentence, r'\(P-19, Ori 2026-10-02\)'))
+       + COUNTIF(REGEXP_CONTAINS(sentence, r'\(P-19')
+                 AND planned_bid_basis IS DISTINCT FROM 'P19_HELD_AT_CURRENT')
+       -- emptiness: a judgement with no priced not-good row under the bar tests nothing
+       + IF(COUNTIF(side_b = 'NOT_GOOD' AND NOT is_probe AND COALESCE(ret_corrected, 0) < family_bar
+                    AND planned_bid IS NOT NULL) = 0, 1, 0)
+  FROM j
+),
+-- P2: P-20. Every candidate publishes rank_money_burned = spend per day x (1 - return / bar),
+-- floored at 0 — so ordering by it orders by money burned with no return — and the view's own
+-- ORDER BY (read from its deployed definition) ranks the candidates with no positive P-7 score by
+-- it, ahead of clicks. A view's ORDER BY leaves no trace on a row, so the order is read from the
+-- definition, as PLAN_CONFIG_acceptance C10 reads the same view's text for literals.
+p2_def AS (
+  SELECT view_definition FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
+  WHERE table_name = 'V_PLAN_WINDOW_JUDGMENT'
+),
+p2 AS (
+  SELECT 'P2 P-20 a candidate with no positive score ranks by money burned with no return, ahead of clicks',
+         COUNTIF(is_candidate
+                 AND (rank_money_burned IS NULL OR rank_money_burned < 0
+                      OR ABS(rank_money_burned
+                             - (w_sp / window_days)
+                               * GREATEST(0, 1 - COALESCE(ret_corrected, 0) / NULLIF(family_bar, 0)))
+                         > 1e-9))
+       + (SELECT IF(COUNT(*) = 0, 1,
+                    COUNTIF(NOT REGEXP_CONTAINS(view_definition,
+                      r'ORDER BY\s+f\.family,\s*f\.side_b,\s*GREATEST\(f\.rank_score,\s*0\)\s+DESC,\s*f\.rank_money_burned\s+DESC,\s*f\.w_clk\s+DESC,\s*f\.campaign_id,\s*f\.keyword_id')))
+          FROM p2_def)
+       -- emptiness: no candidate without a positive score means the order was not exercised
+       + IF(COUNTIF(is_candidate AND rank_score <= 0) = 0, 1, 0)
+  FROM j
+),
+-- P3: P-25, computed from LIFT's own nomination, never from the view's probe_start_bid. A not-good
+-- probe whose keyword carries ONE PROBE_START bid in the latest FACT_ENGINE_PROPOSALS snapshot is
+-- priced at it, capped at GREATEST(2.00, current bid) — 2.00 is the raise_ceiling the judge's k CTE
+-- declares, a constant, not a measurement — and costed at click_goal_day x that price, and a
+-- candidate's sentence names the bid. A not-good probe with no such bid keeps P-6's price
+-- (repair_bid_p6) and its candidate sentence says LIFT holds none.
+p3_lift AS (
+  SELECT CAST(keyword_id AS STRING) AS keyword_id, MAX(suggested_bid) AS lift_bid
+  FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
+  WHERE engine = 'LIFT' AND action = 'PROBE_START'
+    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`)
+  GROUP BY 1
+  HAVING COUNT(DISTINCT suggested_bid) = 1
+),
+p3_rows AS (
+  SELECT j.*, l.lift_bid,
+         LEAST(l.lift_bid, GREATEST(2.00, COALESCE(j.current_bid, 2.00))) AS lift_price
+  FROM j LEFT JOIN p3_lift l ON l.keyword_id = j.keyword_id
+  WHERE j.side_b = 'NOT_GOOD' AND j.is_probe
+),
+p3 AS (
+  SELECT 'P3 P-25 a probe with a LIFT PROBE_START bid opens at it, capped, and is costed there',
+         COUNTIF(lift_bid IS NOT NULL
+                 AND NOT COALESCE(planned_bid_basis = 'P25_LIFT_PROBE_START'
+                                  AND ABS(planned_bid - ROUND(lift_price, 2)) <= 0.005
+                                  AND ABS(seat_cost_per_day - click_goal_day * lift_price) <= 0.0001
+                                  AND (NOT is_candidate
+                                       OR (STRPOS(sentence, 'PROBE_START bid') > 0
+                                           AND STRPOS(sentence, FORMAT('$%.2f', ROUND(lift_price, 2))) > 0)),
+                                  FALSE))
+       + COUNTIF(lift_bid IS NULL
+                 AND NOT COALESCE(planned_bid_basis = 'P6_PROBE_NO_LIFT_PRICE'
+                                  AND ABS(planned_bid - repair_bid_p6) <= 0.005
+                                  AND (NOT is_candidate
+                                       OR STRPOS(sentence, 'no single PROBE_START bid') > 0),
+                                  FALSE))
+       -- emptiness: no not-good probe carries a LIFT price, so the P-25 arm was not exercised.
+       -- Red is then a prompt to read FACT_ENGINE_PROPOSALS (LIFT nominated no PROBE_START bid on a
+       -- probe of the plan's universe), not proof of a defect.
+       + IF(COUNTIF(lift_bid IS NOT NULL) = 0, 1, 0)
+  FROM p3_rows
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -484,5 +628,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
       UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23
       UNION ALL SELECT * FROM g1 UNION ALL SELECT * FROM g2 UNION ALL SELECT * FROM g3
-      UNION ALL SELECT * FROM g4)
+      UNION ALL SELECT * FROM g4
+      UNION ALL SELECT * FROM p1 UNION ALL SELECT * FROM p2 UNION ALL SELECT * FROM p3)
 ORDER BY check_name;

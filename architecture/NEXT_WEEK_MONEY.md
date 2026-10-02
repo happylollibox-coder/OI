@@ -808,8 +808,80 @@ v27.156 view (live plan B; the pot leaves holdout spend out, as the builder did 
 
 LolliME's allowance target ($158.62/day) now exceeds its whole not-good side ($136.03/day), so its
 walk is rationed by nothing and its planned spend delta turned from −$20.82 to +$14.46 a day (raises
-at P-6's repaired prices). That is the case R5 (plan Task 3) and R7 (plan Task 4) close; it is not
-a Task 2 rule.
+at P-6's repaired prices). That is the case R5 (plan Task 3, built v27.157) and R7 (plan Task 4)
+close; it is not a Task 2 rule.
+
+### No raise below the bar, the zero-score rank, the probe price (P-19, P-20, P-25; v27.157)
+
+Ruled 2026-10-02 (R5, R6, R12), built in the judge v27.157 (piece-1 plan Task 3). The window, the
+sides, the memory and the guard are untouched; only the price, the seat cost, the rank order and
+the seat sentences moved.
+
+- **P-19 — no raise below the bar.** A not-good row that is not a probe and whose corrected return
+  is under the family bar is priced at `LEAST(P-6's price, current bid)`. The gate is the return
+  against the bar, not the verdict label (below-bar `ONE_ORDER` rows would survive a label gate).
+  A NULL return (no spend) reads as under the bar. **P-19 wins over P-6's floor:** a current bid
+  already under the row's `bid_floor` is held where it is rather than raised to the floor — holding
+  it uploads nothing (the builder's `HOLD_AT_PRICE` / `HOLD_AT_PARK` carry the current bid), and C08
+  accepts exactly that case. The seat cost follows the gated price, so such a seat costs its window
+  spend per day and never more. The candidate's sentence says "competes for a seat at its current
+  price $X — the ladder's repaired price $Y would RAISE it … (P-19, Ori 2026-10-02)".
+- **P-20 — the zero-score rank.** `rank_money_burned` = window spend per day × `GREATEST(0, 1 −
+  return ÷ bar)` on every row. The view orders `GREATEST(rank_score, 0) DESC, rank_money_burned
+  DESC, w_clk DESC, campaign_id, keyword_id`: P-7's score for every candidate it scores above zero,
+  then every candidate with **no positive score** — zero, or the rare negative one (2 of 978 live
+  candidate-nights 08-23 … 10-02) — by money burned. `GREATEST(…, 0)` is Ori's "among candidates
+  with no positive score": ordering on `rank_score` itself would put a keyword that sold at a loss
+  below every zero-sale one whatever it burned. **The builder still walks seats in click order until
+  piece-1 Task 5 changes its `ranked` CTE to the same key.**
+- **P-25 — the probe price (the judge's half).** `probe_start_bid` = LIFT's latest single
+  `PROBE_START` `suggested_bid` (`FACT_ENGINE_PROPOSALS`, latest snapshot, one distinct price per
+  keyword or none). A probe with one is priced at it, capped at `GREATEST(2.00, current bid)`, and
+  costed at `click_goal_day` × that price — the seat funds the clicks it asks for. A probe without
+  one keeps P-6's price and its sentence says LIFT holds no single `PROBE_START` bid. P-19 does not
+  apply to a probe. Whether an **unseated** probe is parked or left alone is the builder's half
+  (Task 5); the judge's queue clause is unchanged until then.
+
+**Measured before deploy, 2026-10-02 (Los Angeles), same data both sides** (window 09-28 … 09-30,
+BOOST, 361 rows): the deployed v27.156 judge snapshotted against the v27.157 body run as a query (the
+deployed v27.157 view then equalled that run on every column). Keyed on campaign × keyword, every
+published column equal except `planned_bid` (85 rows), `seat_cost_per_day` (57) and `sentence` (49).
+The plan columns are the builder's body with the partition write removed (every ASSERT run), on each
+judge snapshot, live plan B.
+
+| family | P-19 rows (candidates) | candidates' raise removed $/day | candidate seat cost $/day | probes repriced | probe seat cost $/day | no-positive candidates reordered | plan seats | plan seats that raise spend |
+|---|---|---|---|---|---|---|---|---|
+| Bottle | 6 (2) | 0.08 | 0.78 → 0.70 | 0 | 0 → 0 | 0 of 3 | 1 → 1 | 1 → 0 |
+| Fresh | 16 (4) | 2.11 | 59.88 → 61.25 | 2 | 1.80 → 5.28 | 15 of 21 | 14 → 18 | 3 → 1 |
+| LolliME | 34 (27) | 10.94 | 150.49 → 177.51 | 9 | 7.20 → 45.16 | 32 of 45 | 58 → 54 | 39 → 9 |
+| Lollibox | 17 (4) | 5.07 | 42.63 → 41.84 | 1 | 0.80 → 5.08 | 2 of 7 | 9 → 9 | 6 → 2 |
+| all | 73 (37) | 18.20 | 253.79 → 281.31 | 12 | 9.80 → 55.52 | 49 of 76 | 82 → 82 | 49 → 12 |
+
+The 49 seats that raised spend before ($27.01 a day): 33 that P-19 now holds ($18.10), 10 probe
+seats costed at the floor ($8.00), 6 at or above the bar ($0.91). After, 12 ($30.83): the same 6
+($0.91) and 6 probe seats at LIFT's bid ($29.92). Every probe was `NOT_SERVING` with a LIFT price:
+10 moved from $0.21 / $0.25 to $1.27 / $1.13, one SB probe $0.25 → $1.05, and one Fresh probe
+$0.29 → $0.27 (LIFT's own nomination, whose preflight verdict was EXCLUDE). At about $5 a day a
+probe fits less: LolliME's probe seats fell 9 → 5. The first no-positive candidate of each family is
+the same under both orders. Plan acceptance on the dry-run plan (history plus the would-be
+partition): 26 of 26 PASS. Slot-seconds as queries, three runs: v27.156 833 / 985 / 1,270, v27.157
+964 / 1,012 / 1,023; bytes 127,101,013 → 127,661,417 (the `FACT_ENGINE_PROPOSALS` read, 0.5
+slot-seconds alone); no new read of `FACT_AMAZON_ADS`.
+
+```sql
+-- what set each price tonight, and what P-19 took off (priced at repair_bid_p6, P-6's price
+-- rounded to the cent, so it reads within cents of the table: 2026-10-02 0.09 / 2.10 / 11.00 / 4.83)
+SELECT family, planned_bid_basis, COUNT(*) AS kw, COUNTIF(is_candidate) AS candidates,
+       ROUND(SUM(IF(planned_bid_basis = 'P19_HELD_AT_CURRENT' AND is_candidate,
+                    (w_sp / window_days) * (repair_bid_p6 / current_bid - 1), 0)), 2) AS raise_removed_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
+WHERE side_b = 'NOT_GOOD' GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- the probes: LIFT's bid, the price, the seat cost
+SELECT family, target_text, current_bid, probe_start_bid, planned_bid, planned_bid_basis,
+       seat_cost_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` WHERE is_probe ORDER BY family, planned_bid DESC;
+```
 
 ### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK (answered by P-14c above; kept as the record)
 
@@ -963,16 +1035,23 @@ grace only for a winner that genuinely was not shown?
 
 ```sql
 SELECT side_b, is_candidate, COUNT(*) AS keywords,
-       COUNTIF(REGEXP_CONTAINS(sentence, r'competes for a seat at the repaired price')) AS promised_a_seat,
+       COUNTIF(REGEXP_CONTAINS(sentence, r'competes for a seat'))                       AS promised_a_seat,
        COUNTIF(REGEXP_CONTAINS(sentence, r'does not compete for a seat'))               AS told_it_has_no_move
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1, 2 ORDER BY 1, 2;
 ```
 - **Repaired price** (P-6) = the ladder's `affordable_bid`, capped at three 5 % steps either way
   from the live bid, floored at the row's own `bid_floor`, ceilinged at the house $2.00 on a
-  raise. The cap constants are mirrored from the reprice book so the book and the plan cannot
-  price the same keyword differently.
+  raise — published since v27.157 as `repair_bid_p6`. The cap constants are mirrored from the
+  reprice book, so the book and the plan price a keyword the same way only where P-6's price
+  stands (`planned_bid_basis = 'P6_REPAIR'`): the book has no P-19 or P-25.
+- **The price** (`planned_bid`, v27.157) is P-6's price **gated by P-19** — never above the current
+  bid where the corrected return is under the bar, even where the current bid is under the floor —
+  or **replaced by P-25** on a probe with a LIFT `PROBE_START` bid. `planned_bid_basis` names which:
+  `P6_REPAIR` · `P19_HELD_AT_CURRENT` · `P25_LIFT_PROBE_START` · `P6_PROBE_NO_LIFT_PRICE`. See
+  "No raise below the bar, the zero-score rank, the probe price" above.
 - **Seat cost** (P-6) = spend at *that* price, per day — the window's spend per day scaled by the
-  price change; a candidate with no window spend is costed from `T_OOB_SEAT_ECONOMICS`.
+  price change; a probe with a LIFT price is costed at `click_goal_day` × its opening price (P-25);
+  any other candidate with no window spend is costed from `T_OOB_SEAT_ECONOMICS`.
 - **The good side carries no price and no seat cost** (P-4, v27.134). `planned_bid` and
   `seat_cost_per_day` are **NULL** whenever `side_b = 'GOOD'`. They used to be published on every
   row, so an executable price — sometimes a *cut* — sat one column away from a sentence reading
@@ -993,8 +1072,10 @@ SELECT bid_park_source, COUNT(*) AS keywords, COUNTIF(is_candidate) AS candidate
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
 ```
 
-- **Rank** (P-7) is written "dollars at stake × closeness to the bar", ties by clicks then by the
-  keyword key (a total ordering, so two reads never disagree).
+- **Rank** (P-7) is written "dollars at stake × closeness to the bar". Since v27.157 (P-20) the
+  candidates P-7 scores above zero come first by that score, every candidate with no positive
+  score follows by `rank_money_burned`, and clicks then the keyword key break what ties remain (a
+  total ordering, so two reads never disagree).
 - **THE TWO FACTORS ARE NOT TWO FACTORS: THE SPEND CANCELS, IDENTICALLY, ON EVERY ROW.** Return is
   gross profit *divided by* spend, so
   `(w_sp / days) × (w_gp_corrected / w_sp) / bar` = `w_gp_corrected / (days × bar)`.
@@ -1017,14 +1098,17 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
 SELECT family, target_text, ROUND(rank_dollars_at_stake, 2) AS at_stake_per_day,
        ROUND(rank_closeness, 3) AS closeness, ROUND(rank_score, 3) AS rank_score
 FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
-WHERE is_candidate ORDER BY rank_score DESC, w_clk DESC LIMIT 10;
+WHERE is_candidate
+ORDER BY GREATEST(rank_score, 0) DESC, rank_money_burned DESC, w_clk DESC, campaign_id, keyword_id
+LIMIT 10;
 ```
 
 - **P-7 scores ZERO wherever there is no gross profit — which is most of the queue.** That is the
   same collapse seen at its endpoint: closeness to the bar is zero when a keyword sold nothing, so
-  a keyword burning real money with no order ranks *below every losing keyword* and can never be
-  seated for a repair; the ordering falls through to clicks and the keyword key, which is a total
-  ordering but is not P-7's ordering. It is not absorbed silently: `rank_is_degenerate` is TRUE on
+  a keyword burning real money with no order ranks *below every losing keyword*. It is **not**
+  thereby kept out of the seats: until v27.157 the ordering fell through to clicks and the keyword
+  key, and the fit test seated zero-score candidates in click order whenever allowance remained
+  (audit, 2026-10-01: 21 of the 102 zero-score candidates held seats, $69.54 a day). It is not absorbed silently: `rank_is_degenerate` is TRUE on
   every candidate whose rank is zero. Read how much of the queue that is, and what it carries,
   before Task 2 hands out seats:
 
@@ -1043,7 +1127,9 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
   If Ori wants money weighted, the second factor has to be an absolute gap rather than a ratio —
   ranking on the gross-profit **shortfall** per day, `spend/day × (bar − return)/bar`, which does
   not cancel and which scores a no-sale keyword at its full spend instead of at zero, answering
-  both questions in one line. Nobody has ruled, and Task 2 hands out seats in the order above.
+  both questions in one line. **Ruled 2026-10-02 (R6, spec P-20):** that shortfall, floored at 0,
+  is `rank_money_burned`, and it orders every candidate with no positive score — built in the judge
+  v27.157; `SP_BUILD_NEXT_WEEK_PLAN`'s walk keeps the click order until piece-1 Task 5.
 - **The holdout is named in words, not only in a column** (v27.134). `holdout` is TRUE only from the
   campaign's `eligible_from`, so a holdout campaign judged *before* that date is a candidate today
   and silent tomorrow. The sentence used to promise those rows a seat with no mention of the
@@ -1065,6 +1151,19 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 # the negative controls: the acceptance's own text on doctored copies (exit 0 = every control as expected)
 python3 scripts/bigquery/tests/check_judge_memory_controls.py
 ```
+
+**v27.157: 30 checks** — C08 restated (a price under the floor only where P-19 held a current bid
+already under it), C18 restated (the seat promise matched on "competes for a seat"), and P1 (P-19:
+no non-probe row under the bar priced above its current bid or costed above its spend, and the
+label and the sentence honest), P2 (P-20: `rank_money_burned` exact on every candidate, and the
+view's deployed `ORDER BY` ranks by it after the positive scores — read from
+`INFORMATION_SCHEMA.VIEWS`), P3 (P-25: recomputed from `FACT_ENGINE_PROPOSALS`, every not-good probe
+with a LIFT bid priced and costed at it, capped; one without says so). Run 2026-10-02 on the
+deployed view: 30 rows, every one PASS. **Run it through the controls script, not directly:** run
+directly it cost 1,180,821 slot-seconds over 624 s (every CTE that reads the view re-evaluates it;
+75,686 – 234,068 for the v27.156 file earlier the same day), while the controls script reads the
+view once and ran LIVE plus 34 doctored copies for 14,145 slot-seconds, exit 0 (each control and
+its measured value is in the acceptance file's header).
 
 **v27.156: 27 checks** — the 23 below with C12 and C22 restated for P-17, plus G1 (no grace run
 outlasts its window, over the whole history), G2 (every HELD row names `hold_kept_by` and the reason
@@ -1150,8 +1249,10 @@ repaired price* (P-6), and the repaired price is the ladder's affordable price �
 above today's bid. So the plan can add money to a family's not-good side while staying inside the
 allowance, and a family whose allowance exceeds its whole not-good side has no ranking pressure to
 stop it. `planned_spend_delta_per_day` is that number on every row and the seat sentence prints it
-in words. Read the direction per family before any upload — a family reading positive is one the
-plan is spending MORE on, not less:
+in words. **Since v27.157 (P-19) a raise is possible only on a row at or above its family bar, or on
+a probe opening at LIFT's bid (P-25)** — measured on the dry-run plan of 2026-10-02: 12 seats raise
+spend, 6 of each. Read the direction per family before any upload — a family reading positive is
+one the plan is spending MORE on, not less:
 
 ```sql
 SELECT family,
@@ -1414,11 +1515,12 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
    family-nights 09-28 … 10-01; the allowance exceeded the whole not-good side in 1 of them). It is
    published per row and per family (`planned_spend_delta_per_day`). **Ruled 2026-10-02 (P-19):** a
    not-good seat whose corrected return is under the family bar is never priced above its current
-   bid; piece-1 Task 3 builds it in the judge.
-3. **P-7's degenerate rank still hands out the seats** (§2's open ruling, unchanged): every
-   spend-with-no-sale keyword scores exactly zero, so the biggest bleeders rank last. The fit test
-   now lets cheap candidates behind them take seats, which *reduces* the damage but does not fix the
-   ordering.
+   bid; built in the judge v27.157 (§2, "No raise below the bar…"). Raises that remain: rows at or
+   above the bar (P-6's price) and probes opening at LIFT's bid (P-25).
+3. **P-7's degenerate rank** — **ruled 2026-10-02 (P-20):** candidates with no positive score rank
+   by money burned with no return (`rank_money_burned`), not by clicks. Built in the judge v27.157;
+   this builder's `ranked` CTE still orders `rank_score DESC, w_clk DESC` until piece-1 Task 5, so
+   tonight's seats still follow the click order among them.
 4. **P-14b IS NOW A DELAY WITH A CLOCK, AND THAT IS A READING, NOT A RULING ORI MADE.** The guard
    was a permanent veto: `was_good` reads last night's SIDE, a held row's side is GOOD, and the
    window rolls so `settled` is never true — so the protected side was a one-way door, the ladder

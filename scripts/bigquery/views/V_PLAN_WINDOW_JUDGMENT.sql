@@ -1,5 +1,5 @@
 -- =============================================================================================
--- V_PLAN_WINDOW_JUDGMENT — v27.156 (2026-10-02; v27.147 2026-09-28): ONE ROW PER working-family keyword, carrying the
+-- V_PLAN_WINDOW_JUDGMENT — v27.157 (2026-10-02; v27.156 2026-10-02; v27.147 2026-09-28): ONE ROW PER working-family keyword, carrying the
 -- window, the window record (raw AND corrected for settle completion), the side BOTH plans give
 -- it, the arm that decided it, the repaired price, the seat cost and the rank. It decides nothing
 -- about money: the builder (SP_BUILD_NEXT_WEEK_PLAN) does the potting, seating and queueing. This
@@ -198,6 +198,55 @@
 --   666 / 729; the new read of FACT_AMAZON_ADS (the gap chain, plan_hist0 .. gap_eval, run alone)
 --   8 / 10 / 94. A first draft whose gap chain read win and ks ran at 2,988 (one run): every
 --   reference to a CTE re-evaluates it, so that chain reads neither.
+--
+-- THE JUDGE'S PRICES AND RANKS (v27.157, 2026-10-02: Ori's rulings R5, R6 and R12 of 2026-10-02,
+-- recorded as spec P-19, P-20 and P-25; piece-1 plan Task 3). Three changes, in the priced CTE, the
+-- seat cost, the rank columns, the seat sentences and the final ORDER BY; the window, the sides, the
+-- memory and the guard are untouched.
+--   P-19 NO RAISE BELOW THE BAR. A non-probe row whose corrected return is under the family bar is
+--        priced at LEAST(P-6's price, current bid); planned_bid_basis = P19_HELD_AT_CURRENT where P-6
+--        would have raised it, repair_bid_p6 keeps P-6's price readable, and the seat cost follows
+--        the gated price (it scales by planned / current). See the priced CTE for the floor case.
+--   P-20 ZERO-SCORE CANDIDATES RANK BY MONEY BURNED WITH NO RETURN. rank_money_burned = spend per
+--        day x GREATEST(0, 1 - return / bar) is published on every row; the final ORDER BY ranks
+--        every candidate with no positive P-7 score below the positive ones, by it, ahead of clicks.
+--        SP_BUILD_NEXT_WEEK_PLAN's ranked CTE still orders by clicks until plan Task 5 changes it.
+--   P-25 A PROBE OPENS AT LIFT'S PROBE_START BID (the judge's half). probe_start_bid is LIFT's latest
+--        single PROBE_START suggested_bid (FACT_ENGINE_PROPOSALS); a probe with one is priced at it,
+--        capped at GREATEST(raise_ceiling, current bid), and costed at click_goal_day x that price.
+--        A probe without one keeps P-6's price and says so. Whether an UNSEATED probe is parked or
+--        left alone is the builder's half (plan Task 5); this view's queue clause is unchanged.
+--   THE BOOK STILL PRICES BY P-6. tools/build_reprice_bulksheet.py mirrors P-6's cap constants, so
+--   "the book and the plan cannot price the same keyword differently" (THE REPAIRED PRICE, below)
+--   holds only on P6_REPAIR rows from v27.157: the book has no P-19 or P-25.
+-- MEASURED BEFORE DEPLOY, 2026-10-02 (Los Angeles; 13:40-14:00 UTC), same data both sides (window
+-- 09-28..09-30, BOOST, 361 rows): the deployed v27.156 view snapshotted, against this body run as a
+-- query. Keyed on campaign x keyword, every published column equal except planned_bid (85 rows),
+-- seat_cost_per_day (57) and sentence (49), plus the four new columns.
+--   P-19 labelled 73 rows (Bottle 6, Fresh 16, LolliME 34, Lollibox 17), 37 of them candidates
+--   (2 / 4 / 27 / 4); those 37 candidates' seat costs fell by $18.20 a day (0.08 / 2.11 / 10.94 /
+--   5.07), the whole of what they were costed above their window spend; 0 candidates under the bar
+--   still cost more than they spend.
+--   P-25 repriced all 12 probes (Fresh 2, LolliME 9, Lollibox 1; every one NOT_SERVING and every
+--   one with a LIFT price): 10 from $0.21 / $0.25 to $1.27 / $1.13, 1 SB probe $0.25 -> $1.05, and
+--   1 Fresh probe $0.29 -> $0.27 (LIFT's own nomination; its preflight verdict was EXCLUDE). Probe
+--   seat cost $9.80 -> $55.52 a day across the 12.
+--   Candidate seat cost per family $/day: Bottle 0.78 -> 0.70, Fresh 59.88 -> 61.25, LolliME
+--   150.49 -> 177.51, Lollibox 42.63 -> 41.84 (non-probe candidates 243.99 -> 225.79 in all).
+--   P-20 moved 49 of the 76 candidates with no positive score (Fresh 15, LolliME 32, Lollibox 2);
+--   each family's first such candidate is the same under both orders.
+--   The builder's body (partition write removed, every ASSERT run) on each snapshot, live plan B:
+--   seats (Bottle / Fresh / LolliME / Lollibox) 1/14/58/9 -> 1/18/54/9. Seats that raise spend
+--   49 ($27.01/day: 33 that P-19 now holds $18.10, 10 probe seats costed at the floor $8.00, 6 at
+--   or above the bar $0.91) -> 12 ($30.83/day: the same 6 at or above the bar $0.91, and 6 probe
+--   seats at LIFT's bid $29.92). Probe seats 10 -> 6 (LolliME 9 -> 5: at ~$5/day a probe fits less).
+--   Slot-seconds, three runs each as queries: the v27.156 body 833 / 985 / 1,270, this body 964 /
+--   1,012 / 1,023; bytes 127,101,013 -> 127,661,417 (FACT_ENGINE_PROPOSALS; no new read of
+--   FACT_AMAZON_ADS). The probe-price read alone: 0.5 slot-seconds, 560,404 bytes.
+-- DEPLOYED 2026-10-02 14:12 UTC: the deployed view snapshotted at 14:13 equalled the pre-deploy run
+-- on every column, all 361 rows; acceptance 30 of 30 PASS; the controls script exit 0 (34 copies).
+-- SP_BUILD_NEXT_WEEK_PLAN's body (partition write removed) on the pre-deploy run's copy passed
+-- every ASSERT, and the plan acceptance on that would-be partition read 26 of 26 PASS.
 -- decided_by names the ruling that decided the row: P-3, P-14b or P-5. settle_arm names what the
 -- correction did: SETTLED, CORRECTED, PROMOTED_ON_FRESH, HELD_UNSETTLED, NOT_CORRECTABLE_NO_GP,
 -- UNCORRECTED_NO_CURVE.
@@ -293,10 +342,13 @@
 -- FN_BID_FLOOR through the state table) and ceilinged at the house $2.00 for a raise. The cap
 -- constants are mirrored from tools/build_reprice_bulksheet.py so the book and the plan cannot
 -- price the same keyword differently. It is published on the NOT-GOOD side only (P-4, above).
+-- v27.157: P-6's price is now repair_bid_p6; planned_bid is P-6's price gated by P-19 (no raise
+-- below the bar) or replaced by P-25 (a probe opens at LIFT's bid) — see the priced CTE.
 -- SEAT COST (P-6) is spend at THAT price, not last window's spend: the window's spend per day
 -- scaled linearly by the price change (the same linear bid-to-spend guess the seat register uses
 -- on its day-one horizon). A candidate with no window spend is priced at the engine's seat
--- economics — seat_cpc times the register's declared click goal per day.
+-- economics — seat_cpc times the register's declared click goal per day; from v27.157 a probe with
+-- a LIFT price is costed at click_goal_day x its opening price (P-25).
 -- THE PARK PRICE has a fallback and says which one it used (v27.134 repair, C16). Spec §4 step 5
 -- parks everything that does not win a seat at the channel park price. T_OOB_SEAT_ECONOMICS only
 -- knows the keywords that entered OOB seat economics, so before this repair the park price was
@@ -331,6 +383,9 @@
 -- rules whether to park the no-sale keywords, or to make "dollars at stake" real by ranking on the
 -- gross-profit SHORTFALL per day (spend/day x (bar - return)/bar), which does not cancel; until he
 -- does, the ordering is corrected gross profit and then falls through to clicks and the key.
+-- RULED 2026-10-02 (R6, spec P-20; built v27.157): P-7's score stands for every candidate it scores
+-- above zero; the candidates with no positive score rank below them by rank_money_burned (that
+-- shortfall, floored at 0), and clicks are only the tiebreak after it.
 --
 -- CANDIDACY (§4 step 3). A candidate is a not-good keyword that is not in the holdout AND has
 -- something to repair: losing, one order, or spend with no sale. A keyword that took no spend and
@@ -360,7 +415,7 @@
 -- Acceptance: scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql.
 -- =============================================================================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
-OPTIONS (description = "v27.156 (2026-10-02): the judge's memory, Ori's rulings of 2026-10-02 (spec P-17, P-18, P-29) and audit fix #16. P-17: grace lasts window_days nightly judgments from the night it was granted (the window length carried by that night's plan row), then is spent until a GOOD window; grace_since / grace_window_days / grace_ends_on are published and the GRACE sentence prints the last night. P-18: a hold lasts while the very good day that started its run (hold_strong_day = that night's window_to) is still inside the judged window, never past its clock; hold_kept_by (LAST_DAY | STRONG_DAY_IN_WINDOW) is published so the builder, V_ENGINE_HEALTH and the acceptance read it; guard_released_by is LAST_DAY_NOT_STRONG only when neither holds. P-29: a grace or hold memory whose last night is older than today - window_days - 1 is checked against the windows the unwritten nights after it would have judged (FACT_AMAZON_ADS, the judge's GOOD on raw numbers, window length per night's calendar state, ending before tonight's window_from); a GOOD one clears it, published as memory_cleared_by_gap / memory_gap_good_window_to, stored by SP_BUILD_NEXT_WEEK_PLAN and read back by plan_hist as a reset. Fix #16: hold_since / hold_settles_on / hold_strong_day are published from the first HELD night. Nights are counted on today_plan, the clock FACT_PLAN_NEXT_WEEK.as_of is keyed on (Los Angeles until plan Task 6). Reads FACT_PLAN_NEXT_WEEK.memory_cleared_by_gap: deploy migration 2026-10-02_plan_judge_memory_columns.sql first. v27.155 (2026-10-01): strong_day_mult and strong_day_min_orders, the P-14c last-day test, are read from DE_PLAN_CONFIG for today's calendar state (cfg CTE) instead of being literals in the k CTE, so the rule is a setting Ori changes by retire-then-insert, with its old values kept; a NULL raises an error rather than judge with no rule; the seed carries the 1.5 / 1 the k CTE carried. v27.154 follow-up (2026-10-01): publishes strong_day_mult and strong_day_min_orders (the P-14c settings of the k CTE) on every row so SP_BUILD_NEXT_WEEK_PLAN stores the rule each decision was judged under and FN_PLAN_SCORECARD grades against it; no verdict changes. v27.147 (2026-09-28) P-14c (Ori, 2026-09-17): the P-14b hold is granted ONLY when the last complete day of the window was very good -- at least 1 order and a corrected return of at least 1.5x the family bar, declared in the k CTE -- so a losing window whose last day won a little is judged on the window. Publishes last_day_sp/clk/ord/gp/gp_corrected/ret, last_day_strong and guard_released_by (LAST_DAY_NOT_STRONG | HOLD_EXPIRED) so SP_BUILD_NEXT_WEEK_PLAN asserts every demotion under the guard's preconditions carries this view's own reason instead of re-deriving the guard: the builder's v27.136 copy read P-14b as a veto while this view read it as a clock, and from the first expired clock (2026-08-29) the builder refused every partition for a month. held_with_no_sale is now FALSE by construction. Earlier: one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing whether the plan has a partition EARLIER than today to read it from (v27.138: SP_BUILD_NEXT_WEEK_PLAN ships and writes that table nightly, so the old wording 'no builder writes it yet' was live and false in this description and in the row's own sentence). Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight; and v27.138 gives the hold a CLOCK — it is anchored via hold_since / hold_settles_on to the window that TRIGGERED it and lifts when that window settles, because was_good reads last night's side and a held row's side is GOOD, which made the protected side a one-way door no keyword could ever leave and left P-5's one-window limit inert in money), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
+OPTIONS (description = "v27.157 (2026-10-02, piece-1 plan Task 3): the judge's prices and ranks, Ori's rulings of 2026-10-02 R5 / R6 / R12 (spec P-19, P-20, P-25). P-19: a non-probe row whose corrected return is under the family bar is never priced above its current bid -- planned_bid = LEAST(P-6 price, current bid), even where the current bid is under the row's floor (holding it uploads nothing) -- and its seat cost follows that price; planned_bid_basis (P6_REPAIR | P19_HELD_AT_CURRENT | P25_LIFT_PROBE_START | P6_PROBE_NO_LIFT_PRICE) and repair_bid_p6 (P-6's own price) are published. P-20: rank_money_burned = window spend per day x GREATEST(0, 1 - corrected return / bar) is published, and the view orders every candidate with no positive P-7 score below the positive ones by it, ahead of clicks (ORDER BY GREATEST(rank_score, 0) DESC, rank_money_burned DESC, w_clk DESC, keys); SP_BUILD_NEXT_WEEK_PLAN still ranks by clicks until plan Task 5. P-25 (the judge's half): a probe whose keyword carries one LIFT PROBE_START suggested_bid in the latest FACT_ENGINE_PROPOSALS snapshot (probe_start_bid) is priced at it, capped at GREATEST(2.00, current bid), and costed at click_goal_day x that price; a probe without one keeps P-6's price and says so; P-19 does not apply to probes. Every seat sentence names its price through the rule that set it. v27.156 (2026-10-02): the judge's memory, Ori's rulings of 2026-10-02 (spec P-17, P-18, P-29) and audit fix #16. P-17: grace lasts window_days nightly judgments from the night it was granted (the window length carried by that night's plan row), then is spent until a GOOD window; grace_since / grace_window_days / grace_ends_on are published and the GRACE sentence prints the last night. P-18: a hold lasts while the very good day that started its run (hold_strong_day = that night's window_to) is still inside the judged window, never past its clock; hold_kept_by (LAST_DAY | STRONG_DAY_IN_WINDOW) is published so the builder, V_ENGINE_HEALTH and the acceptance read it; guard_released_by is LAST_DAY_NOT_STRONG only when neither holds. P-29: a grace or hold memory whose last night is older than today - window_days - 1 is checked against the windows the unwritten nights after it would have judged (FACT_AMAZON_ADS, the judge's GOOD on raw numbers, window length per night's calendar state, ending before tonight's window_from); a GOOD one clears it, published as memory_cleared_by_gap / memory_gap_good_window_to, stored by SP_BUILD_NEXT_WEEK_PLAN and read back by plan_hist as a reset. Fix #16: hold_since / hold_settles_on / hold_strong_day are published from the first HELD night. Nights are counted on today_plan, the clock FACT_PLAN_NEXT_WEEK.as_of is keyed on (Los Angeles until plan Task 6). Reads FACT_PLAN_NEXT_WEEK.memory_cleared_by_gap: deploy migration 2026-10-02_plan_judge_memory_columns.sql first. v27.155 (2026-10-01): strong_day_mult and strong_day_min_orders, the P-14c last-day test, are read from DE_PLAN_CONFIG for today's calendar state (cfg CTE) instead of being literals in the k CTE, so the rule is a setting Ori changes by retire-then-insert, with its old values kept; a NULL raises an error rather than judge with no rule; the seed carries the 1.5 / 1 the k CTE carried. v27.154 follow-up (2026-10-01): publishes strong_day_mult and strong_day_min_orders (the P-14c settings of the k CTE) on every row so SP_BUILD_NEXT_WEEK_PLAN stores the rule each decision was judged under and FN_PLAN_SCORECARD grades against it; no verdict changes. v27.147 (2026-09-28) P-14c (Ori, 2026-09-17): the P-14b hold is granted ONLY when the last complete day of the window was very good -- at least 1 order and a corrected return of at least 1.5x the family bar, declared in the k CTE -- so a losing window whose last day won a little is judged on the window. Publishes last_day_sp/clk/ord/gp/gp_corrected/ret, last_day_strong and guard_released_by (LAST_DAY_NOT_STRONG | HOLD_EXPIRED) so SP_BUILD_NEXT_WEEK_PLAN asserts every demotion under the guard's preconditions carries this view's own reason instead of re-deriving the guard: the builder's v27.136 copy read P-14b as a veto while this view read it as a clock, and from the first expired clock (2026-08-29) the builder refused every partition for a month. held_with_no_sale is now FALSE by construction. Earlier: one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing whether the plan has a partition EARLIER than today to read it from (v27.138: SP_BUILD_NEXT_WEEK_PLAN ships and writes that table nightly, so the old wording 'no builder writes it yet' was live and false in this description and in the row's own sentence). Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight; and v27.138 gives the hold a CLOCK — it is anchored via hold_since / hold_settles_on to the window that TRIGGERED it and lifts when that window settles, because was_good reads last night's side and a held row's side is GOOD, which made the protected side a one-way door no keyword could ever leave and left P-5's one-window limit inert in money), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
 AS
 WITH k AS (
   -- P-3/P-13: min_orders is NOT a literal — it is read from DE_PLAN_CONFIG in the cfg CTE below
@@ -654,6 +709,19 @@ armed AS (
 probes AS (
   SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`
 ),
+-- P-25 (Ori 2026-10-02, R12; v27.157): LIFT's latest PROBE_START bid per keyword, the only
+-- published probe price. One price per keyword or no probe price at all (the HAVING); MAX, not
+-- ANY_VALUE, so the value read is deterministic (under the HAVING the two are the same number).
+-- FACT_ENGINE_PROPOSALS is written by SP_SNAPSHOT_ENGINE_PROPOSALS earlier in the same orchestrator
+-- pass than SP_BUILD_NEXT_WEEK_PLAN (20.8c), so the builder reads tonight's nomination.
+probe_bid AS (
+  SELECT CAST(keyword_id AS STRING) AS kid, MAX(suggested_bid) AS probe_start_bid
+  FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`
+  WHERE engine = 'LIFT' AND action = 'PROBE_START'
+    AND snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS`)
+  GROUP BY 1
+  HAVING COUNT(DISTINCT suggested_bid) = 1
+),
 seatecon AS (
   SELECT CAST(campaign_id AS STRING) AS cid, CAST(keyword_id AS STRING) AS kid,
          MAX(seat_cpc) AS seat_cpc, MAX(bid_park) AS bid_park
@@ -712,6 +780,8 @@ base AS (
     ge.gap_wins,
     am.grace_limit_armed,
     (pb.kid IS NOT NULL) AS is_probe,
+    -- P-25: LIFT's PROBE_START bid, on a probe row only (a nomination is what makes it a probe)
+    IF(pb.kid IS NOT NULL, pbb.probe_start_bid, NULL) AS probe_start_bid,
     se.seat_cpc,
     se.bid_park AS bid_park_seat_econ,
     -- P-11 / §4 step 5: the park price always answers, and always says which source answered.
@@ -746,6 +816,7 @@ base AS (
   LEFT JOIN prior0 pr ON pr.cid = CAST(ks.campaign_id AS STRING) AND pr.kid = CAST(ks.keyword_id AS STRING)
   LEFT JOIN gap_eval ge ON ge.cid = CAST(ks.campaign_id AS STRING) AND ge.kid = CAST(ks.keyword_id AS STRING)
   LEFT JOIN probes pb ON pb.kid = CAST(ks.keyword_id AS STRING)
+  LEFT JOIN probe_bid pbb ON pbb.kid = CAST(ks.keyword_id AS STRING)
   LEFT JOIN seatecon se ON se.cid = CAST(ks.campaign_id AS STRING) AND se.kid = CAST(ks.keyword_id AS STRING)
   LEFT JOIN holdout h ON h.cid = CAST(ks.campaign_id AS STRING)
 ),
@@ -816,16 +887,57 @@ derived AS (
     (COALESCE(b.settled_ord90, 0) >= b.min_orders
      AND COALESCE(SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_sp90, 0)), 0) >= b.family_bar)
       AS ladder_settled_good,
-    -- P-6: the repaired price. Cap three 5% steps either way, floor at the row's own floor,
-    -- ceiling the house $2.00 on a raise.
+    -- P-6: the ladder's repaired price. Cap three 5% steps either way, floor at the row's own
+    -- floor, ceiling the house $2.00 on a raise. P-19 and P-25 (priced, below) decide whether it
+    -- is the price; this column is what P-6 alone would have asked.
     LEAST(
       GREATEST(
         LEAST(
           GREATEST(COALESCE(b.affordable_bid, b.current_bid), b.current_bid * (1 - b.cap_down)),
           b.current_bid * (1 + b.cap_up)),
         COALESCE(b.bid_floor, 0)),
-      GREATEST(b.raise_ceiling, b.current_bid))            AS planned_bid_raw
+      GREATEST(b.raise_ceiling, b.current_bid))            AS planned_bid_p6
   FROM base2 b
+),
+-- THE PRICE (v27.157, Ori's rulings R5 and R12 of 2026-10-02, spec P-19 and P-25). Applied in this
+-- order, and the order is the rulings', not taste:
+--   P-25 A PROBE WITH A LIFT PRICE opens at LIFT's PROBE_START bid, capped by the raise ceiling
+--        (GREATEST(raise_ceiling, current_bid), the P-6 ceiling): a probe opened below the bid that
+--        bought it zero clicks is not a probe. A probe with no single LIFT price keeps P-6's formula
+--        and its sentence says so. P-19 does not apply to a probe: it has no window to be under the
+--        bar on (every probe on 2026-10-02 was NOT_SERVING; a served probe is exempt too, as the
+--        plan writes the rule — 0 rows today).
+--   P-19 NO RAISE BELOW THE BAR. A repair on the not-good side is a step toward the bar, never away
+--        from it: where the corrected return is under the family bar the price is never above the
+--        current bid. The gate is the return against the bar, not the verdict label: five
+--        ONE_ORDER rows on 2026-10-01 sat under the bar and would survive a label gate. A NULL
+--        return (no spend) reads as 0, i.e. under the bar. P-19 WINS OVER P-6'S FLOOR: a current
+--        bid already under the row's bid_floor is held where it is, not raised to the floor (that
+--        would be a raise); holding it uploads nothing (the builder's HOLD_AT_PRICE / HOLD_AT_PARK
+--        carry the current bid), and C08 accepts a price at the current bid when the current bid
+--        is under the floor. 5 not-good rows on 2026-10-02 had a current bid under the floor, none
+--        a candidate (1 holdout, 4 NOT_SERVING with no nomination).
+-- planned_bid_basis names which rule set the price, so the sentence and the acceptance read it:
+--   P25_LIFT_PROBE_START | P6_PROBE_NO_LIFT_PRICE | P19_HELD_AT_CURRENT (P-6 would have raised it,
+--   and P-19 held it at the current bid) | P6_REPAIR (P-6's price stands: at or above the bar, or
+--   not a raise).
+priced AS (
+  SELECT d.*,
+    CASE
+      WHEN d.is_probe AND d.probe_start_bid IS NOT NULL
+        THEN LEAST(d.probe_start_bid, GREATEST(d.raise_ceiling, COALESCE(d.current_bid, d.raise_ceiling)))
+      WHEN d.is_probe THEN d.planned_bid_p6
+      WHEN COALESCE(d.ret_corrected, 0) < d.family_bar THEN LEAST(d.planned_bid_p6, d.current_bid)
+      ELSE d.planned_bid_p6
+    END AS planned_bid_raw,
+    CASE
+      WHEN d.is_probe AND d.probe_start_bid IS NOT NULL THEN 'P25_LIFT_PROBE_START'
+      WHEN d.is_probe THEN 'P6_PROBE_NO_LIFT_PRICE'
+      WHEN COALESCE(d.ret_corrected, 0) < d.family_bar
+           AND ROUND(d.planned_bid_p6, 2) > ROUND(d.current_bid, 2) THEN 'P19_HELD_AT_CURRENT'
+      ELSE 'P6_REPAIR'
+    END AS planned_bid_basis
+  FROM derived d
 ),
 sided AS (
   SELECT d.*,
@@ -842,7 +954,7 @@ sided AS (
     -- last day itself).
     COALESCE(d.hold_since IS NOT NULL AND d.window_from <= d.hold_strong_day, FALSE)
                                                                                 AS strong_day_in_window
-  FROM derived d
+  FROM priced d
 ),
 judged AS (
   SELECT s.*,
@@ -958,9 +1070,16 @@ final AS (
       WHEN j.w_gp = 0                                       THEN 'NOT_CORRECTABLE_NO_GP'
       ELSE 'CORRECTED'
     END AS settle_arm,
-    -- P-6: seat cost = spend at the repaired price, per day. P-4: NULL on the good side.
+    -- P-6: seat cost = spend at the planned price, per day. P-4: NULL on the good side.
+    -- v27.157: the planned price is the one P-19 / P-25 set (priced CTE), so a price P-19 held at
+    -- the current bid costs the window's spend per day and never more. P-25: a probe with a LIFT
+    -- price funds the clicks it asks for at the price it opens at — click_goal_day x that price
+    -- (THREE_LAYERS §3: the seat funds the answer it demands); a probe with no LIFT price keeps
+    -- the v27.134 costing.
     IF(j.verdict IN ('GOOD', 'HELD_UNSETTLED', 'GRACE'), NULL,
       CASE
+        WHEN j.planned_bid_basis = 'P25_LIFT_PROBE_START'
+          THEN j.click_goal_day * j.planned_bid_raw
         WHEN j.w_sp > 0 AND COALESCE(j.current_bid, 0) > 0
           THEN (j.w_sp / j.window_days) * SAFE_DIVIDE(j.planned_bid_raw, j.current_bid)
         WHEN j.is_probe
@@ -975,12 +1094,38 @@ final AS (
     COALESCE(SAFE_DIVIDE(j.ret_corrected, NULLIF(j.family_bar, 0)), 0)       AS rank_closeness,
     (j.w_sp / j.window_days) * COALESCE(SAFE_DIVIDE(j.ret_corrected, NULLIF(j.family_bar, 0)), 0)
       AS rank_score,
+    -- P-20 (Ori 2026-10-02, R6; v27.157): money burned with no return, per day — the window's
+    -- spend per day times the share of it the bar did not return, floored at 0. It orders the
+    -- candidates P-7 gives no positive score (the final ORDER BY), instead of their clicks. It does
+    -- not cancel the way P-7's two factors do: a zero-return keyword scores its whole spend.
+    (j.w_sp / j.window_days)
+      * GREATEST(0, 1 - COALESCE(j.ret_corrected, 0) / NULLIF(j.family_bar, 0)) AS rank_money_burned,
     -- §4 step 3, hoisted out of the SELECT so the seat SENTENCE is built from the same expression
     -- that decides candidacy and the two can never disagree (v27.135; before this repair 41 rows
     -- were promised a seat in words that their own is_candidate refused them).
     (IF(j.verdict IN ('GOOD','HELD_UNSETTLED','GRACE'), 'GOOD', 'NOT_GOOD') = 'NOT_GOOD'
      AND NOT j.holdout
-     AND (j.verdict != 'NOT_SERVING' OR j.is_probe))                         AS is_candidate
+     AND (j.verdict != 'NOT_SERVING' OR j.is_probe))                         AS is_candidate,
+    -- v27.157: the price a seat clause names, in words, from planned_bid_basis — the same
+    -- expression that set the price, so the sentence cannot name a rule the price did not follow.
+    CASE j.planned_bid_basis
+      WHEN 'P25_LIFT_PROBE_START' THEN FORMAT(
+        'LIFT\'s PROBE_START bid $%.2f%s, costed at its click goal of %d clicks a day (about $%.2f a day): a probe opens at the bid LIFT nominated it at, and its seat funds the clicks it asks for (P-25, Ori 2026-10-02)',
+        ROUND(j.planned_bid_raw, 2),
+        IF(j.probe_start_bid > j.planned_bid_raw + 0.005,
+           FORMAT(' (LIFT asked $%.2f; capped at the $%.2f ceiling)', j.probe_start_bid,
+                  GREATEST(j.raise_ceiling, COALESCE(j.current_bid, j.raise_ceiling))),
+           ''),
+        j.click_goal_day, j.click_goal_day * j.planned_bid_raw)
+      WHEN 'P6_PROBE_NO_LIFT_PRICE' THEN FORMAT(
+        'the repaired price $%.2f — LIFT holds no single PROBE_START bid for this keyword tonight, so this probe is priced by the ladder\'s repair (P-6) instead of opening at a LIFT bid (P-25)',
+        ROUND(j.planned_bid_raw, 2))
+      WHEN 'P19_HELD_AT_CURRENT' THEN FORMAT(
+        'its current price $%.2f — the ladder\'s repaired price $%.2f would RAISE it, and a not-good keyword whose corrected return (%.2f per ad dollar) is under the %.2f bar is never priced above its current bid (P-19, Ori 2026-10-02)',
+        ROUND(j.planned_bid_raw, 2), ROUND(j.planned_bid_p6, 2), COALESCE(j.ret_corrected, 0),
+        j.family_bar)
+      ELSE FORMAT('the repaired price $%.2f', ROUND(j.planned_bid_raw, 2))
+    END                                                                      AS price_clause
   FROM judged j
 )
 SELECT
@@ -1016,11 +1161,18 @@ SELECT
   -- P-7 scores zero wherever there is no gross profit; say so rather than let a seat walk
   -- silently fall through to the tiebreak. See the header and SOP §2.
   (f.is_candidate AND f.rank_score = 0) AS rank_is_degenerate,
+  -- P-20 (v27.157): what orders the candidates with no positive P-7 score (acceptance P2)
+  f.rank_money_burned,
   f.current_bid, f.bid_floor,
   f.bid_park, f.bid_park_source, f.bid_park_seat_econ,
   -- P-4: the good side carries no executable price and no seat cost
   IF(f.side_b = 'GOOD', NULL, ROUND(f.planned_bid_raw, 2)) AS planned_bid,
   ROUND(f.seat_cost_per_day, 4) AS seat_cost_per_day,
+  -- v27.157 (P-19, P-25): which rule set planned_bid, the price P-6 alone asked (so a raise P-19
+  -- removed stays readable), and LIFT's PROBE_START bid on a probe. NULL on the good side (P-4).
+  IF(f.side_b = 'GOOD', NULL, f.planned_bid_basis)            AS planned_bid_basis,
+  IF(f.side_b = 'GOOD', NULL, ROUND(f.planned_bid_p6, 2))     AS repair_bid_p6,
+  f.probe_start_bid,
   -- v27.146 (plan step 4, violation 27): the two inputs a seat's CLICK TARGET is derived
   -- from. Published so SP_BUILD_NEXT_WEEK_PLAN can write the target without re-deriving a
   -- constant this view already owns — a second copy of click_goal_day would drift the day
@@ -1109,17 +1261,18 @@ FROM (
       -- so is what makes the plan readable end to end.
       WHEN NOT f2.is_candidate THEN
         'It does not compete for a seat and it is not queued or parked either: it took no spend and no clicks in the window and the probe list does not nominate it, so there is nothing to repair and the plan proposes no move for it at all.'
+      -- v27.157: every seat branch names its price through price_clause (P-19 / P-25 / P-6)
       WHEN f2.holdout_member THEN FORMAT(
-        'It competes for a seat at the repaired price $%.2f today, but its campaign joins the HOLDOUT arm on %t, after which the plan proposes no move for it.',
-        ROUND(f2.planned_bid_raw, 2), f2.holdout_eligible_from)
+        'It competes for a seat at %s today, but its campaign joins the HOLDOUT arm on %t, after which the plan proposes no move for it.',
+        f2.price_clause, f2.holdout_eligible_from)
       WHEN f2.verdict = 'NOT_SERVING' THEN FORMAT(
-        'It took no spend and no clicks in the window, so it competes for a seat at the repaired price $%.2f only because the probe list nominates it (P-11); if it does not get one it queues at the park price %s.',
-        ROUND(f2.planned_bid_raw, 2),
+        'It took no spend and no clicks in the window, so it competes for a seat only because the probe list nominates it (P-11), at %s; if it does not get one it queues at the park price %s.',
+        f2.price_clause,
         IF(f2.bid_park IS NULL, '(no park price is published for this keyword)',
            FORMAT('$%.2f (%s)', f2.bid_park, f2.bid_park_source)))
       ELSE FORMAT(
-        'It competes for a seat at the repaired price $%.2f; if it does not get one it queues at the park price %s.',
-        ROUND(f2.planned_bid_raw, 2),
+        'It competes for a seat at %s; if it does not get one it queues at the park price %s.',
+        f2.price_clause,
         IF(f2.bid_park IS NULL, '(no park price is published for this keyword)',
            FORMAT('$%.2f (%s)', f2.bid_park, f2.bid_park_source)))
     END AS seat_clause,
@@ -1170,5 +1323,11 @@ FROM (
         f2.memory_gap_good_window_to), '') AS memory_clause
   FROM final f2
 ) f
--- house rule: a total ordering, reaching the keyword key
-ORDER BY f.family, f.side_b, f.rank_score DESC, f.w_clk DESC, f.campaign_id, f.keyword_id;
+-- house rule: a total ordering, reaching the keyword key. P-20 (v27.157): P-7's score orders the
+-- candidates it scores above zero; every candidate with no positive score (zero, or the rare
+-- negative one: 2 of 978 live candidate-nights 08-23 .. 10-02) ranks below them all, by money
+-- burned with no return, and clicks are only the tiebreak after that. GREATEST(rank_score, 0) is
+-- Ori's "among candidates with no positive score" (R6): ordering on rank_score itself would put a
+-- keyword that sold at a loss below every zero-sale one, whatever it burned.
+ORDER BY f.family, f.side_b, GREATEST(f.rank_score, 0) DESC, f.rank_money_burned DESC, f.w_clk DESC,
+         f.campaign_id, f.keyword_id;
