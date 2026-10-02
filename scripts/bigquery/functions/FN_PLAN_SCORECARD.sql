@@ -1,6 +1,8 @@
 -- =============================================================================================
 -- FN_PLAN_SCORECARD(grade_date DATE) — v27.154 (2026-10-01; follow-up the same day: the hint's
--- per-group minimum, and the rule read from each plan row — see THE RULE and THE HINT below): the
+-- per-group minimum, and the rule read from each plan row — see THE RULE and THE HINT below; second
+-- follow-up, 2026-10-01 LA / 10-02 UTC, after commit 46ae335: the band leaves out releases whose hold clock had run out, and the reason
+-- given for MIN_GROUP_ROWS = 10 is restated to what was computed): the
 -- T+14 grade of the next-week money plan (plan Task 5, first half; spec §5, P-9, P-13, P-14b/c).
 -- V_PLAN_SCORECARD is this function at CURRENT_DATE('America/Los_Angeles'); the acceptance calls
 -- it with the clock moved forward so
@@ -93,21 +95,40 @@
 -- counted as other_rule_rows. Below MIN_GUARD_ROWS graded decisions it says WAIT and why — with
 -- nothing old enough to grade, it counts the decisions written and names the date the first one
 -- settles. From there it compares two groups, both under the rule in force: HELD (held_rows), and
--- THE BAND — released by LAST_DAY_NOT_STRONG with a last day between BAND_LOW_X_BAR and the row's
--- own multiplier times the bar, the keywords a lower threshold would have held (band_rows). WHILE
--- EITHER GROUP HAS FEWER THAN MIN_GROUP_ROWS graded rows it says WAIT and names the group that is
--- too small and its count. Otherwise: RELEASED_WRONG above DOMINATE_SHARE of the band =>
--- LOWER_STRONG_DAY_MULT; HELD_WRONG above DOMINATE_SHARE of the held => RAISE_STRONG_DAY_MULT; both
--- => NO_CLEAN_SIGNAL; neither => KEEP_STRONG_DAY_MULT, each sentence leading with the size of the
--- group it argued from. Nothing here changes the threshold.
+-- THE BAND (band_rows) — the keyword-nights a lower threshold would have held: released by
+-- LAST_DAY_NOT_STRONG with a last day between BAND_LOW_X_BAR and the row's own multiplier times the
+-- bar, at least the row's own order minimum on that last day (last_day_ord >= its
+-- strong_day_min_orders), and a hold clock that had NOT run out (hold_expired, as the judge
+-- published it). The clock term (second follow-up): the judge's guard_released_by CASE
+-- tests NOT last_day_strong before hold_expired, so a release whose clock had already run out is also
+-- labelled LAST_DAY_NOT_STRONG when its last day was weak; the judge's HELD arm needs NOT
+-- hold_expired, so a lower multiplier would still have released it, as HOLD_EXPIRED. Measured on
+-- FACT_PLAN_NEXT_WEEK for the second follow-up (nights to 2026-10-01): 4 rows in history met the band without the clock term, 2 of them
+-- with an expired clock (one of them the single band row the 2026-10-03 clock counted); 40 of the
+-- 104 LAST_DAY_NOT_STRONG releases had an expired clock. The order term changes no row today (no
+-- release with a last day at 1.0x the bar or better had fewer orders than its minimum); it keeps the
+-- band right if strong_day_min_orders moves above 1. Both terms READ published columns
+-- (hold_expired, last_day_ord, the stored rule); neither re-derives the guard. WHILE EITHER GROUP
+-- HAS FEWER THAN MIN_GROUP_ROWS graded rows it says WAIT and names the group that is too small and
+-- its count. Otherwise: RELEASED_WRONG above DOMINATE_SHARE of the band => LOWER_STRONG_DAY_MULT;
+-- HELD_WRONG above DOMINATE_SHARE of the held => RAISE_STRONG_DAY_MULT; both => NO_CLEAN_SIGNAL;
+-- neither => KEEP_STRONG_DAY_MULT, each sentence leading with the size of the group it argued from.
+-- Nothing here changes the threshold.
 --   MIN_GUARD_ROWS   20   the fewest graded decisions in all the hint will read (the Task C ruling).
 --   MIN_GROUP_ROWS   10   the fewest graded rows in EACH group before LOWER / RAISE / KEEP /
---                         NO_CLEAN_SIGNAL. Ori rules on the number. Why 10: a group whose true
---                         wrong-rate is 30% reads "more than half wrong" by chance less than one
---                         time in twenty only from 10 rows up (binomial, computed 2026-10-01: 4.7% at
---                         10, 9.9% at 9, 5.8% at 8). The total alone was not enough: on the history
---                         108 of the first 117 decisions are releases, 9 holds and 4 band rows, and at
---                         the 2026-10-03 clock 20 graded decisions held 0 holds and 1 band row.
+--                         NO_CLEAN_SIGNAL. Ori rules on the number. What 10 buys: take a group
+--                         whose true wrong-rate is 30%; the chance that it reads "more than half
+--                         wrong" by luck (binomial, exact fractions, computed for the 2nd follow-up) is 5.8% at
+--                         8 rows, 9.9% at 9, 4.7% at 10. 10 is the smallest group size at which the
+--                         chance is under 5%. The chance does not fall steadily as the group grows:
+--                         7.8% at 11, 3.9% at 12, 6.2% at 13, 3.1% at 14, 5.0% at 15. It is under 5%
+--                         for every size from 16 up (computed for every size to 400). An
+--                         "at least half" cutoff would raise the chance (15.0% at 10). The choice —
+--                         10, 16, or a different cutoff — is Ori's; the SOP puts it in front of him.
+--                         The total alone was not enough: on the history 108 of the first 117
+--                         decisions are releases, 9 holds and 2 band rows (4 before the clock term),
+--                         and at the 2026-10-03 clock 20 graded decisions hold 0 holds and 0 band
+--                         rows (1 band row before the clock term).
 --   DOMINATE_SHARE   0.5  "dominates" = more than half of the rows compared.
 --   BAND_LOW_X_BAR   1.0  the band's floor: a last day at the bar or better.
 --   SETTLE_DAYS_MAX  14   a plan night is graded once it is this many complete days old.
@@ -119,9 +140,11 @@
 -- COST, measured 2026-10-01 at deploy (uncached): V_PLAN_SCORECARD 354 slot-s, 70.8 MB, 4.6 s; at
 -- today + 30, 391 slot-s. After the follow-up, inside the acceptance run of 2026-10-01 (uncached):
 -- the view 265.5 slot-s, today + 30 490.7, 2026-10-03 402.5. The follow-up adds no FACT_AMAZON_ADS
--- read (rule_rows reads FACT_PLAN_NEXT_WEEK only). The FACT_AMAZON_ADS joins are clustered and
--- touch a handful of plan nights; the slot time is spread over the union's many small stages, not
--- the scan. Far under the 5,000 slot-s line at which this would be materialised by an orchestrator
+-- read (rule_rows reads FACT_PLAN_NEXT_WEEK only). After the second follow-up (two more
+-- FACT_PLAN_NEXT_WEEK columns, no new FACT_AMAZON_ADS read), inside the acceptance run of 2026-10-01
+-- LA (uncached): the view 209.2 slot-s, today + 30 217.1, 2026-10-03 181.5. The FACT_AMAZON_ADS
+-- joins are clustered and touch a handful of plan nights; the slot time is spread over the union's
+-- many small stages, not the scan. Far under the 5,000 slot-s line at which this would be materialised by an orchestrator
 -- step, so nothing is.
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §5, P-9, P-13, P-14.
 -- Learning contract: docs/superpowers/specs/2026-10-01-learning-contract-design.md (piece 0, Task C).
@@ -130,7 +153,7 @@
 -- scripts/bigquery/tests/check_plan_scorecard_hint_branches.py (this body on doctored plan tables).
 -- =============================================================================================
 CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_PLAN_SCORECARD`(grade_date DATE)
-OPTIONS (description = "v27.154 follow-up (2026-10-01): RULE_HINT judges the rule in force (the strong_day_mult / strong_day_min_orders stored on the live plan's latest P-14c night) from the graded decisions made under it, and says WAIT, naming the group and its count, until BOTH groups it compares (held; let through with a last day between 1.0x and the row's own multiplier) have at least 10 graded rows; each decision is graded against the multiplier stored on its row (frozen 1.5 / 1 for rows written before the columns existed), never a copy kept here. v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions in all or 10 in either group (saying why), else LOWER / RAISE / KEEP_STRONG_DAY_MULT or NO_CLEAN_SIGNAL. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
+OPTIONS (description = "v27.154 second follow-up (2026-10-01 LA, after 46ae335): the band the hint compares (the keyword-nights a lower threshold would have held) leaves out releases whose hold clock had run out (hold_expired, as published by the judge, whose CASE names such a release LAST_DAY_NOT_STRONG when its last day was weak) and last days short of the row's own order minimum; at 2026-10-03 the band is 0, not 1. v27.154 follow-up (2026-10-01): RULE_HINT judges the rule in force (the strong_day_mult / strong_day_min_orders stored on the live plan's latest P-14c night) from the graded decisions made under it, and says WAIT, naming the group and its count, until BOTH groups it compares (held; let through by the last-day test with a last day between 1.0x and the row's own multiplier, at least its order minimum, and the hold clock still running) have at least 10 graded rows (Ori rules on the number: a group with a true 30% wrong-rate reads more than half wrong by chance 4.7% of the time at 10 rows but 7.8% at 11, 6.2% at 13 and 5.0% at 15; under 5% at every size from 16 up); each decision is graded against the multiplier stored on its row (frozen 1.5 / 1 for rows written before the columns existed), never a copy kept here. v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions in all or 10 in either group (saying why), else LOWER / RAISE / KEEP_STRONG_DAY_MULT or NO_CLEAN_SIGNAL. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
 AS
 WITH k AS (
   SELECT 3    AS min_windows,
@@ -286,6 +309,9 @@ guard_written AS (
   SELECT p.as_of, p.family, p.calendar_state, p.campaign_id, p.keyword_id,
          p.window_from, p.window_to, p.settle_due_on, p.family_bar,
          p.last_day_ret, p.guard_released_by, p.built_at,
+         -- published by the judge; the band reads them (a lower multiplier holds neither a row whose
+         -- hold clock had run out nor a last day short of the order minimum)
+         p.hold_expired, p.last_day_ord,
          -- the same expressions as rule_rows: the rule this decision was made under
          COALESCE(p.strong_day_mult,
                   IF(p.as_of <= k.legacy_through, k.legacy_strong_day_mult, NULL))       AS eff_mult,
@@ -414,9 +440,13 @@ hint_in AS (
   FROM (
     SELECT c.*,
            COALESCE(c.eff_mult = r.rule_mult AND c.eff_min = r.rule_min, FALSE) AS u,
+           -- the keyword-nights a lower multiplier would have held: the judge's HELD arm also needs
+           -- NOT hold_expired and the order minimum, so neither kind of row belongs here
            COALESCE(c.guard_released_by = 'LAST_DAY_NOT_STRONG'
                     AND c.last_day_x_bar >= k.band_low_x_bar
-                    AND c.last_day_x_bar <  c.eff_mult, FALSE)               AS in_band
+                    AND c.last_day_x_bar <  c.eff_mult
+                    AND c.last_day_ord   >= c.eff_min
+                    AND NOT COALESCE(c.hold_expired, FALSE), FALSE)          AS in_band
     FROM guard_cls c
     CROSS JOIN rule_now r
     CROSS JOIN k
@@ -616,23 +646,23 @@ SELECT 'RULE_HINT', CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STR
                'the band is too small: %d let through in the band of the %d needed (the held group has %d, enough).',
                h.band_n, h.min_group_rows, h.held_n)
            END,
-           FORMAT(' Both groups are read under the rule of the latest plan night (%t): a last day of at least %gx the bar with at least %d order(s) earns the hold. Of the held, %d turned out not good once settled; of the band (let through with a last day between %gx and %gx the bar, the keyword-nights a lower threshold would have held), %d turned out good.%s %d more decision(s) are written and not yet settled. Nothing changes.',
+           FORMAT(' Both groups are read under the rule of the latest plan night (%t): a last day of at least %gx the bar with at least %d order(s) earns the hold. Of the held, %d turned out not good once settled; of the band (let through with a last day between %gx and %gx the bar while the hold\'s clock was still running, the keyword-nights a lower threshold would have held), %d turned out good.%s %d more decision(s) are written and not yet settled. Nothing changes.',
                   h.rule_as_of, h.rule_mult, h.rule_min, h.held_wrong_n, h.band_low_x_bar, h.rule_mult,
                   h.band_wrong, h.tail, h.written - h.graded))
          WHEN h.hint_rec = 'NO_CLEAN_SIGNAL' THEN FORMAT(
-           'NO CLEAN SIGNAL from %d held and %d let through in the band, under the %gx rule of the latest plan night (%t): of the %d held, %d turned out not good once settled ($%.2f of settled spend protected that should not have been), AND of the %d let through with a last day between %gx and %gx the bar, %d turned out good ($%.2f of settled spend on keywords the guard should have held). Moving the %gx threshold either way fixes one side and worsens the other; read the GUARD rows week by week.%s Nothing changes until Ori rules.',
+           'NO CLEAN SIGNAL from %d held and %d let through in the band, under the %gx rule of the latest plan night (%t): of the %d held, %d turned out not good once settled ($%.2f of settled spend protected that should not have been), AND of the %d let through with a last day between %gx and %gx the bar while the hold\'s clock was still running, %d turned out good ($%.2f of settled spend on keywords the guard should have held). Moving the %gx threshold either way fixes one side and worsens the other; read the GUARD rows week by week.%s Nothing changes until Ori rules.',
            h.held_n, h.band_n, h.rule_mult, h.rule_as_of, h.held_n, h.held_wrong_n, h.hw_sp,
            h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.band_wrong_sp, h.rule_mult, h.tail)
          WHEN h.hint_rec = 'LOWER_STRONG_DAY_MULT' THEN FORMAT(
-           'THE LAST-DAY BAR LOOKS TOO HIGH from %d keyword-nights let through because their last day sold at %gx to %gx the bar, under the rule of the latest plan night (%t): %d of them turned out good once their window settled ($%.2f of settled spend on keywords the guard should have held). A lower strong_day_mult would have held them. Held under the same rule: %d, of which %d turned out not good.%s Nothing changes until Ori rules.',
+           'THE LAST-DAY BAR LOOKS TOO HIGH from %d keyword-nights let through because their last day sold at %gx to %gx the bar while the hold\'s clock was still running, under the rule of the latest plan night (%t): %d of them turned out good once their window settled ($%.2f of settled spend on keywords the guard should have held). A lower strong_day_mult would have held them. Held under the same rule: %d, of which %d turned out not good.%s Nothing changes until Ori rules.',
            h.band_n, h.band_low_x_bar, h.rule_mult, h.rule_as_of, h.band_wrong, h.band_wrong_sp,
            h.held_n, h.held_wrong_n, h.tail)
          WHEN h.hint_rec = 'RAISE_STRONG_DAY_MULT' THEN FORMAT(
-           'THE LAST-DAY BAR LOOKS TOO LOW from %d keyword-nights held on the good side by a last day of %gx the bar or better, under the rule of the latest plan night (%t): %d of them turned out not good once their window settled ($%.2f of settled spend protected that should not have been). A higher strong_day_mult would have let them through. Of the %d let through with a last day between %gx and %gx the bar, %d turned out good.%s Nothing changes until Ori rules.',
+           'THE LAST-DAY BAR LOOKS TOO LOW from %d keyword-nights held on the good side by a last day of %gx the bar or better, under the rule of the latest plan night (%t): %d of them turned out not good once their window settled ($%.2f of settled spend protected that should not have been). A higher strong_day_mult would have let them through. Of the %d let through with a last day between %gx and %gx the bar while the hold\'s clock was still running, %d turned out good.%s Nothing changes until Ori rules.',
            h.held_n, h.rule_mult, h.rule_as_of, h.held_wrong_n, h.hw_sp,
            h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.tail)
          ELSE FORMAT(
-           'THE LAST-DAY BAR HOLDS from %d held and %d let through in the band, under the rule of the latest plan night (%t): of the %d held, %d turned out not good; of the %d let through with a last day between %gx and %gx the bar, %d turned out good. Keep strong_day_mult at %g.%s',
+           'THE LAST-DAY BAR HOLDS from %d held and %d let through in the band, under the rule of the latest plan night (%t): of the %d held, %d turned out not good; of the %d let through with a last day between %gx and %gx the bar while the hold\'s clock was still running, %d turned out good. Keep strong_day_mult at %g.%s',
            h.held_n, h.band_n, h.rule_as_of, h.held_n, h.held_wrong_n,
            h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.rule_mult, h.tail)
        END

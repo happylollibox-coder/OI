@@ -1375,21 +1375,60 @@ nothing old enough to grade it says how many decisions have been written and the
 settles. The hint is about **the rule in force**: the `strong_day_mult` and `strong_day_min_orders`
 the live plan's latest partition was judged under, read from the plan rows (`rule_value`,
 `rule_min_orders`). It reads only decisions made under that rule, in two groups: keywords **held**,
-and keywords **released** by the last-day test whose last day sat between 1.0× the bar and that
-decision's own multiplier (the ones a lower threshold would have held). Graded decisions made under
-a different or unrecorded rule stay in the GUARD rows and are counted on the hint row as
-`other_rule_rows`.
+and **the band**: keywords **released** by the last-day test whose last day sat between 1.0× the bar
+and that decision's own multiplier, with at least that decision's own order minimum on that day, and
+**whose hold clock had not run out** (`hold_expired`, as the judge published it). Those are the ones
+a lower threshold would have held. The clock term matters because the judge names a release
+`LAST_DAY_NOT_STRONG` before it looks at the clock, so a keyword whose hold had already run out also
+carries that name when its last day was not very good; a lower threshold would still have let it
+through, this time as `HOLD_EXPIRED`, so it says nothing about the threshold. Before the fix of
+2026-10-01 (Los Angeles time) the band counted those releases too. On the plan history to
+2026-10-01 that was 2 of the 4 rows the band counted, and 40 of the 104 `LAST_DAY_NOT_STRONG`
+releases had a clock that had run out. Count them again any time:
+
+```sql
+SELECT COUNT(*) AS last_day_not_strong, COUNTIF(hold_expired) AS clock_had_run_out,
+       COUNTIF(SAFE_DIVIDE(last_day_ret, NULLIF(family_bar, 0)) >= 1.0
+               AND SAFE_DIVIDE(last_day_ret, NULLIF(family_bar, 0))
+                   < COALESCE(strong_day_mult, IF(as_of <= DATE '2026-10-01', 1.5, NULL))
+               AND last_day_ord >= COALESCE(strong_day_min_orders, IF(as_of <= DATE '2026-10-01', 1, NULL))
+               AND NOT COALESCE(hold_expired, FALSE)) AS in_the_band
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE is_live_plan AND last_day_strong IS NOT NULL AND guard_released_by = 'LAST_DAY_NOT_STRONG';
+```
+
+(The 1.5 and 1 read rows written on or before 2026-10-01, before the plan table stored the rule, as
+the function does. This counts every night written, graded or not; the hint counts only the graded
+ones made under the rule in force.) Graded decisions made under a different or unrecorded rule stay
+in the GUARD rows and are counted on the hint row as `other_rule_rows`.
 
 **Each group needs at least 10 graded decisions** (`min_group_rows`, declared in the function's
 `k` CTE; **Ori rules on the number**) before the hint says anything but `WAIT`. 20 in total is not
-enough: on the real history 108 of the first 117 decisions are releases, 9 are holds and 4 sit in
-the band, and the review of v27.154 measured the total-only gate saying KEEP at the 2026-10-03 clock
-from 0 holds and 1 band row, and RAISE at 10-05 from 2 holds. Why 10: a group whose true wrong-rate is 30% reads "more
-than half wrong" by chance less than one time in twenty only from 10 rows up (binomial, computed
-2026-10-01: 4.7% at 10, 9.9% at 9, 5.8% at 8). Below the minimum the row says `WAIT`, names the
-group that is too small and its count. From the minimum on: if released-wrong is more than half of
-the band, the threshold looks too high (`LOWER_STRONG_DAY_MULT`); if held-wrong is more than half of
-the held, too low (`RAISE_STRONG_DAY_MULT`); both at once is `NO_CLEAN_SIGNAL`; neither is
+enough: on the real history 108 of the first 117 decisions are releases and 9 are holds, and 2 of
+the releases sit in the band (4 did before the clock term above). The review of v27.154 measured
+the total-only gate saying KEEP at the 2026-10-03 clock from 0 holds and 1 band row, and RAISE at
+10-05 from 2 holds. That one band row was a release whose hold clock had run out, so under the band
+as it is now the band at 2026-10-03 is empty.
+
+**What 10 buys, and the ruling it needs.** Take a group whose true wrong-rate is 30%, which is not
+"more than half". The chance that it reads "more than half wrong" anyway, by luck, is (binomial,
+computed with exact fractions on 2026-10-01, Los Angeles time): 5.8% at 8 rows, 9.9% at 9,
+**4.7% at 10**, 7.8% at 11, 3.9% at 12, 6.2% at 13, 3.1% at 14, 5.0% at 15. 10 is the smallest
+group size at which the chance is under 5%. It does not fall steadily as the group grows, because
+"more than half" of an odd number of rows needs proportionally fewer wrong rows than of the even
+number below it: 7.8% at 11, 6.2% at 13, 5.0% at 15. It is under 5% for every size from 16 up (computed for every size to
+400). The first verdicts that are not `WAIT` will come from groups just past the minimum, so this
+matters for the first rulings. Ori's options, none of which the code takes on its own:
+- **keep 10**: for such a group, a false alarm about 1 time in 20 at 10 rows, and up to about 1 in
+  13 at 11 rows;
+- **16**: under 1 in 20 at 16 rows and at every size above it, and the hint waits longer for its
+  first verdict;
+- **"at least half" instead of "more than half"**: this makes chance alarms more frequent, not
+  less: 15.0% at 10 rows, and under 5% at every size only from 19 up (also computed to 400).
+
+Below the minimum the row says `WAIT`, names the group that is too small and its count. From the
+minimum on: if released-wrong is more than half of the band, the threshold looks too high
+(`LOWER_STRONG_DAY_MULT`); if held-wrong is more than half of the held, too low (`RAISE_STRONG_DAY_MULT`); both at once is `NO_CLEAN_SIGNAL`; neither is
 `KEEP_STRONG_DAY_MULT`. Each sentence leads with the size of the group it argued from, then the
 counts and the dollars. On the history to 2026-10-01 no clock reaches 10 holds or 10 band rows, so
 every reading is `WAIT` today; the four non-WAIT verdicts have come out of the function only on
@@ -1398,7 +1437,8 @@ the acceptance's header records the run). It is a hint: the threshold lives in
 `V_PLAN_WINDOW_JUDGMENT`'s `k` CTE and nothing here changes it. The scorecard keeps no copy of it:
 it reads the value stored on each plan row, and acceptance C10 checks every row written after the
 columns existed carries one, that a night carries one rule, and that `rule_value` is the latest
-night's.
+night's. Acceptance C13 checks the band counts exactly the releases a lower threshold would have
+held, never one whose hold clock had run out.
 
 **Read it.**
 
