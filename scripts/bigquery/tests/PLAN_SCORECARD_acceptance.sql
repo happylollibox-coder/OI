@@ -100,7 +100,12 @@
 -- where 0 belong) and 2 on MOVED (4 where 2 belong), so C12 read FAIL 1 and CM read FAIL 2; the other
 -- 41 rows PASS. That is C13 firing on the real defect, not only on a doctored copy.
 --
--- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 10 graded holds or 10
+-- min_group_rows 10 -> 16 (Ori, 2026-10-02). check_plan_scorecard_hint_branches.py was rescaled to
+-- groups of 16 (15 for the too-small cases); run 2026-10-02: 10 of 10 branches PASS on the deployed
+-- function; NEGATIVE CONTROL, the same harness on a copy carrying 10: FAIL on S_HELD_SMALL (reads
+-- RAISE from 15 held), S_BAND_SMALL and S_OTHER_RULE (sentences say 'of the 10 needed'). This file's
+-- own run: 43 of 43 PASS.
+-- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 16 graded holds or 16
 -- graded band rows (at most 9 and 2), so every real hint reads WAIT and LOWER / RAISE / KEEP /
 -- NO_CLEAN_SIGNAL have never come out of the function on real input. C09 and C11 judge the hint's
 -- output against its own published counts, which is all a check over the output can do. The

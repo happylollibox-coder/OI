@@ -332,6 +332,13 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 **v27.155, in this order** (each step needs the one before it; the view names columns the
 v27.154 table does not have, and the snapshot procedure reads them):
 
+**Deployed 2026-10-02 (about 04:20 UTC), on Ori's yes**, in exactly this order. The three seed rows
+kept every setting and gained 1.5 / 1; the first snapshot wrote 185 SEEDED rows (182 coach
+thresholds + 3 plan states); the judge carries no literal; the orchestrator gained Task 10.1 and
+nothing else (diffed against the deployed body first). PLAN_CONFIG_acceptance 24 of 24 PASS,
+THRESHOLD_HISTORY_acceptance 17 of 17 PASS. The pre-conversion rows are kept in
+`TMP_TASKD_DE_PLAN_CONFIG_BEFORE` until the plan has run cleanly on the new config.
+
 ```bash
 Q='bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache'
 $Q "$(grep -v '^--' scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql)"                 # columns + seed conversion
@@ -1497,8 +1504,8 @@ the function does. This counts every night written, graded or not; the hint coun
 ones made under the rule in force.) Graded decisions made under a different or unrecorded rule stay
 in the GUARD rows and are counted on the hint row as `other_rule_rows`.
 
-**Each group needs at least 10 graded decisions** (`min_group_rows`, declared in the function's
-`k` CTE; **Ori rules on the number**) before the hint says anything but `WAIT`. 20 in total is not
+**Each group needs at least 16 graded decisions** (`min_group_rows`, declared in the function's
+`k` CTE; **Ori ruled 16 on 2026-10-02**, the second option below; it was 10 from 2026-10-01) before the hint says anything but `WAIT`. 20 in total is not
 enough: on the real history 108 of the first 117 decisions are releases and 9 are holds, and 2 of
 the releases sit in the band (4 did before the clock term above). The review of v27.154 measured
 the total-only gate saying KEEP at the 2026-10-03 clock from 0 holds and 1 band row, and RAISE at

@@ -160,7 +160,9 @@ WITH k AS (
          0.10 AS margin,
          14   AS settle_days_max,
          20   AS min_guard_rows,
-         10   AS min_group_rows,          -- per group the hint compares; Ori rules on the number
+         16   AS min_group_rows,          -- per group the hint compares; Ori ruled 16 on 2026-10-02:
+                                          -- the smallest size from which a 30%-wrong group reads
+                                          -- "more than half wrong" by chance under 5% at every size
          0.5  AS dominate_share,
          1.0  AS band_low_x_bar,
          -- HISTORY, not a setting: the rule on rows written before the columns existed
