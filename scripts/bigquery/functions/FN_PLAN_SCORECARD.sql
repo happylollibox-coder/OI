@@ -1,7 +1,9 @@
 -- =============================================================================================
--- FN_PLAN_SCORECARD(grade_date DATE) — v27.154 (2026-10-01): the T+14 grade of the next-week money
--- plan (plan Task 5, first half; spec §5, P-9, P-13, P-14b/c). V_PLAN_SCORECARD is this function
--- at CURRENT_DATE('America/Los_Angeles'); the acceptance calls it with the clock moved forward so
+-- FN_PLAN_SCORECARD(grade_date DATE) — v27.154 (2026-10-01; follow-up the same day: the hint's
+-- per-group minimum, and the rule read from each plan row — see THE RULE and THE HINT below): the
+-- T+14 grade of the next-week money plan (plan Task 5, first half; spec §5, P-9, P-13, P-14b/c).
+-- V_PLAN_SCORECARD is this function at CURRENT_DATE('America/Los_Angeles'); the acceptance calls
+-- it with the clock moved forward so
 -- the guard's arithmetic is exercised on real decisions before the first one settles. There is no
 -- second implementation to drift (the FN_TARGET_BID_SHADOW / V_TARGET_BID_SHADOW pattern).
 --
@@ -17,7 +19,10 @@
 --   FAMILY_WEEK     family x graded night: plan A and plan B side by side for that week.
 --   GUARD           week x outcome class (all four classes for every week that has a graded
 --                   decision, zeros included): the grade of the P-14b hold and the P-14c release.
---   RULE_HINT       exactly one row: what the GUARD grades say about strong_day_mult, or WAIT.
+--   RULE_HINT       exactly one row: what the GUARD grades say about the strong_day_mult in force,
+--                   or WAIT and why. Carries rule_value / rule_min_orders (the rule in force),
+--                   held_rows / held_rows_wrong and band_rows / band_released_wrong (the two groups
+--                   it compares, under that rule), min_group_rows and other_rule_rows.
 --
 -- HOW A PLAN IS GRADED (P-9). One plan night per Sunday-start week (the house week) is graded: the
 -- latest night in the week that is at least SETTLE_DAYS_MAX complete days old (the approved Task 5
@@ -72,46 +77,73 @@
 -- Each night's decision is graded on its own window, so a keyword held three nights running is
 -- three graded decisions; `keywords` counts the distinct ones beside them.
 --
--- THE HINT (RULE_HINT). Below MIN_GUARD_ROWS graded decisions it says WAIT and why — with nothing
--- old enough to grade, it counts the decisions written and names the date the first one settles.
--- From MIN_GUARD_ROWS on it reads two populations: released by LAST_DAY_NOT_STRONG with a last day
--- between BAND_LOW_X_BAR and STRONG_DAY_MULT times the bar (the keywords a lower threshold would
--- have held), and held. RELEASED_WRONG above DOMINATE_SHARE of the first => LOWER_STRONG_DAY_MULT;
--- HELD_WRONG above DOMINATE_SHARE of the second => RAISE_STRONG_DAY_MULT; both =>
--- NO_CLEAN_SIGNAL; neither => KEEP_STRONG_DAY_MULT. Nothing here changes the threshold.
---   MIN_GUARD_ROWS   20   the fewest graded decisions the hint will read (the Task C ruling).
+-- THE RULE EACH DECISION WAS MADE UNDER (v27.154 follow-up). This file keeps NO copy of the
+-- judge's P-14c settings. Every plan row carries the strong_day_mult and strong_day_min_orders it
+-- was judged under (V_PLAN_WINDOW_JUDGMENT publishes them, SP_BUILD_NEXT_WEEK_PLAN copies them;
+-- migration 2026-10-01_plan_strong_day_rule_columns.sql). Rows written before those columns existed
+-- (as_of <= LEGACY_THROUGH) hold NULL and are read as LEGACY_STRONG_DAY_MULT / _MIN_ORDERS: frozen
+-- history, the values the judge's k CTE carried from v27.147 (commit 41d2318; `git log -S` on either
+-- k line lists that commit alone, and the deployed view read 1.5 / 1 on 2026-10-01). They never move
+-- when the judge's rule moves. A row after LEGACY_THROUGH with no stored rule has no rule at all
+-- here; acceptance C10 goes red on it.
+--
+-- THE HINT (RULE_HINT) is about THE RULE IN FORCE: the multiplier and order minimum on the live
+-- plan's latest P-14c night on or before grade_date (published as rule_value / rule_min_orders). It
+-- reads only graded decisions made under that rule; the others stay in the GUARD rows and are
+-- counted as other_rule_rows. Below MIN_GUARD_ROWS graded decisions it says WAIT and why — with
+-- nothing old enough to grade, it counts the decisions written and names the date the first one
+-- settles. From there it compares two groups, both under the rule in force: HELD (held_rows), and
+-- THE BAND — released by LAST_DAY_NOT_STRONG with a last day between BAND_LOW_X_BAR and the row's
+-- own multiplier times the bar, the keywords a lower threshold would have held (band_rows). WHILE
+-- EITHER GROUP HAS FEWER THAN MIN_GROUP_ROWS graded rows it says WAIT and names the group that is
+-- too small and its count. Otherwise: RELEASED_WRONG above DOMINATE_SHARE of the band =>
+-- LOWER_STRONG_DAY_MULT; HELD_WRONG above DOMINATE_SHARE of the held => RAISE_STRONG_DAY_MULT; both
+-- => NO_CLEAN_SIGNAL; neither => KEEP_STRONG_DAY_MULT, each sentence leading with the size of the
+-- group it argued from. Nothing here changes the threshold.
+--   MIN_GUARD_ROWS   20   the fewest graded decisions in all the hint will read (the Task C ruling).
+--   MIN_GROUP_ROWS   10   the fewest graded rows in EACH group before LOWER / RAISE / KEEP /
+--                         NO_CLEAN_SIGNAL. Ori rules on the number. Why 10: a group whose true
+--                         wrong-rate is 30% reads "more than half wrong" by chance less than one
+--                         time in twenty only from 10 rows up (binomial, computed 2026-10-01: 4.7% at
+--                         10, 9.9% at 9, 5.8% at 8). The total alone was not enough: on the history
+--                         108 of the first 117 decisions are releases, 9 holds and 4 band rows, and at
+--                         the 2026-10-03 clock 20 graded decisions held 0 holds and 1 band row.
 --   DOMINATE_SHARE   0.5  "dominates" = more than half of the rows compared.
 --   BAND_LOW_X_BAR   1.0  the band's floor: a last day at the bar or better.
---   STRONG_DAY_MULT  1.5  MIRRORED from V_PLAN_WINDOW_JUDGMENT k.strong_day_mult: the band's top.
---                     Published as rule_value on the RULE_HINT row; acceptance C10 recomputes the
---                     plan's own last_day_strong from rule_value (and the judge's one-order minimum)
---                     on every P-14c row and goes red when they part, so a moved threshold cannot be
---                     graded against a stale one.
 --   SETTLE_DAYS_MAX  14   a plan night is graded once it is this many complete days old.
+--   LEGACY_*              see above: history, not a setting.
 -- Declared constants (Standing Rule 0 exempt). The learning contract (2026-10-01 design §4, §8)
 -- moves settings of this kind to DE_COACH_THRESHOLDS under strategy_id 'LEARNING' when its proposer
 -- is built; until then they are declared here, once.
 --
 -- COST, measured 2026-10-01 at deploy (uncached): V_PLAN_SCORECARD 354 slot-s, 70.8 MB, 4.6 s; at
--- today + 30, 391 slot-s. The FACT_AMAZON_ADS joins are clustered and touch a handful of plan
--- nights; the slot time is spread over the union's many small stages, not the scan. Far under the
--- 5,000 slot-s line at which this would be materialised by an orchestrator step, so nothing is.
+-- today + 30, 391 slot-s. After the follow-up, inside the acceptance run of 2026-10-01 (uncached):
+-- the view 265.5 slot-s, today + 30 490.7, 2026-10-03 402.5. The follow-up adds no FACT_AMAZON_ADS
+-- read (rule_rows reads FACT_PLAN_NEXT_WEEK only). The FACT_AMAZON_ADS joins are clustered and
+-- touch a handful of plan nights; the slot time is spread over the union's many small stages, not
+-- the scan. Far under the 5,000 slot-s line at which this would be materialised by an orchestrator
+-- step, so nothing is.
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §5, P-9, P-13, P-14.
 -- Learning contract: docs/superpowers/specs/2026-10-01-learning-contract-design.md (piece 0, Task C).
 -- SOP: architecture/NEXT_WEEK_MONEY.md §6 "Grading".
--- Acceptance: scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql.
+-- Acceptance: scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql, and
+-- scripts/bigquery/tests/check_plan_scorecard_hint_branches.py (this body on doctored plan tables).
 -- =============================================================================================
 CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_PLAN_SCORECARD`(grade_date DATE)
-OPTIONS (description = "v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions (saying why), else what the band of releases between 1.0x and 1.5x the bar and the holds say about strong_day_mult. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
+OPTIONS (description = "v27.154 follow-up (2026-10-01): RULE_HINT judges the rule in force (the strong_day_mult / strong_day_min_orders stored on the live plan's latest P-14c night) from the graded decisions made under it, and says WAIT, naming the group and its count, until BOTH groups it compares (held; let through with a last day between 1.0x and the row's own multiplier) have at least 10 graded rows; each decision is graded against the multiplier stored on its row (frozen 1.5 / 1 for rows written before the columns existed), never a copy kept here. v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions in all or 10 in either group (saying why), else LOWER / RAISE / KEEP_STRONG_DAY_MULT or NO_CLEAN_SIGNAL. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
 AS
 WITH k AS (
   SELECT 3    AS min_windows,
          0.10 AS margin,
          14   AS settle_days_max,
          20   AS min_guard_rows,
+         10   AS min_group_rows,          -- per group the hint compares; Ori rules on the number
          0.5  AS dominate_share,
          1.0  AS band_low_x_bar,
-         1.5  AS strong_day_mult         -- MIRRORED from V_PLAN_WINDOW_JUDGMENT k (acceptance C10)
+         -- HISTORY, not a setting: the rule on rows written before the columns existed
+         1.5  AS legacy_strong_day_mult,
+         1    AS legacy_strong_day_min_orders,
+         DATE '2026-10-01' AS legacy_through
 ),
 -- ---------------------------------------------------------------------------------------------
 -- THE PLAN GRADE: one night per Sunday-start week, old enough to have settled
@@ -227,12 +259,41 @@ family_week AS (
 -- ---------------------------------------------------------------------------------------------
 -- THE GUARD GRADE: every hold and every release the live plan wrote under P-14c
 -- ---------------------------------------------------------------------------------------------
+-- the P-14c rule each live row was judged under: stored on the row, or the frozen legacy values for
+-- a row written before the columns existed; NULL for a later row the builder wrote without it
+rule_rows AS (
+  SELECT p.as_of,
+         COALESCE(p.strong_day_mult,
+                  IF(p.as_of <= k.legacy_through, k.legacy_strong_day_mult, NULL))       AS eff_mult,
+         COALESCE(p.strong_day_min_orders,
+                  IF(p.as_of <= k.legacy_through, k.legacy_strong_day_min_orders, NULL)) AS eff_min
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
+  CROSS JOIN k
+  WHERE p.is_live_plan
+    AND p.last_day_strong IS NOT NULL               -- written under the last-day test (P-14c)
+    AND p.as_of <= grade_date
+),
+-- THE RULE IN FORCE: the one the latest such night was judged under. Always one row (NULLs when the
+-- plan has written nothing under P-14c), so the hint row can never vanish.
+rule_now AS (
+  SELECT MAX(r.as_of)                              AS rule_as_of,
+         MAX(IF(r.as_of = m.d, r.eff_mult, NULL))  AS rule_mult,
+         MAX(IF(r.as_of = m.d, r.eff_min, NULL))   AS rule_min
+  FROM rule_rows r
+  CROSS JOIN (SELECT MAX(as_of) AS d FROM rule_rows) m
+),
 guard_written AS (
   SELECT p.as_of, p.family, p.calendar_state, p.campaign_id, p.keyword_id,
          p.window_from, p.window_to, p.settle_due_on, p.family_bar,
          p.last_day_ret, p.guard_released_by, p.built_at,
+         -- the same expressions as rule_rows: the rule this decision was made under
+         COALESCE(p.strong_day_mult,
+                  IF(p.as_of <= k.legacy_through, k.legacy_strong_day_mult, NULL))       AS eff_mult,
+         COALESCE(p.strong_day_min_orders,
+                  IF(p.as_of <= k.legacy_through, k.legacy_strong_day_min_orders, NULL)) AS eff_min,
          IF(p.verdict = 'HELD_UNSETTLED', 'HELD', 'RELEASED') AS decision
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
+  CROSS JOIN k
   WHERE p.is_live_plan
     AND p.last_day_strong IS NOT NULL               -- written under the last-day test (P-14c)
     AND (p.verdict = 'HELD_UNSETTLED' OR p.guard_released_by IS NOT NULL)
@@ -332,6 +393,9 @@ guard_out AS (
     ON q.week_start = w.week_start AND q.outcome_class = cl
   GROUP BY 1, 2, 3, 4, 5, 6, 7, 8, 9
 ),
+-- the hint's inputs. The totals (graded .. rw) are every graded decision, so they equal the GUARD
+-- weeks' totals; the two groups it compares are read under the rule in force only (u), and a band
+-- row's top is ITS OWN multiplier, never a constant of this file.
 hint_in AS (
   SELECT COUNT(g.keyword_id)                                         AS graded,
          COUNT(DISTINCT CONCAT(g.campaign_id, '|', g.keyword_id))    AS kws,
@@ -340,20 +404,23 @@ hint_in AS (
          COUNTIF(g.outcome_class = 'HELD_WRONG')                     AS hw,
          COUNTIF(g.outcome_class = 'RELEASED_RIGHT')                 AS rr,
          COUNTIF(g.outcome_class = 'RELEASED_WRONG')                 AS rw,
-         COALESCE(SUM(IF(g.outcome_class = 'HELD_WRONG', g.s_sp, 0)), 0) AS hw_sp,
-         COUNTIF(g.guard_released_by = 'LAST_DAY_NOT_STRONG'
-                 AND g.last_day_x_bar >= k.band_low_x_bar
-                 AND g.last_day_x_bar <  k.strong_day_mult)          AS band_n,
-         COUNTIF(g.guard_released_by = 'LAST_DAY_NOT_STRONG'
-                 AND g.last_day_x_bar >= k.band_low_x_bar
-                 AND g.last_day_x_bar <  k.strong_day_mult
-                 AND g.outcome_class = 'RELEASED_WRONG')             AS band_wrong,
-         COALESCE(SUM(IF(g.guard_released_by = 'LAST_DAY_NOT_STRONG'
-                         AND g.last_day_x_bar >= k.band_low_x_bar
-                         AND g.last_day_x_bar <  k.strong_day_mult
-                         AND g.outcome_class = 'RELEASED_WRONG', g.s_sp, 0)), 0) AS band_wrong_sp
-  FROM guard_cls g
-  CROSS JOIN k
+         COUNTIF(NOT g.u)                                            AS other_rule_n,
+         COUNTIF(g.u AND g.decision = 'HELD')                        AS held_n,
+         COUNTIF(g.u AND g.outcome_class = 'HELD_WRONG')             AS held_wrong_n,
+         COALESCE(SUM(IF(g.u AND g.outcome_class = 'HELD_WRONG', g.s_sp, 0)), 0) AS hw_sp,
+         COUNTIF(g.u AND g.in_band)                                  AS band_n,
+         COUNTIF(g.u AND g.in_band AND g.outcome_class = 'RELEASED_WRONG') AS band_wrong,
+         COALESCE(SUM(IF(g.u AND g.in_band AND g.outcome_class = 'RELEASED_WRONG', g.s_sp, 0)), 0) AS band_wrong_sp
+  FROM (
+    SELECT c.*,
+           COALESCE(c.eff_mult = r.rule_mult AND c.eff_min = r.rule_min, FALSE) AS u,
+           COALESCE(c.guard_released_by = 'LAST_DAY_NOT_STRONG'
+                    AND c.last_day_x_bar >= k.band_low_x_bar
+                    AND c.last_day_x_bar <  c.eff_mult, FALSE)               AS in_band
+    FROM guard_cls c
+    CROSS JOIN rule_now r
+    CROSS JOIN k
+  ) g
 ),
 pending AS (
   SELECT COUNT(*)                                                 AS written,
@@ -364,10 +431,23 @@ pending AS (
   FROM guard_written
 ),
 hint AS (
-  SELECT h.*, p.*, k.min_guard_rows, k.dominate_share, k.band_low_x_bar, k.strong_day_mult,
-         (h.band_n > 0 AND h.band_wrong > k.dominate_share * h.band_n)       AS too_high,
-         (h.hr + h.hw > 0 AND h.hw > k.dominate_share * (h.hr + h.hw))         AS too_low
-  FROM hint_in h CROSS JOIN pending p CROSS JOIN k
+  SELECT h.*, p.*, r.*, k.min_guard_rows, k.min_group_rows, k.dominate_share, k.band_low_x_bar,
+         CASE
+           WHEN h.graded < k.min_guard_rows                                  THEN 'WAIT'
+           WHEN r.rule_mult IS NULL OR r.rule_min IS NULL                    THEN 'WAIT'
+           WHEN h.held_n < k.min_group_rows OR h.band_n < k.min_group_rows   THEN 'WAIT'
+           WHEN h.band_wrong > k.dominate_share * h.band_n
+            AND h.held_wrong_n > k.dominate_share * h.held_n                 THEN 'NO_CLEAN_SIGNAL'
+           WHEN h.band_wrong > k.dominate_share * h.band_n                   THEN 'LOWER_STRONG_DAY_MULT'
+           WHEN h.held_wrong_n > k.dominate_share * h.held_n                 THEN 'RAISE_STRONG_DAY_MULT'
+           ELSE                                                                   'KEEP_STRONG_DAY_MULT'
+         END AS hint_rec,
+         -- appended to every sentence that reads a population: the totals, and what was left out
+         FORMAT(' %d graded guard decision(s) in all, over %d week(s).%s', h.graded, h.weeks,
+                IF(h.other_rule_n > 0,
+                   FORMAT(' %d of them were made under a different or unrecorded rule and are left out of this hint; they are in the GUARD rows.', h.other_rule_n),
+                   '')) AS tail
+  FROM hint_in h CROSS JOIN pending p CROSS JOIN rule_now r CROSS JOIN k
 )
 -- ---------------------------------------------------------------------------------------------
 SELECT 'GRADE' AS row_type, g.plan, g.family, g.calendar_state,
@@ -394,6 +474,9 @@ SELECT 'GRADE' AS row_type, g.plan, g.family, g.calendar_state,
        CAST(NULL AS DATE) AS last_settle_due_on,
        CAST(NULL AS INT64) AS band_rows, CAST(NULL AS INT64) AS band_released_wrong,
        CAST(NULL AS FLOAT64) AS rule_value,
+       CAST(NULL AS INT64) AS rule_min_orders,
+       CAST(NULL AS INT64) AS held_rows, CAST(NULL AS INT64) AS held_rows_wrong,
+       CAST(NULL AS INT64) AS min_group_rows, CAST(NULL AS INT64) AS other_rule_rows,
        CAST(NULL AS STRING) AS recommendation,
        FORMAT('Plan %s%s in %s, %s: $%.2f allocated over %d graded week(s). At what each keyword\'s ad dollars actually netted in the days that followed, those dollars netted $%.2f, %.4f per allocated dollar; $%.2f of the allocation sat on keywords that then spent nothing and earned 0. The keywords themselves netted $%.2f.',
               g.plan, IF(g.plan = l.live_plan, ' (live)', ' (shadow)'), g.family, g.calendar_state,
@@ -417,6 +500,7 @@ SELECT 'RECOMMENDATION', CAST(NULL AS STRING), d.family, d.calendar_state,
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS DATE), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS FLOAT64),
+       CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64),
        d.recommendation,
        CASE
          WHEN d.recommendation = 'WAIT' THEN FORMAT(
@@ -453,6 +537,7 @@ SELECT 'FAMILY_WEEK', CAST(NULL AS STRING), w.family, w.calendar_state,
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS DATE), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS FLOAT64),
+       CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64),
        CAST(NULL AS STRING),
        FORMAT('%s, week of %t, plan night %t (%s, %d-day window): plan A allocated $%.2f and those dollars netted $%.2f (%s per dollar); plan B allocated $%.2f and netted $%.2f (%s per dollar). The live plan was %s. The keywords themselves netted $%.2f in the %d days from the plan night.',
               w.family, w.week_start, w.graded_night, w.calendar_state, w.window_days,
@@ -475,6 +560,7 @@ SELECT 'GUARD', CAST(NULL AS STRING), CAST(NULL AS STRING), o.states,
        ROUND(o.r25, 4), ROUND(o.r50, 4), ROUND(o.r75, 4),
        ROUND(o.x25, 4), ROUND(o.x50, 4), ROUND(o.x75, 4),
        o.last_settle_due_on, CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS FLOAT64),
+       CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64), CAST(NULL AS INT64),
        CAST(NULL AS STRING),
        FORMAT('Week of %t: %d of the %d graded guard decision(s) (%d keyword(s)) were %s. Their settled windows spent $%.2f and netted $%.2f.',
               o.week_start, o.class_rows, o.graded_rows, o.keywords,
@@ -500,14 +586,9 @@ SELECT 'RULE_HINT', CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STR
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
        CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
-       CAST(NULL AS DATE), h.band_n, h.band_wrong, h.strong_day_mult,
-       CASE
-         WHEN h.graded < h.min_guard_rows THEN 'WAIT'
-         WHEN h.too_high AND h.too_low    THEN 'NO_CLEAN_SIGNAL'
-         WHEN h.too_high                  THEN 'LOWER_STRONG_DAY_MULT'
-         WHEN h.too_low                   THEN 'RAISE_STRONG_DAY_MULT'
-         ELSE                                  'KEEP_STRONG_DAY_MULT'
-       END,
+       CAST(NULL AS DATE), h.band_n, h.band_wrong, h.rule_mult,
+       h.rule_min, h.held_n, h.held_wrong_n, h.min_group_rows, h.other_rule_n,
+       h.hint_rec,
        CASE
          WHEN h.graded = 0 AND h.written = 0 THEN
            'WAIT: the live plan has written no guard decision under the last-day test (P-14c) yet, so there is nothing to grade. Nothing changes.'
@@ -518,21 +599,41 @@ SELECT 'RULE_HINT', CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STR
          WHEN h.graded < h.min_guard_rows THEN FORMAT(
            'WAIT: %d graded guard decision(s) of the %d this hint needs (held right %d, held wrong %d, let through right %d, let through wrong %d, over %d week(s)). %d more decision(s) are written and not yet settled. Nothing changes.',
            h.graded, h.min_guard_rows, h.hr, h.hw, h.rr, h.rw, h.weeks, h.written - h.graded)
-         WHEN h.too_high AND h.too_low THEN FORMAT(
-           'NO CLEAN SIGNAL over %d graded guard decisions in %d week(s): of the %d keyword-nights let through with a last day between %.1fx and %.1fx the bar, %d turned out good once settled; AND of the %d held, %d turned out not good ($%.2f of settled spend). Moving the %.1fx threshold either way fixes one side and worsens the other; read the GUARD rows week by week. Nothing changes until Ori rules.',
-           h.graded, h.weeks, h.band_n, h.band_low_x_bar, h.strong_day_mult, h.band_wrong,
-           h.hr + h.hw, h.hw, h.hw_sp, h.strong_day_mult)
-         WHEN h.too_high THEN FORMAT(
-           'THE LAST-DAY BAR LOOKS TOO HIGH over %d graded guard decisions in %d week(s): of the %d keyword-nights let through because their last day sold at %.1fx to %.1fx the bar, %d turned out good once their window settled ($%.2f of settled spend on keywords the guard should have held). A lower strong_day_mult would have held them. Held: %d right, %d wrong. Nothing changes until Ori rules.',
-           h.graded, h.weeks, h.band_n, h.band_low_x_bar, h.strong_day_mult, h.band_wrong,
-           h.band_wrong_sp, h.hr, h.hw)
-         WHEN h.too_low THEN FORMAT(
-           'THE LAST-DAY BAR LOOKS TOO LOW over %d graded guard decisions in %d week(s): of the %d keyword-nights held on the good side by a last day of %.1fx the bar or better, %d turned out not good once their window settled ($%.2f of settled spend protected that should not have been). A higher strong_day_mult would have let them through. Of the %d let through between %.1fx and %.1fx the bar, %d turned out good. Nothing changes until Ori rules.',
-           h.graded, h.weeks, h.hr + h.hw, h.strong_day_mult, h.hw, h.hw_sp,
-           h.band_n, h.band_low_x_bar, h.strong_day_mult, h.band_wrong)
+         WHEN h.rule_mult IS NULL OR h.rule_min IS NULL THEN FORMAT(
+           'WAIT: the live plan\'s latest night (%t) carries no last-day rule (strong_day_mult %s, strong_day_min_orders %s), so there is no rule in force to argue about. The builder copies both from the judge onto every row; a night written without them is a broken copy (acceptance C10).%s Nothing changes.',
+           h.rule_as_of, COALESCE(FORMAT('%g', h.rule_mult), 'missing'),
+           COALESCE(CAST(h.rule_min AS STRING), 'missing'), h.tail)
+         WHEN h.hint_rec = 'WAIT' THEN CONCAT(
+           'WAIT: ',
+           CASE
+             WHEN h.held_n < h.min_group_rows AND h.band_n < h.min_group_rows THEN FORMAT(
+               'both groups this hint compares are too small: %d held of the %d needed, and %d let through in the band of the %d needed.',
+               h.held_n, h.min_group_rows, h.band_n, h.min_group_rows)
+             WHEN h.held_n < h.min_group_rows THEN FORMAT(
+               'the held group is too small: %d held of the %d needed (the band has %d let through, enough).',
+               h.held_n, h.min_group_rows, h.band_n)
+             ELSE FORMAT(
+               'the band is too small: %d let through in the band of the %d needed (the held group has %d, enough).',
+               h.band_n, h.min_group_rows, h.held_n)
+           END,
+           FORMAT(' Both groups are read under the rule of the latest plan night (%t): a last day of at least %gx the bar with at least %d order(s) earns the hold. Of the held, %d turned out not good once settled; of the band (let through with a last day between %gx and %gx the bar, the keyword-nights a lower threshold would have held), %d turned out good.%s %d more decision(s) are written and not yet settled. Nothing changes.',
+                  h.rule_as_of, h.rule_mult, h.rule_min, h.held_wrong_n, h.band_low_x_bar, h.rule_mult,
+                  h.band_wrong, h.tail, h.written - h.graded))
+         WHEN h.hint_rec = 'NO_CLEAN_SIGNAL' THEN FORMAT(
+           'NO CLEAN SIGNAL from %d held and %d let through in the band, under the %gx rule of the latest plan night (%t): of the %d held, %d turned out not good once settled ($%.2f of settled spend protected that should not have been), AND of the %d let through with a last day between %gx and %gx the bar, %d turned out good ($%.2f of settled spend on keywords the guard should have held). Moving the %gx threshold either way fixes one side and worsens the other; read the GUARD rows week by week.%s Nothing changes until Ori rules.',
+           h.held_n, h.band_n, h.rule_mult, h.rule_as_of, h.held_n, h.held_wrong_n, h.hw_sp,
+           h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.band_wrong_sp, h.rule_mult, h.tail)
+         WHEN h.hint_rec = 'LOWER_STRONG_DAY_MULT' THEN FORMAT(
+           'THE LAST-DAY BAR LOOKS TOO HIGH from %d keyword-nights let through because their last day sold at %gx to %gx the bar, under the rule of the latest plan night (%t): %d of them turned out good once their window settled ($%.2f of settled spend on keywords the guard should have held). A lower strong_day_mult would have held them. Held under the same rule: %d, of which %d turned out not good.%s Nothing changes until Ori rules.',
+           h.band_n, h.band_low_x_bar, h.rule_mult, h.rule_as_of, h.band_wrong, h.band_wrong_sp,
+           h.held_n, h.held_wrong_n, h.tail)
+         WHEN h.hint_rec = 'RAISE_STRONG_DAY_MULT' THEN FORMAT(
+           'THE LAST-DAY BAR LOOKS TOO LOW from %d keyword-nights held on the good side by a last day of %gx the bar or better, under the rule of the latest plan night (%t): %d of them turned out not good once their window settled ($%.2f of settled spend protected that should not have been). A higher strong_day_mult would have let them through. Of the %d let through with a last day between %gx and %gx the bar, %d turned out good.%s Nothing changes until Ori rules.',
+           h.held_n, h.rule_mult, h.rule_as_of, h.held_wrong_n, h.hw_sp,
+           h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.tail)
          ELSE FORMAT(
-           'THE LAST-DAY BAR HOLDS over %d graded guard decisions in %d week(s): of the %d keyword-nights let through with a last day between %.1fx and %.1fx the bar, %d turned out good; of the %d held, %d turned out not good. Keep strong_day_mult at %.1f.',
-           h.graded, h.weeks, h.band_n, h.band_low_x_bar, h.strong_day_mult, h.band_wrong,
-           h.hr + h.hw, h.hw, h.strong_day_mult)
+           'THE LAST-DAY BAR HOLDS from %d held and %d let through in the band, under the rule of the latest plan night (%t): of the %d held, %d turned out not good; of the %d let through with a last day between %gx and %gx the bar, %d turned out good. Keep strong_day_mult at %g.%s',
+           h.held_n, h.band_n, h.rule_as_of, h.held_n, h.held_wrong_n,
+           h.band_n, h.band_low_x_bar, h.rule_mult, h.band_wrong, h.rule_mult, h.tail)
        END
 FROM hint h

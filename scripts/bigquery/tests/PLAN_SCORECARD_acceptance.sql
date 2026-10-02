@@ -1,61 +1,105 @@
 -- =============================================================================================
--- PLAN_SCORECARD acceptance — v27.154 (2026-10-01). V_PLAN_SCORECARD / FN_PLAN_SCORECARD (plan
--- Task 5's grade) and the nine plan_* checks Task A put on V_ENGINE_HEALTH. EVERY ROW MUST READ PASS.
+-- PLAN_SCORECARD acceptance — v27.154 (2026-10-01; follow-up the same day: C09 restated, C10
+-- replaced, C11 and C12 added). V_PLAN_SCORECARD / FN_PLAN_SCORECARD (plan Task 5's grade) and the
+-- nine plan_* checks Task A put on V_ENGINE_HEALTH. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Objects: scripts/bigquery/functions/FN_PLAN_SCORECARD.sql, scripts/bigquery/views/V_PLAN_SCORECARD.sql.
 -- SOP: architecture/NEXT_WEEK_MONEY.md §6 "Grading". Spec §5, P-9, P-13, P-14b/c.
+-- Companion: scripts/bigquery/tests/check_plan_scorecard_hint_branches.py runs the function's OWN
+-- body on doctored copies of the plan table, which this file cannot (see "WHAT THIS FILE DOES NOT
+-- PROVE" below).
 --
 -- WHY THE SUITE CANNOT PASS ON EMPTINESS. On 2026-10-01 the scorecard is young: one graded week
 -- (the August nights), every RECOMMENDATION is WAIT, and no guard decision has settled (the guard
--- columns exist from the 2026-09-28 partition; the first window settles 2026-10-03). The draft
--- suite passed an empty scorecard by construction. Here:
+-- columns exist from the 2026-09-28 partition; the first window settles 2026-10-03). Here:
 --   * C04 and C08 hold the scorecard to what the plan history makes gradable, re-derived from
 --     FACT_PLAN_NEXT_WEEK in this file — "empty because young" passes, "empty because broken" fails;
 --   * every check also runs on FN_PLAN_SCORECARD with the clock moved 30 days forward (row CM),
---     where the guard has real decisions to partition and the hint leaves WAIT;
+--     where the guard has 117 real decisions to partition, and at 2026-10-03 (row C12), the clock at
+--     which review MUST_FIX 1 measured the old hint saying KEEP from 0 holds and 1 band row;
 --   * every check has a NEGATIVE CONTROL run as a standing row: the same expression over a doctored
 --     temp copy must FIRE (the row reads PASS when it fired). A control with nothing to doctor reads
 --     FAIL, never a quiet PASS.
 --
 -- THE CHECK EXPRESSIONS ARE WRITTEN ONCE, over sc_copies (one tagged copy per scenario), and each
 -- copy is judged against the expectation of its own clock (LIVE = today in Los Angeles, MOVED =
--- today + 30). Twins of the function kept in this file, which must change with it: the gradable-
--- decision predicate (exp_g), the one-night-per-Sunday-week rule (exp_fw), the 20-decision hint
--- threshold (C09) and the 3-week recommendation threshold (C03).
+-- today + 30, CASE = 2026-10-03). Twins of the function kept in this file, which must change with
+-- it: the gradable-decision predicate (exp_g), the one-night-per-Sunday-week rule (exp_fw), the
+-- 20-decision hint threshold (C09), the 3-week recommendation threshold (C03), the hint's sentence
+-- openings (C11), and legacy_through 2026-10-01 (C10: history — the last night written before the
+-- plan table stored the rule — never a setting). The per-group minimum is NOT twinned: C09 reads
+-- min_group_rows from the hint row, so the number stays Ori's to rule on in one place.
 --
--- COST, measured 2026-10-01 at deploy (uncached): V_PLAN_SCORECARD 354 slot-s / 70.8 MB / 4.6 s;
--- FN_PLAN_SCORECARD at today + 30 391 slot-s. The nine plan_* rows of V_ENGINE_HEALTH are read by
--- NAME (56 slot-s): a filter on check_name prunes the board's other arms, while the whole board read
--- uncached the same day cost 67,639 slot-s.
+-- C09 (restated by the follow-up). The hint WAITs iff fewer than 20 graded decisions in all, no rule
+-- in force, or EITHER group it compares (held_rows, band_rows) under min_group_rows; C09T holds its
+-- totals to the GUARD weeks and its groups inside them. The v27.154 comment on C09 said it prevented
+-- "a threshold change argued from five decisions"; no check did that, because the hint gated only on
+-- the total.
+-- C10 (replaced by the follow-up). The v27.154 C10 recomputed last_day_strong from today's mirrored
+-- 1.5x on every P-14c row in history — a second copy of the P-14c test — and would have stayed red for
+-- good after a threshold change (review measured 7 / 11 / 18 permanent violations at 1.3 / 1.2 / 2.0).
+-- The rule each decision was made under is now STORED on its plan row, and C10 reads only that: every
+-- row after legacy_through carries one, a night carries one rule, the hint's rule_value /
+-- rule_min_orders are the latest night's, and two days after the columns existed a night has been
+-- written since. It never reads last_day_strong's inputs.
 --
--- The whole suite, measured 2026-10-01 (uncached script, 16 child jobs): 727 slot-s, 52 s.
---
--- RUN 2026-10-01 (Los Angeles), first deploy: 31 rows, every one PASS. The intermediate
--- violation table (copy x check) was then printed from the same temp tables, so each PASS below is
--- a control that FIRED or a live reading of 0 with something under it — not a vacuous one:
---   LIVE and MOVED read 0 on every check (C01-C10; C05 and C10 on LIVE only).
+-- RUN 2026-10-01 (Los Angeles), after the follow-up deployed: 41 rows, every one PASS. The violation
+-- table (copy x check) was printed from the same run, so each PASS below is a control that FIRED or
+-- a reading of 0 with something under it — not a vacuous one:
+--   LIVE, MOVED and CASE read 0 on every check they run (C05 on LIVE only; C10 on LIVE and MOVED).
 --   C01: NC_C01 (a GRADE row's calendar_state NULL) 1; NC_C01S (the RULE_HINT sentence NULL) 1.
 --   C02: NC_C02 (allocation -1) 1; NC_C02Z (allocation NULL) 1.
 --   C03: NC_C03D (a recommendation doubled) 1; NC_C03X (dropped) 1; NC_C03W (KEEP_B on 1 week) 1.
 --   C04: NC_C04 (one family-night dropped) 1. Expectation today: 1 graded night (2026-08-28, the
---        week of 2026-08-23), 4 family-nights; at today + 30: 8 family-nights (2 weeks).
---   C05: the nine plan_* checks were on the board, none RED (INFO x3, GREEN x6); NC_C05D (one
---        removed) 1; NC_C05R (one set RED) 1.
---   C06: LIVE 0 with 0 decisions gradable (117 written since 2026-09-28: 9 held, 108 released;
---        first settle date 2026-10-03); MOVED 0 on 117 graded decisions in one week, four class rows;
---        NC_C06C (a class count +1) 1; NC_C06G (the week total +1 on all four rows) 5; NC_C06E
---        (today's empty GUARD against the moved clock's 117 gradable decisions) 1.
+--        week of 2026-08-23), 4 family-nights.
+--   C05: the nine plan_* checks were on the board, none RED; NC_C05D (one removed) 1; NC_C05R (one
+--        set RED) 1.
+--   C06: LIVE 0 with 0 decisions gradable (117 written since 2026-09-28; first settle date
+--        2026-10-03); MOVED 0 on 117 graded decisions in one week; NC_C06C (a class count +1) 1;
+--        NC_C06G (the week total +1 on all four rows) 5; NC_C06E (today's empty GUARD against the
+--        moved clock's 117 gradable decisions) 1.
 --   C07: NC_C07 (a family-night 3 days old) 1; NC_C07G (a guard week settling tomorrow) 1.
---   C08: LIVE 0 — the RULE_HINT row counts 0 and its sentence starts 'WAIT: no guard decision is
---        old enough to grade yet' and names 2026-10-03; NC_C08 (sentence replaced by a count) 1;
---        NC_C08G (the moved grades against today's clock) 2.
---   C09: NC_C09 (LOWER_STRONG_DAY_MULT with 0 graded) 1; NC_C09D (the hint row doubled) 1.
---   C10: 1,444 live P-14c rows (86 with last_day_strong) all agree with rule_value 1.5 and the
---        one-order minimum; NC_C10 (one row's flag flipped) 1.
---   CM: 117 real guard decisions graded at today + 30; every check 0 on that copy.
+--   C08: LIVE 0 — the RULE_HINT row counts 0 and its sentence names 2026-10-03; NC_C08 (sentence
+--        replaced by a count) 1; NC_C08G (the moved grades against today's clock) 2.
+--   C09: NC_C09 (LOWER with 0 graded) 1; NC_C09D (the hint row doubled) 1; NC_C09B (117 graded, 12
+--        held, ONE band row, reading KEEP: the doctored control MUST_FIX 1 asked for) 1; NC_C09H (117
+--        graded, ONE held, 12 band rows, reading KEEP) 1; C09T: NC_C09G (held_rows one larger than the
+--        graded holds) 1.
+--   C10: LIVE 0 — today's latest night (2026-10-01) was written before the columns existed and the
+--        hint names 1.5x / 1 order; NC_C10N (the latest night's 361 rows moved after the columns
+--        existed, with no rule) 361; NC_C10M (that night carrying 2.0 on one row, 1.5 on the rest) 2;
+--        NC_C10V (that night storing rule_value + 0.25) 1; NC_C10E (only the nights to 2026-10-01,
+--        judged on 2026-10-03) 1.
+--   C11: NC_C11W (a group WAIT whose sentence names neither short group) 1; NC_C11K (KEEP opening
+--        "over 117 graded guard decisions", the v27.154 form) 1.
+--   C12: at 2026-10-03, 20 graded, 0 held, 1 in the band, minimum 10 each: WAIT, sentence naming both.
+--   CM: 117 real guard decisions graded at today + 30 (9 held, 4 in the band: WAIT); every check 0.
+--
+-- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 10 graded holds or 10
+-- graded band rows, so every real hint reads WAIT and LOWER / RAISE / KEEP / NO_CLEAN_SIGNAL have
+-- never come out of the function on real input. C09 and C11 judge the hint's output against its own
+-- published counts, which is all a check over the output can do. The function's arithmetic on those
+-- branches is exercised by check_plan_scorecard_hint_branches.py: run 2026-10-01, eight doctored
+-- copies of the plan table, every one as expected (exit 0) — RAISE from 12 held / 12 wrong, LOWER from
+-- 12 band / 12 wrong, KEEP, NO_CLEAN_SIGNAL, WAIT naming the held group (9 of 10), WAIT naming the band
+-- (1 of 10, 30 graded), WAIT with every decision under 1.5x while the latest night carries 2.0x
+-- (other_rule_rows 24), WAIT with no rule on the latest night. Its negative control: the same run
+-- with min_group_rows doctored to 1 exits 1, the 30-graded / 1-band case reading
+-- RAISE_STRONG_DAY_MULT.
+--
+-- COST, measured 2026-10-01 in the run above (uncached): V_PLAN_SCORECARD 265.5 slot-s;
+-- FN_PLAN_SCORECARD at today + 30 490.7 slot-s and at 2026-10-03 402.5 slot-s (both join
+-- FACT_AMAZON_ADS on the clustered keys; the 2026-10-03 call is new in the follow-up). The nine
+-- plan_* rows of V_ENGINE_HEALTH are read by NAME (16.5 slot-s): a filter on check_name prunes the
+-- board's other arms, while the whole board read uncached on 2026-10-01 cost 67,639 slot-s.
+-- The whole suite, same run (uncached script): 1,226.7 slot-s, 89 s.
 -- =============================================================================================
 DECLARE d0  DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
 DECLARE d30 DATE DEFAULT DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 30 DAY);
+-- the real case review MUST_FIX 1 measured: at this clock 20 decisions are graded, 0 held, 1 band
+DECLARE d_case DATE DEFAULT DATE '2026-10-03';
+-- TWIN, HISTORY not a setting: the last night written before FACT_PLAN_NEXT_WEEK carried the rule
+DECLARE legacy_through DATE DEFAULT DATE '2026-10-01';
 
 -- ---- the scorecard, read once at today and once with the clock moved 30 days forward ----
 CREATE TEMP TABLE sc_live AS
@@ -66,10 +110,14 @@ CREATE TEMP TABLE sc_moved AS
   SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
                                ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
   FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d30);
+CREATE TEMP TABLE sc_case AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_case);
 
 -- ---- what the plan history makes gradable, per clock (TWINS of the function's rules) ----
 CREATE TEMP TABLE clock_dates AS
-  SELECT 'LIVE' AS clock, d0 AS d UNION ALL SELECT 'MOVED', d30;
+  SELECT 'LIVE' AS clock, d0 AS d UNION ALL SELECT 'MOVED', d30 UNION ALL SELECT 'CASE', d_case;
 -- one plan night per Sunday-start week: the latest that is at least 14 days old
 CREATE TEMP TABLE exp_fw AS
   WITH night AS (
@@ -112,6 +160,7 @@ CREATE TEMP TABLE clocks AS
 CREATE TEMP TABLE sc_copies AS
             SELECT 'LIVE'      AS copy, 'LIVE'  AS clock, * FROM sc_live
   UNION ALL SELECT 'MOVED',              'MOVED', * FROM sc_moved
+  UNION ALL SELECT 'CASE',               'CASE',  * FROM sc_case
   -- C01: a GRADE row loses its calendar state; the hint row loses its sentence
   UNION ALL SELECT 'NC_C01',  'LIVE', * REPLACE (IF(row_type = 'GRADE' AND rn = 1, NULL, calendar_state) AS calendar_state) FROM sc_live
   UNION ALL SELECT 'NC_C01S', 'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', NULL, sentence) AS sentence) FROM sc_live
@@ -139,7 +188,30 @@ CREATE TEMP TABLE sc_copies AS
   -- C09: the hint leaves WAIT below 20; the hint row doubled
   UNION ALL SELECT 'NC_C09',  'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', 'LOWER_STRONG_DAY_MULT', recommendation) AS recommendation) FROM sc_live
   UNION ALL SELECT 'NC_C09D', 'LIVE', * FROM sc_live
-  UNION ALL SELECT 'NC_C09D', 'LIVE', * FROM sc_live WHERE row_type = 'RULE_HINT';
+  UNION ALL SELECT 'NC_C09D', 'LIVE', * FROM sc_live WHERE row_type = 'RULE_HINT'
+  -- C09 (MUST_FIX 1): 117 graded decisions, 12 held (enough) and ONE band row, reading KEEP — it must
+  -- WAIT; the same with ONE held row and 12 in the band; and a group count that its totals cannot hold
+  UNION ALL SELECT 'NC_C09B', 'MOVED', * REPLACE (
+              IF(row_type = 'RULE_HINT', 12, held_rows) AS held_rows,
+              IF(row_type = 'RULE_HINT', 0, held_rows_wrong) AS held_rows_wrong,
+              IF(row_type = 'RULE_HINT', 1, band_rows) AS band_rows,
+              IF(row_type = 'RULE_HINT', 0, band_released_wrong) AS band_released_wrong,
+              IF(row_type = 'RULE_HINT', 'KEEP_STRONG_DAY_MULT', recommendation) AS recommendation) FROM sc_moved
+  UNION ALL SELECT 'NC_C09H', 'MOVED', * REPLACE (
+              IF(row_type = 'RULE_HINT', 1, held_rows) AS held_rows,
+              IF(row_type = 'RULE_HINT', 0, held_rows_wrong) AS held_rows_wrong,
+              IF(row_type = 'RULE_HINT', 12, band_rows) AS band_rows,
+              IF(row_type = 'RULE_HINT', 0, band_released_wrong) AS band_released_wrong,
+              IF(row_type = 'RULE_HINT', 'KEEP_STRONG_DAY_MULT', recommendation) AS recommendation) FROM sc_moved
+  UNION ALL SELECT 'NC_C09G', 'MOVED', * REPLACE (IF(row_type = 'RULE_HINT', held_rows + 1, held_rows) AS held_rows) FROM sc_moved
+  -- C11: a WAIT that names neither short group; a KEEP that leads with the total (the old sentence)
+  UNION ALL SELECT 'NC_C11W', 'MOVED', * REPLACE (
+              IF(row_type = 'RULE_HINT', 'WAIT: 117 graded guard decisions in 1 week(s). Nothing changes.', sentence) AS sentence) FROM sc_moved
+  UNION ALL SELECT 'NC_C11K', 'MOVED', * REPLACE (
+              IF(row_type = 'RULE_HINT', 12, held_rows) AS held_rows,
+              IF(row_type = 'RULE_HINT', 12, band_rows) AS band_rows,
+              IF(row_type = 'RULE_HINT', 'KEEP_STRONG_DAY_MULT', recommendation) AS recommendation,
+              IF(row_type = 'RULE_HINT', 'THE LAST-DAY BAR HOLDS over 117 graded guard decisions in 1 week(s): of the 12 keyword-nights let through with a last day between 1.0x and 1.5x the bar, 0 turned out good. Keep strong_day_mult at 1.5.', sentence) AS sentence) FROM sc_moved;
 -- the copies, listed explicitly: a copy that came back EMPTY still gets judged (and fails C01)
 CREATE TEMP TABLE copies AS
   SELECT copy, clock FROM UNNEST([
@@ -148,7 +220,8 @@ CREATE TEMP TABLE copies AS
     ('NC_C03D', 'LIVE'), ('NC_C03X', 'LIVE'), ('NC_C03W', 'LIVE'), ('NC_C04', 'LIVE'),
     ('NC_C06C', 'MOVED'), ('NC_C06G', 'MOVED'), ('NC_C06E', 'MOVED'),
     ('NC_C07', 'LIVE'), ('NC_C07G', 'MOVED'), ('NC_C08', 'LIVE'), ('NC_C08G', 'LIVE'),
-    ('NC_C09', 'LIVE'), ('NC_C09D', 'LIVE')]);
+    ('NC_C09', 'LIVE'), ('NC_C09D', 'LIVE'), ('NC_C09B', 'MOVED'), ('NC_C09H', 'MOVED'),
+    ('NC_C09G', 'MOVED'), ('NC_C11W', 'MOVED'), ('NC_C11K', 'MOVED'), ('CASE', 'CASE')]);
 
 -- ---- C05: the nine plan_* checks, read by NAME (prunes the board; see the header) ----
 CREATE TEMP TABLE board AS
@@ -162,15 +235,62 @@ CREATE TEMP TABLE board_copies AS
             WHERE check_name != (SELECT MIN(check_name) FROM board)
   UNION ALL SELECT 'NC_C05R', check_name, IF(check_name = (SELECT MIN(check_name) FROM board), 'RED', status) FROM board;
 
--- ---- C10: the plan's own last_day_strong against the threshold the scorecard grades on ----
+-- ---- C10: the rule each P-14c decision was made under, as STORED on its row (never re-derived) ----
 CREATE TEMP TABLE p14c AS
-  SELECT as_of, campaign_id, keyword_id, last_day_strong, last_day_ord, last_day_ret, family_bar,
-         ROW_NUMBER() OVER (ORDER BY as_of, campaign_id, keyword_id) AS rn
+  SELECT as_of, campaign_id, keyword_id, strong_day_mult, strong_day_min_orders
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   WHERE is_live_plan AND last_day_strong IS NOT NULL;
+-- the doctored nights are the latest real night's rows moved to the moved clock's date, so they are
+-- always the latest night that clock reads; an empty table leaves the controls nothing and they FAIL
+CREATE TEMP TABLE p14c_latest AS
+  SELECT *, ROW_NUMBER() OVER (ORDER BY campaign_id, keyword_id) AS rn
+  FROM p14c WHERE as_of = (SELECT MAX(as_of) FROM p14c);
 CREATE TEMP TABLE p14c_copies AS
-            SELECT 'LIVE' AS copy, * FROM p14c
-  UNION ALL SELECT 'NC_C10', * REPLACE (IF(rn = 1, NOT last_day_strong, last_day_strong) AS last_day_strong) FROM p14c;
+            SELECT 'LIVE'    AS copy, * FROM p14c
+  UNION ALL SELECT 'MOVED',           * FROM p14c
+  -- a night after the columns existed whose rows carry no rule
+  UNION ALL SELECT 'NC_C10N',         * FROM p14c
+  UNION ALL SELECT 'NC_C10N', * EXCEPT (rn) REPLACE (d30 AS as_of, CAST(NULL AS FLOAT64) AS strong_day_mult,
+                                                    CAST(NULL AS INT64) AS strong_day_min_orders) FROM p14c_latest
+  -- a night carrying two rules
+  UNION ALL SELECT 'NC_C10M',         * FROM p14c
+  UNION ALL SELECT 'NC_C10M', * EXCEPT (rn) REPLACE (d30 AS as_of, IF(rn = 1, 2.0, 1.5) AS strong_day_mult,
+                                                    1 AS strong_day_min_orders) FROM p14c_latest
+  -- a latest night whose rule is not the one the hint names (rule_value + 0.25)
+  UNION ALL SELECT 'NC_C10V',         * FROM p14c
+  UNION ALL SELECT 'NC_C10V', * EXCEPT (rn) REPLACE (d30 AS as_of,
+              (SELECT MAX(rule_value) + 0.25 FROM sc_moved WHERE row_type = 'RULE_HINT') AS strong_day_mult,
+              (SELECT MAX(rule_min_orders) FROM sc_moved WHERE row_type = 'RULE_HINT') AS strong_day_min_orders) FROM p14c_latest
+  -- two days after the columns existed and the plan has written no night since
+  UNION ALL SELECT 'NC_C10E',         * FROM p14c WHERE as_of <= legacy_through;
+-- (copy, the scorecard copy whose hint it is judged against, that scorecard's clock, the real day)
+CREATE TEMP TABLE c10_list AS
+  SELECT * FROM UNNEST([
+    STRUCT('LIVE' AS copy, 'LIVE' AS sc_copy, d0 AS cd, d0 AS today_d),
+    ('MOVED', 'MOVED', d30, d0), ('NC_C10N', 'MOVED', d30, d0), ('NC_C10M', 'MOVED', d30, d0),
+    ('NC_C10V', 'MOVED', d30, d0),
+    ('NC_C10E', 'LIVE', DATE_ADD(legacy_through, INTERVAL 2 DAY), DATE_ADD(legacy_through, INTERVAL 2 DAY))]);
+CREATE TEMP TABLE c10_agg AS
+  SELECT x.copy, x.sc_copy, x.cd, x.today_d,
+         COUNTIF(p.as_of > legacy_through AND p.as_of <= x.cd
+                 AND (p.strong_day_mult IS NULL OR p.strong_day_min_orders IS NULL))      AS n_unrecorded,
+         MAX(IF(p.as_of <= x.cd, p.as_of, NULL))                                         AS latest_night,
+         COUNTIF(p.as_of > legacy_through AND p.as_of <= x.today_d)                      AS n_since_columns
+  FROM c10_list x
+  LEFT JOIN p14c_copies p ON p.copy = x.copy
+  GROUP BY 1, 2, 3, 4;
+CREATE TEMP TABLE c10_two AS
+  SELECT copy, COUNT(*) AS n_nights_two_rules
+  FROM (SELECT x.copy, p.as_of
+        FROM c10_list x JOIN p14c_copies p ON p.copy = x.copy AND p.as_of <= x.cd
+        GROUP BY 1, 2
+        HAVING COUNT(DISTINCT IF(p.strong_day_mult IS NULL OR p.strong_day_min_orders IS NULL, NULL,
+                                 FORMAT('%t|%t', p.strong_day_mult, p.strong_day_min_orders))) > 1)
+  GROUP BY copy;
+CREATE TEMP TABLE c10_latest AS
+  SELECT a.copy, MAX(p.strong_day_mult) AS l_mult, MAX(p.strong_day_min_orders) AS l_min
+  FROM c10_agg a JOIN p14c_copies p ON p.copy = a.copy AND p.as_of = a.latest_night
+  GROUP BY 1;
 
 -- ---- every check, written once, evaluated on every copy: (copy, chk, n) ----
 CREATE TEMP TABLE vlist AS
@@ -268,17 +388,40 @@ SELECT k.copy, 'C08',
      + IF(COUNTIF(s.row_type = 'RULE_HINT') = 0, 1, 0)
 FROM copies k JOIN clocks c USING (clock) LEFT JOIN sc_copies s ON s.copy = k.copy GROUP BY k.copy
 UNION ALL
--- C09 one hint row; WAIT iff under 20 graded decisions (twin: 20); its counts are the GUARD weeks' totals
+-- C09 one hint row; it WAITs iff fewer than 20 graded decisions in all (twin: 20), no rule in force,
+-- or EITHER group it compares (held_rows, band_rows) under the min_group_rows the row publishes;
+-- and only the five words the hint has
 SELECT k.copy, 'C09',
        IF(COUNT(h.copy) != 1, 1, 0)
-     + COUNTIF(h.copy IS NOT NULL AND (h.graded_rows < 20) != (h.recommendation = 'WAIT'))
+     + COUNTIF(h.copy IS NOT NULL
+               AND COALESCE(h.graded_rows < 20 OR h.rule_value IS NULL OR h.rule_min_orders IS NULL
+                            OR h.min_group_rows IS NULL
+                            OR h.held_rows < h.min_group_rows OR h.band_rows < h.min_group_rows, TRUE)
+                   != (COALESCE(h.recommendation, '') = 'WAIT'))
+     + COUNTIF(h.copy IS NOT NULL AND (h.min_group_rows IS NULL OR h.min_group_rows < 1))
      + COUNTIF(h.copy IS NOT NULL AND h.recommendation NOT IN ('WAIT', 'KEEP_STRONG_DAY_MULT', 'LOWER_STRONG_DAY_MULT',
                                                                'RAISE_STRONG_DAY_MULT', 'NO_CLEAN_SIGNAL'))
-     + COUNTIF(h.copy IS NOT NULL
+FROM copies k
+LEFT JOIN (SELECT * FROM sc_copies WHERE row_type = 'RULE_HINT') h USING (copy)
+GROUP BY k.copy
+UNION ALL
+-- C09T its totals are the GUARD weeks' totals, and the two groups fit inside them: the held group is
+-- the held decisions under the rule in force, the band is a part of the let-through, and with no
+-- decision made under another rule the held group IS every graded hold
+SELECT k.copy, 'C09T',
+       COUNTIF(h.copy IS NOT NULL
                AND NOT COALESCE(h.held_right + h.held_wrong + h.released_right + h.released_wrong = h.graded_rows
                                 AND h.graded_rows    = COALESCE(t.g, 0)
                                 AND h.held_right     = COALESCE(t.hr, 0) AND h.held_wrong     = COALESCE(t.hw, 0)
                                 AND h.released_right = COALESCE(t.rr, 0) AND h.released_wrong = COALESCE(t.rw, 0), FALSE))
+     + COUNTIF(h.copy IS NOT NULL
+               AND NOT COALESCE(h.held_rows_wrong <= h.held_rows AND h.band_released_wrong <= h.band_rows
+                                AND h.held_rows <= h.held_right + h.held_wrong AND h.held_rows_wrong <= h.held_wrong
+                                AND h.band_rows <= h.released_right + h.released_wrong
+                                AND h.band_released_wrong <= h.released_wrong
+                                AND h.other_rule_rows + h.held_rows + h.band_rows <= h.graded_rows
+                                AND (h.other_rule_rows > 0
+                                     OR (h.held_rows = h.held_right + h.held_wrong AND h.held_rows_wrong = h.held_wrong)), FALSE))
 FROM copies k
 LEFT JOIN (SELECT * FROM sc_copies WHERE row_type = 'RULE_HINT') h USING (copy)
 LEFT JOIN (SELECT copy, SUM(g) AS g, SUM(hr) AS hr, SUM(hw) AS hw, SUM(rr) AS rr, SUM(rw) AS rw
@@ -286,6 +429,30 @@ LEFT JOIN (SELECT copy, SUM(g) AS g, SUM(hr) AS hr, SUM(hw) AS hw, SUM(rr) AS rr
                         MAX(released_right) AS rr, MAX(released_wrong) AS rw
                  FROM sc_copies WHERE row_type = 'GUARD' GROUP BY 1, 2)
            GROUP BY 1) t USING (copy)
+GROUP BY k.copy
+UNION ALL
+-- C11 the hint's words carry the group it argued from (TWINS of the function's sentence openings):
+-- a WAIT held by a group minimum names each short group and its count; LOWER / RAISE / KEEP /
+-- NO_CLEAN_SIGNAL open with the group size, never the total
+SELECT k.copy, 'C11',
+       COUNTIF(h.copy IS NOT NULL AND h.recommendation = 'WAIT' AND h.graded_rows >= 20
+               AND h.rule_value IS NOT NULL AND h.rule_min_orders IS NOT NULL AND h.min_group_rows IS NOT NULL
+               AND (h.held_rows < h.min_group_rows OR h.band_rows < h.min_group_rows)
+               AND NOT COALESCE(STARTS_WITH(h.sentence, 'WAIT: ')
+                                AND (h.held_rows >= h.min_group_rows
+                                     OR STRPOS(h.sentence, FORMAT('%d held of the %d needed', h.held_rows, h.min_group_rows)) > 0)
+                                AND (h.band_rows >= h.min_group_rows
+                                     OR STRPOS(h.sentence, FORMAT('%d let through in the band of the %d needed', h.band_rows, h.min_group_rows)) > 0), FALSE))
+     + COUNTIF(h.recommendation = 'LOWER_STRONG_DAY_MULT'
+               AND NOT COALESCE(STARTS_WITH(h.sentence, FORMAT('THE LAST-DAY BAR LOOKS TOO HIGH from %d keyword-nights let through', h.band_rows)), FALSE))
+     + COUNTIF(h.recommendation = 'RAISE_STRONG_DAY_MULT'
+               AND NOT COALESCE(STARTS_WITH(h.sentence, FORMAT('THE LAST-DAY BAR LOOKS TOO LOW from %d keyword-nights held', h.held_rows)), FALSE))
+     + COUNTIF(h.recommendation = 'KEEP_STRONG_DAY_MULT'
+               AND NOT COALESCE(STARTS_WITH(h.sentence, FORMAT('THE LAST-DAY BAR HOLDS from %d held and %d let through in the band', h.held_rows, h.band_rows)), FALSE))
+     + COUNTIF(h.recommendation = 'NO_CLEAN_SIGNAL'
+               AND NOT COALESCE(STARTS_WITH(h.sentence, FORMAT('NO CLEAN SIGNAL from %d held and %d let through in the band', h.held_rows, h.band_rows)), FALSE))
+FROM copies k
+LEFT JOIN (SELECT * FROM sc_copies WHERE row_type = 'RULE_HINT') h USING (copy)
 GROUP BY k.copy
 UNION ALL
 -- C05 the nine plan_* checks exist, once each, and none is RED
@@ -296,23 +463,36 @@ FROM UNNEST(['LIVE', 'NC_C05D', 'NC_C05R']) AS k_copy
 LEFT JOIN board_copies b ON b.copy = k_copy
 GROUP BY k_copy
 UNION ALL
--- C10 the plan's last_day_strong agrees with the scorecard's rule_value on every P-14c row
-SELECT k_copy, 'C10',
-       COUNTIF(p.last_day_strong != (p.last_day_ord >= 1
-                                     AND COALESCE(p.last_day_ret, -1) >= p.family_bar * r.rule_value))
-     + IF(COUNT(p.copy) = 0, 1, 0)
-     + IF(MAX(r.rule_value) IS NULL, 1, 0)
-FROM UNNEST(['LIVE', 'NC_C10']) AS k_copy
-CROSS JOIN (SELECT MAX(rule_value) AS rule_value FROM sc_live WHERE row_type = 'RULE_HINT') r
-LEFT JOIN p14c_copies p ON p.copy = k_copy
-GROUP BY k_copy;
+-- C10 the rule is STORED on every P-14c row written after the columns existed, one rule per night,
+-- and the hint's rule_value / rule_min_orders are the latest night's (stored; for a night written
+-- before the columns existed, present); and the plan has written a night since the columns existed
+-- once two days have passed. Reads the stored columns; never re-derives last_day_strong.
+SELECT a.copy, 'C10',
+       a.n_unrecorded
+     + COALESCE(t.n_nights_two_rules, 0)
+     + IF(l.l_mult IS NOT NULL
+          AND NOT COALESCE(ABS(h.rule_value - l.l_mult) < 1e-9 AND h.rule_min_orders = l.l_min, FALSE), 1, 0)
+     + IF(l.l_mult IS NULL AND a.latest_night <= legacy_through
+          AND (h.rule_value IS NULL OR h.rule_min_orders IS NULL), 1, 0)
+     + IF(a.latest_night IS NULL, 1, 0)
+     + IF(h.copy IS NULL, 1, 0)
+     + IF(a.today_d >= DATE_ADD(legacy_through, INTERVAL 2 DAY) AND a.n_since_columns = 0, 1, 0)
+FROM c10_agg a
+LEFT JOIN c10_two t USING (copy)
+LEFT JOIN c10_latest l USING (copy)
+LEFT JOIN (SELECT * FROM sc_copies WHERE row_type = 'RULE_HINT') h ON h.copy = a.sc_copy;
 
 -- a (copy, check) absent from vlist means every grouped term had no input row: zero violations from
 -- those terms. Each check also carries a term driven from the explicit copy list, so an EMPTY copy
--- is still judged (C01, C02, C07, C08, C09, C05 and C10 read their copies from a list, not from data).
+-- is still judged (C01, C02, C07, C08, C09, C09T, C11, C05 and C10 read their copies from a list, not
+-- from data).
 CREATE TEMP TABLE v AS SELECT copy, chk, SUM(n) AS n FROM vlist GROUP BY 1, 2;
 WITH
 n_moved AS (SELECT COALESCE(MAX(graded_rows), 0) AS g FROM sc_moved WHERE row_type = 'RULE_HINT'),
+the_case AS (
+  SELECT MAX(graded_rows) AS g, MAX(held_rows) AS held, MAX(band_rows) AS band,
+         MAX(min_group_rows) AS mn, MAX(recommendation) AS rec, COUNT(*) AS n
+  FROM sc_case WHERE row_type = 'RULE_HINT'),
 live_counts AS (
   SELECT (SELECT n_fw FROM clocks WHERE clock = 'LIVE') AS n_fw,
          (SELECT COUNT(DISTINCT graded_night) FROM exp_fw WHERE clock = 'LIVE') AS n_nights,
@@ -356,19 +536,42 @@ checks AS (
                           (SELECT n_gradable FROM live_counts), (SELECT n_written FROM live_counts),
                           COALESCE((SELECT next_due FROM live_counts), 'n/a')),
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C08')
-  -- THE HINT SPEAKS TOO EARLY OR DISAGREES WITH ITS OWN ROWS: a threshold change argued from five
-  -- decisions, or a hint whose counts are not the GUARD rows Ori can read.
-  UNION ALL SELECT 'C09 one RULE_HINT row; WAIT iff fewer than 20 graded decisions; its counts equal the GUARD weeks\' totals',
-         (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C09')
-  -- THE THRESHOLD MOVED AND THE GRADE DID NOT: the hint grades the band below 1.5x while the plan
-  -- holds on a different multiple, and its advice is about a rule no longer in force.
-  UNION ALL SELECT 'C10 the plan\'s own last_day_strong agrees with the strong_day_mult the scorecard grades on (rule_value), on every P-14c row',
+  -- THE HINT ARGUES FROM A GROUP TOO SMALL TO SHOW A DIRECTION, OR DISAGREES WITH ITS OWN ROWS: it
+  -- says LOWER / RAISE / KEEP / NO_CLEAN_SIGNAL while the held group or the band has fewer graded rows
+  -- than the min_group_rows it publishes (or under 20 in all, or with no rule in force), or its counts
+  -- are not the GUARD rows Ori can read, or its groups do not fit inside them. It reads the minimum
+  -- from the row: what the minimum should be is Ori's ruling, not this check's.
+  UNION ALL SELECT 'C09 one RULE_HINT row; WAIT iff under 20 graded decisions in all, no rule in force, or either compared group under min_group_rows; its totals equal the GUARD weeks\' and its groups fit inside them',
+         (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk IN ('C09', 'C09T'))
+  -- A DECISION WITH NO RULE ON ITS ROW, A NIGHT WITH TWO RULES, OR A HINT ABOUT A RULE NOT IN FORCE:
+  -- the guard's grade compares decisions with a multiplier they were not made under, and a threshold
+  -- change argued from it is about the wrong rule. Also fires when two days pass after the columns
+  -- existed and the plan has written no night since (no rule is being recorded at all).
+  UNION ALL SELECT FORMAT('C10 every P-14c row written after %t stores its strong_day_mult and strong_day_min_orders, one rule per night, and the hint names the latest night\'s rule (today %s)',
+                          legacy_through,
+                          (SELECT FORMAT('%gx / %d order(s)', MAX(rule_value), MAX(rule_min_orders)) FROM sc_live WHERE row_type = 'RULE_HINT')),
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C10')
+  -- THE HINT'S WORDS HIDE THE GROUP IT ARGUED FROM: a WAIT that does not name the short group and its
+  -- count, or a verdict sentence that opens with the total graded instead of the group size, so Ori
+  -- reads "over 20 decisions" where the argument rests on one.
+  UNION ALL SELECT 'C11 the RULE_HINT sentence names each short group and its count on a group WAIT, and opens with the group size on LOWER / RAISE / KEEP / NO_CLEAN_SIGNAL',
+         (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C11')
+  -- THE REVIEW'S CASE COMES BACK: at the 2026-10-03 clock 20 graded decisions held 0 holds and 1 band
+  -- row and the old hint said KEEP from them. The function itself must WAIT there and name both groups.
+  UNION ALL SELECT FORMAT('C12 REAL CASE: FN_PLAN_SCORECARD at %t (%d graded, %d held, %d in the band, minimum %d each) reads %s, and C01-C04, C06-C09, C11 hold on it (fires if the case no longer has 20 graded and a short group)',
+                          d_case, (SELECT g FROM the_case), (SELECT held FROM the_case), (SELECT band FROM the_case),
+                          (SELECT mn FROM the_case), (SELECT rec FROM the_case)),
+         (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'CASE' AND chk IN ('C01', 'C02', 'C03', 'C04', 'C06', 'C07', 'C08', 'C09', 'C09T', 'C11'))
+       + IF((SELECT n FROM the_case) != 1, 1, 0)
+       + IF(COALESCE((SELECT g FROM the_case), 0) < 20, 1, 0)
+       + IF(COALESCE((SELECT LEAST(held, band) >= mn FROM the_case), TRUE), 1, 0)
+       + IF(COALESCE((SELECT rec FROM the_case), '') != 'WAIT', 1, 0)
   -- THE SUITE IS GREEN ONLY BECAUSE TODAY IS EMPTY: with real guard decisions to grade, a check fails.
-  UNION ALL SELECT FORMAT('CM POSITIVE CONTROL C01-C04 and C06-C09 hold on FN_PLAN_SCORECARD with the clock moved 30 days forward, on %d real guard decisions (fires if there are none)',
+  UNION ALL SELECT FORMAT('CM POSITIVE CONTROL C01-C04, C06-C11 hold on FN_PLAN_SCORECARD with the clock moved 30 days forward, on %d real guard decisions (fires if there are none)',
                           (SELECT g FROM n_moved)),
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C01') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C02') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C03') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C04')
-       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C06') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C07') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C08') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C09')
+       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C06') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C07') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk = 'C08') + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk IN ('C09', 'C09T'))
+       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'MOVED' AND chk IN ('C10', 'C11'))
        + IF((SELECT g FROM n_moved) = 0, 1, 0)
   -- the negative controls: each doctored copy must FIRE its check (0 = it fired)
   UNION ALL SELECT 'C01a NEGATIVE CONTROL C01 FIRES: a GRADE row with no calendar state', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C01' AND chk = 'C01') >= 1, 0, 1)
@@ -390,7 +593,15 @@ checks AS (
   UNION ALL SELECT 'C08b NEGATIVE CONTROL C08 FIRES: grades present that today\'s clock cannot have', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C08G' AND chk = 'C08') >= 1, 0, 1)
   UNION ALL SELECT 'C09a NEGATIVE CONTROL C09 FIRES: the hint leaves WAIT below 20', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09' AND chk = 'C09') >= 1, 0, 1)
   UNION ALL SELECT 'C09b NEGATIVE CONTROL C09 FIRES: the hint row doubled', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09D' AND chk = 'C09') >= 1, 0, 1)
-  UNION ALL SELECT 'C10a NEGATIVE CONTROL C10 FIRES: one P-14c row\'s last_day_strong flipped', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C10' AND chk = 'C10') >= 1, 0, 1)
+  UNION ALL SELECT 'C09c NEGATIVE CONTROL C09 FIRES: 117 graded, 12 held, ONE band row, reading KEEP (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09B' AND chk = 'C09') >= 1, 0, 1)
+  UNION ALL SELECT 'C09d NEGATIVE CONTROL C09 FIRES: 117 graded, ONE held, 12 band rows, reading KEEP (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09H' AND chk = 'C09') >= 1, 0, 1)
+  UNION ALL SELECT 'C09e NEGATIVE CONTROL C09 FIRES: a held group one larger than the graded holds (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09G' AND chk = 'C09T') >= 1, 0, 1)
+  UNION ALL SELECT 'C10a NEGATIVE CONTROL C10 FIRES: a night after the columns existed with no rule on its rows', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C10N' AND chk = 'C10') >= 1, 0, 1)
+  UNION ALL SELECT 'C10b NEGATIVE CONTROL C10 FIRES: a night carrying two rules', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C10M' AND chk = 'C10') >= 1, 0, 1)
+  UNION ALL SELECT 'C10c NEGATIVE CONTROL C10 FIRES: a latest night whose stored rule is not the hint\'s rule_value', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C10V' AND chk = 'C10') >= 1, 0, 1)
+  UNION ALL SELECT 'C10d NEGATIVE CONTROL C10 FIRES: two days after the columns existed, no night written since', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C10E' AND chk = 'C10') >= 1, 0, 1)
+  UNION ALL SELECT 'C11a NEGATIVE CONTROL C11 FIRES: a group WAIT that names neither short group (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C11W' AND chk = 'C11') >= 1, 0, 1)
+  UNION ALL SELECT 'C11b NEGATIVE CONTROL C11 FIRES: a KEEP that opens with the total graded, the old sentence (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C11K' AND chk = 'C11') >= 1, 0, 1)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks

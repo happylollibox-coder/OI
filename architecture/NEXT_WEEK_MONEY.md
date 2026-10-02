@@ -607,6 +607,18 @@ rows failed forever. Nothing on Amazon moved — bids go up by bulksheet — but
 `held_with_no_sale` is FALSE by construction from v27.147 (no order in the window ⇒ no very good
 last day); the column stays for the scorecard and this page's history.
 
+**Every row records the rule it was judged under (v27.154 follow-up, 2026-10-01).** The judge
+publishes its two `k` settings, `strong_day_mult` and `strong_day_min_orders`, on every row, and the
+builder copies them into `FACT_PLAN_NEXT_WEEK` (migration
+`scripts/bigquery/migrations/2026-10-01_plan_strong_day_rule_columns.sql`; the builder's assertions
+are unchanged). Why: the scorecard grades each hold and release against the multiplier that decision
+was made under. A threshold change is exactly what the scorecard's hint exists to propose, and a
+grade that compared old decisions with today's constant would grade them against a rule that was
+not in force. Rows written before the columns existed (the 2026-09-28 … 10-01 partitions) are not
+updated; the scorecard reads them as 1.5 and 1, the values the judge's `k` CTE has carried since
+v27.147 (commit 41d2318: `git log -S` on either `k` line lists that commit alone, and the deployed
+view's definition read 1.5 / 1 on 2026-10-01).
+
 ### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK (answered by P-14c above; kept as the record)
 
 P-14b says a keyword that was good is not demoted **until its window has settled**. Under a rolling
@@ -1272,8 +1284,9 @@ twin cannot drift. The measured results of the first run are in the file's heade
 
 **What this half does not do.** It does not grade the plan (`V_PLAN_SCORECARD`), does not record
 the rule settings' history (the 1.5× `strong_day_mult` and the 1-order `strong_day_min_orders` in
-the judgement view's `k` CTE are still literals), and does not re-run a failed step — nothing
-does; the line says so.
+the judgement view's `k` CTE are still literals; since the v27.154 follow-up each plan row carries
+the values it was judged under, see §2 "The last-day test"), and does not re-run a failed step —
+nothing does; the line says so.
 
 ### Grading (Task 5's first half, v27.154, 2026-10-01)
 
@@ -1359,16 +1372,33 @@ distinct ones beside them.
 
 **The hint on the 1.5×.** Below **20** graded decisions the RULE_HINT row says `WAIT` and why — with
 nothing old enough to grade it says how many decisions have been written and the date the first one
-settles. From 20 on it reads two populations: keywords **released** by the last-day test whose last
-day sat between 1.0× and 1.5× the bar (the ones a lower threshold would have held), and keywords
-**held**. If released-wrong is more than half of the first, the threshold looks too high
-(`LOWER_STRONG_DAY_MULT`); if held-wrong is more than half of the second, too low
-(`RAISE_STRONG_DAY_MULT`); both at once is `NO_CLEAN_SIGNAL`; neither is `KEEP_STRONG_DAY_MULT`. The
-row carries the counts and the dollars in words. It is a hint: the threshold lives in
-`V_PLAN_WINDOW_JUDGMENT`'s `k` CTE and nothing here changes it. The scorecard mirrors the 1.5× in its
-own `k` CTE and publishes the value it graded on as `rule_value`; acceptance C10 recomputes the plan's
-own `last_day_strong` from it (with the judge's one-order minimum) on every row written under P-14c
-and goes red the moment the two part.
+settles. The hint is about **the rule in force**: the `strong_day_mult` and `strong_day_min_orders`
+the live plan's latest partition was judged under, read from the plan rows (`rule_value`,
+`rule_min_orders`). It reads only decisions made under that rule, in two groups: keywords **held**,
+and keywords **released** by the last-day test whose last day sat between 1.0× the bar and that
+decision's own multiplier (the ones a lower threshold would have held). Graded decisions made under
+a different or unrecorded rule stay in the GUARD rows and are counted on the hint row as
+`other_rule_rows`.
+
+**Each group needs at least 10 graded decisions** (`min_group_rows`, declared in the function's
+`k` CTE; **Ori rules on the number**) before the hint says anything but `WAIT`. 20 in total is not
+enough: on the real history 108 of the first 117 decisions are releases, 9 are holds and 4 sit in
+the band, and the review of v27.154 measured the total-only gate saying KEEP at the 2026-10-03 clock
+from 0 holds and 1 band row, and RAISE at 10-05 from 2 holds. Why 10: a group whose true wrong-rate is 30% reads "more
+than half wrong" by chance less than one time in twenty only from 10 rows up (binomial, computed
+2026-10-01: 4.7% at 10, 9.9% at 9, 5.8% at 8). Below the minimum the row says `WAIT`, names the
+group that is too small and its count. From the minimum on: if released-wrong is more than half of
+the band, the threshold looks too high (`LOWER_STRONG_DAY_MULT`); if held-wrong is more than half of
+the held, too low (`RAISE_STRONG_DAY_MULT`); both at once is `NO_CLEAN_SIGNAL`; neither is
+`KEEP_STRONG_DAY_MULT`. Each sentence leads with the size of the group it argued from, then the
+counts and the dollars. On the history to 2026-10-01 no clock reaches 10 holds or 10 band rows, so
+every reading is `WAIT` today; the four non-WAIT verdicts have come out of the function only on
+doctored copies of the plan table (`scripts/bigquery/tests/check_plan_scorecard_hint_branches.py`;
+the acceptance's header records the run). It is a hint: the threshold lives in
+`V_PLAN_WINDOW_JUDGMENT`'s `k` CTE and nothing here changes it. The scorecard keeps no copy of it:
+it reads the value stored on each plan row, and acceptance C10 checks every row written after the
+columns existed carries one, that a night carries one rule, and that `rule_value` is the latest
+night's.
 
 **Read it.**
 
@@ -1405,7 +1435,14 @@ cd /Users/ori/Develop/OI
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/functions/FN_PLAN_SCORECARD.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_SCORECARD.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql)"
+# the hint's branches, run on doctored copies of the plan table (exit 0 = every branch as expected)
+python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py
 ```
+
+The rule columns ship before the judge and the builder that fill them, in this order:
+`scripts/bigquery/migrations/2026-10-01_plan_strong_day_rule_columns.sql`, then
+`V_PLAN_WINDOW_JUDGMENT.sql`, then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the builder's temp table copies the
+plan table's schema, so it needs the columns first, and it reads the two new columns from the judge).
 
 It is a view over a function, not a table: the FACT_AMAZON_ADS reads are clustered joins on a
 handful of plan nights, so nothing is materialised and nothing is added to the orchestrator. The

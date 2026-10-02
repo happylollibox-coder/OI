@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   last_day_ret               FLOAT64,
   last_day_strong            BOOL,
   guard_released_by          STRING,
+  -- v27.154 follow-up: the P-14c rule the row was judged under (NULL on rows written before the
+  -- columns existed)
+  strong_day_mult            FLOAT64,
+  strong_day_min_orders      INT64,
   rank_no                    INT64,
   seat_no                    INT64,
   seat_cost_per_day          FLOAT64,
@@ -209,3 +213,12 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_ret FLOAT64;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS last_day_strong BOOL;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS guard_released_by STRING;
+
+-- v27.154 follow-up (2026-10-01) — THE RULE EACH ROW WAS JUDGED UNDER. Shipped as
+-- scripts/bigquery/migrations/2026-10-01_plan_strong_day_rule_columns.sql; mirrored here. The
+-- judge's P-14c settings (strong_day_mult, strong_day_min_orders in its k CTE), as published on the
+-- row and copied by the builder, so FN_PLAN_SCORECARD grades each hold and release against the
+-- multiplier that decision was made under and never against today's. NULL on the partitions
+-- written before the columns existed (2026-09-28 .. 10-01); no existing row is updated.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS strong_day_mult FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS strong_day_min_orders INT64;
