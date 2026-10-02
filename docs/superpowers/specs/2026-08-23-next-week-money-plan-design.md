@@ -137,15 +137,16 @@ ad dollar. The 4 whose last day cleared 1.5× were released `HOLD_EXPIRED`, beca
 branch requires the clock not to have run out and theirs were stale August clocks (`hold_since`
 08-23 … 08-27): 126642648801972 at 1.90×, 550546483027580 at 1.93×, 501583535164529 at 11.71× and
 415778898681618 at 22.19× the bar. ("17.5" was that last row's return per ad dollar, 17.54, not a
-multiple of the bar; no row reads 1.86×.) Another 10 `LAST_DAY_NOT_STRONG` releases had a clock still
-running, so the night released 54 in all (4 `HOLD_EXPIRED`, 50 `LAST_DAY_NOT_STRONG`). The four rows
+multiple of the bar; no row reads 1.86×.) Another 10 were released `LAST_DAY_NOT_STRONG` on the first
+night of what would have been a hold (no hold run: `hold_since` and `hold_settles_on` NULL, so
+`hold_expired` is FALSE), so the night released 54 in all (4 `HOLD_EXPIRED`, 50 `LAST_DAY_NOT_STRONG`). The four rows
 actually **held** were first-night holds (`hold_since` NULL — code fix #16 publishes the clock on night
 one) at 1.51×–1.65× on windows that already met the order floor (`held_despite_evidence`):
 472871506551769, 327098771639576, 523536098863060, 417024311542687.
 
 ```sql
 SELECT family, CAST(keyword_id AS STRING) AS keyword_id, target_text, verdict, guard_released_by,
-       hold_expired, hold_since, last_day_ord, ROUND(last_day_ret, 4) AS last_day_ret,
+       hold_expired, hold_since, hold_settles_on, last_day_ord, ROUND(last_day_ret, 4) AS last_day_ret,
        ROUND(last_day_ret / family_bar, 4) AS last_day_x_bar, w_ord, ROUND(ret_corrected, 4) AS ret_corrected
 FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
 WHERE as_of = '2026-09-28' AND is_live_plan
