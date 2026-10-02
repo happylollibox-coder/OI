@@ -6,6 +6,19 @@
 //
 // Every verdict, reason sentence, remedy and remedy value is decided in the VIEW. The dashboard
 // panel only displays them — do not add thresholds or derived verdicts here.
+//
+// READER: dashboard-react/src/pages/ChangeScorecardPanel.tsx — the Weekly Run panel "How did last
+// week's changes do?", the page where Ori starts changes.
+//
+// HAND CHANGES ARE HELD OUT (2026-10-01, learning-system Task B). Since that day the view also
+// grades source = 'OBSERVED': changes seen on Amazon through the DIM SCD2 trail that OI never
+// logged, which are mostly Ori's own edits in the console. The morning brief keeps them off its
+// list, restores included, until Ori decides they belong there (V_DAILY_BRIEF, two
+// `source != 'OBSERVED'` filters); this cube does the same with the WHERE below, so the panel no
+// longer lists hand changes as REVERSED with a value to restore. The view still grades them. Lifting this filter is Ori's decision, and it would also put restores of hand changes in
+// the panel's REVERSED "restore" column — decide both together.
+// Check: scripts/bigquery/tests/check_change_scorecard_cube.py (evaluates this file in node, runs
+// its SQL in BigQuery, and runs an unfiltered copy of it as the negative control).
 cube(`ChangeScorecard`, {
   sql: `SELECT change_id, CAST(change_date AS STRING) change_date, source, action, action_group,
                scope_grain, channel, campaign_id, campaign_name, family,
@@ -17,18 +30,23 @@ cube(`ChangeScorecard`, {
                prior_clicks, prior_spend, prior_gp_roas, prior_available,
                superseded_in_window, n_later_changes,
                verdict, verdict_reason, remedy, remedy_value
-        FROM \`onyga-482313.OI.V_CHANGE_SCORECARD\``,
+        FROM \`onyga-482313.OI.V_CHANGE_SCORECARD\`
+        WHERE source != 'OBSERVED'`,
 
   // LIVE-VIEW cube (same convention as KeywordLift / OobBudget / PausedHistory): the view's read
   // gate advances with CURRENT_DATE and the underlying FACT restates daily, while view fixes don't
   // move the orchestration stamp — a 15-min TTL bounds staleness.
+  // COST: each read runs the whole scorecard, which since 2026-10-01 reads
+  // V_PPC_CHANGE_LOG_LANDED and costs about half again what it did. The WHERE above does not make
+  // it cheaper: this SQL read the same bytes with and without it. Measurements in the run log of
+  // scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql (2026-10-01 entries).
   refreshKey: { every: '15 minutes' },
   measures: { count: { type: `count` } },
 
   dimensions: {
     changeId:      { sql: `change_id`,      type: `string`, primaryKey: true },
     changeDate:    { sql: `change_date`,    type: `string` },
-    source:        { sql: `source`,         type: `string` },   // 'COACH' | 'MANUAL'
+    source:        { sql: `source`,         type: `string` },   // 'COACH' | 'MANUAL' on 2026-10-01; 'OBSERVED' held out by the WHERE above; the weekly book's 'BRAIN:*' / 'CATALOG:*' / 'PACING:*' log rows had not reached the view that day
     action:        { sql: `action`,         type: `string` },
     actionGroup:   { sql: `action_group`,   type: `string` },   // BID_UP | BID_DOWN | BUDGET_* | NEGATE | ...
     scopeGrain:    { sql: `scope_grain`,    type: `string` },   // TARGET | CAMPAIGN | TERM
@@ -67,3 +85,4 @@ cube(`ChangeScorecard`, {
 });
 
 // cache-bust 2026-08-12: new cube — settled change scorecard on Weekly Run
+// cache-bust 2026-10-01: OBSERVED rows (hand changes seen on Amazon) held out of the panel until Ori decides

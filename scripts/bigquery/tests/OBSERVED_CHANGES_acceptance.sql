@@ -8,6 +8,9 @@
 --          scripts/bigquery/views/V_PPC_CHANGE_LOG_LANDED.sql (the grader's source),
 --          scripts/bigquery/views/V_CHANGE_SCORECARD.sql (grades the observed rows too),
 --          V_DAILY_BRIEF / V_ENGINE_HEALTH / V_THRESHOLD_TUNER (read the scorecard without them).
+-- The fourth reader of the scorecard, Cube ChangeScorecard (cube/schema/ChangeScorecard.js, the
+-- Weekly Run panel), is a JavaScript file no query can read; its filter is checked by
+-- scripts/bigquery/tests/check_change_scorecard_cube.py, not here.
 -- SOP: architecture/PPC_CLOSE_THE_LOOP.md §Observed changes.
 --
 -- WHAT THIS FILE PROVES. (1) The ledger is complete and idempotent: everything the SCD trail
@@ -82,6 +85,24 @@
 --     / 1,698 — about half again, for 145 more graded changes. The brief, which embeds the
 --     scorecard, measured 1,511 / 3,992 / 3,605 on the old scorecard and 1,520 / 2,631 / 2,380 on
 --     the new one: no increase beyond run-to-run noise.
+--
+-- RUN 2026-10-01 17:36-17:45 LA (2026-10-02 00:36-00:45 UTC), the Weekly Run panel follow-up.
+--   Cube ChangeScorecard read V_CHANGE_SCORECARD with no source filter, so the panel showed the
+--   145 graded OBSERVED rows, 60 of them REVERSED (52 with a value to put back). It now reads
+--   WHERE source != 'OBSERVED', as the brief does. No BigQuery object changed; this file's
+--   executable lines did not change, so it was not re-run for this entry.
+--   COST OF THE CUBE: it reads the scorecard live with a 15-minute cache (refreshKey every 15
+--   minutes), so every read it makes pays the scorecard's higher cost since the ledger (about half
+--   again, the five-run comparison above). The cube's own SQL, run with bq, two runs each,
+--   alternating: as it stood before the filter 1,687 / 808 slot-seconds, with the filter 739 / 980;
+--   55,794,195 bytes processed both ways, so the filter does not make it cheaper. Jobs whose SQL
+--   names the view in INFORMATION_SCHEMA.JOBS_BY_PROJECT, 30 days to 2026-10-02 00:31 UTC: the
+--   only Cube-generated ones (change_scorecard__* aliases) are two at 2026-10-02 00:24 UTC under
+--   Ori's account, 1,029 and 783 slot-seconds; no service-account job named the view.
+--   check_change_scorecard_cube.py: PASS on the fixed cube file, twice (1,828 rows, 0 OBSERVED;
+--   the unfiltered copy 1,973 rows, 145 OBSERVED), 1,304 and 2,823 slot-seconds; FAIL on each of
+--   three doctored temp copies (no filter, a COACH-only filter, an empty result), as its own run
+--   log records.
 -- =============================================================================================
 
 -- ---- inputs, each read ONCE -------------------------------------------------------------------

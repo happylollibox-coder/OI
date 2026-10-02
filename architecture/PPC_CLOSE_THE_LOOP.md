@@ -130,7 +130,8 @@ DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
                     └─> V_PPC_CHANGE_LOG_LANDED    APPLIED + observed rows, a confirmed pair counted once
                           └─> V_CHANGE_SCORECARD   grades them with the same logic; split by `source`
                                 ├─X V_DAILY_BRIEF / V_THRESHOLD_TUNER / V_ENGINE_HEALTH  (source != 'OBSERVED')
-                                └─> Cube ChangeScorecard (carries `source`)
+                                └─X Cube ChangeScorecard  (source != 'OBSERVED' in its sql; live, 15-min cache)
+                                      └─> Weekly Run panel "How did last week's changes do?"
 ```
 
 - **Ledger scope**: effective_from after 2026-08-20 (declared in the view's `in_ledger_scope`).
@@ -151,15 +152,20 @@ DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
 - **Why the engines do not read them (yet)**: a hand cut to the floor would start the keyword
   state machine's probation clock, a hand change would count as the keyword's last change for the
   coach's cooldown, the seat register's last applied bid would move. That may be right, but it is Ori's decision, not a side effect of recording.
-  Same for the morning brief (restores of hand changes), the board's reversed share and the
-  threshold tuner. To turn any of them on, drop its `source != 'OBSERVED'` filter (or, for the
-  engines, the `OBSERVED_ON_AMAZON` exclusion in `V_PPC_CHANGE_LOG_APPLIED`).
+  Same for the morning brief (restores of hand changes), the board's reversed share, the
+  threshold tuner and the Weekly Run scorecard panel (Cube `ChangeScorecard`; on 2026-10-01,
+  before its filter, it showed 60 graded hand changes as REVERSED, 52 of them with a value to
+  put back). To turn any of them on, drop its `source != 'OBSERVED'` filter (or, for the engines,
+  the `OBSERVED_ON_AMAZON` exclusion in `V_PPC_CHANGE_LOG_APPLIED`). Dropping the cube's filter
+  also puts restores of hand changes in the panel's REVERSED "restore" column.
 - **Grain caveat**: observed KEYWORD_PAUSE / KEYWORD_ENABLE / CAMPAIGN_PAUSE land in the
   scorecard's `OTHER` group (campaign grain, not decision-grade), as the logged pauses always have.
 - **Acceptance**: `scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql` — completeness and
   idempotence, no first version, every row a real DIM version pair, the 2026-08-26 ME-SP/AUTO
   close-match raise, APPLIED unchanged, LANDED counts each change once, the downstream filters —
-  each with a negative control.
+  each with a negative control. The cube is a JavaScript file no query can read, so its filter
+  has its own check: `scripts/bigquery/tests/check_change_scorecard_cube.py` (evaluates the file
+  in node, runs its SQL, and runs an unfiltered copy as the negative control).
 
 ## V_PPC_ACTION_OUTCOMES
 
@@ -439,7 +445,7 @@ The settled half needed its own surface, on the page where the changes are actua
 
 | piece | where |
 |---|---|
-| cube | `cube/schema/ChangeScorecard.js` over `V_CHANGE_SCORECARD` (live read, 15-min TTL — the `KeywordLift` / `OobBudget` / `PausedHistory` convention) |
+| cube | `cube/schema/ChangeScorecard.js` over `V_CHANGE_SCORECARD` (live read, 15-min TTL — the `KeywordLift` / `OobBudget` / `PausedHistory` convention). Since 2026-10-01 it reads `WHERE source != 'OBSERVED'` (§Observed changes) |
 | panel | `dashboard-react/src/pages/ChangeScorecardPanel.tsx`, mounted as its own top-level section on **Weekly Run**, above the total-budget panel — the retrospective frames the run |
 
 The panel is titled **"How did last week's changes do?"**, collapsed by default with the verdict
@@ -484,6 +490,7 @@ so Weekly Run always renders.
 | 2026-08-12 | **`V_CHANGE_SCORECARD`** — the settled OUTCOME half of Ori's "1 day for opportunity, 7 days for outcome" doctrine, finally built. Graded `[T+1,T+7]` (SB `[T+1,T+14]`) read no earlier than T+14 (SB T+21), against the entity's own settled `[T-28,T-1]` record. Verdicts CONFIRMED / NEUTRAL / REVERSED / INSUFFICIENT; REVERSED restores the pre-change value and never goes lower. Tier-COGS GP-ROAS, same currency as the revival bar. |
 | 2026-08-12 | **Weekly Run surfaces**: `ChangeScorecard` cube + "How did last week's changes do?" panel (this doc, §Cube + Dashboard), and `ParkReverdict` cube + Revivals panel (`SEASON_CONTEXT_LEDGER.md` §7.11). Both display-only, both on the page where Ori initiates changes. Not deployed — needs a cube restart + cache stamp. |
 | 2026-10-01 | **Observed changes** (learning-system Task B): `SP_RECORD_OBSERVED_CHANGES` (Refresh Task 2.2a) writes every change the DIM SCD2 trail shows since 2026-08-20 into the log as `source='OBSERVED'`, `upload_status='OBSERVED_ON_AMAZON'`; `V_PPC_CHANGE_LOG_APPLIED` excludes them; `V_PPC_CHANGE_LOG_LANDED` feeds them to `V_CHANGE_SCORECARD`; the brief, tuner and board filter them out until Ori decides. See §Observed changes. |
+| 2026-10-01 | **Weekly Run panel holds hand changes out too** (Task B follow-up): Cube `ChangeScorecard` reads `V_CHANGE_SCORECARD` with `WHERE source != 'OBSERVED'`, the brief's decision, so the panel no longer lists hand changes under "restore". Not live until the cube is restarted / redeployed. File check `scripts/bigquery/tests/check_change_scorecard_cube.py`. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |
 
 

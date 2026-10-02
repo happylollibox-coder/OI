@@ -68,6 +68,9 @@ const REMEDY_LABEL: Record<string, string> = {
 // Who made the change — copy + colour for the view's `source`. Colour marks a change a person made
 // (MANUAL logged on the DO page, OBSERVED seen on Amazon only); OI-built rows (the coach, the weekly
 // book's tiers, tagged '<TIER>:<book source>') stay faint. Labels only — the view does the split.
+// OBSERVED rows do not reach this panel today: cube/schema/ChangeScorecard.js reads the view with
+// source != 'OBSERVED', as the morning brief does, until Ori decides graded hand changes belong
+// here (architecture/PPC_CLOSE_THE_LOOP.md §Observed changes). The OBSERVED label is for that day.
 const BOOK_TIER_TITLE: Record<string, string> = {
   CATALOG: "the weekly book's Catalog tier decided it — whether this is worth having (pause, negate, park)",
   BRAIN: "the weekly book's Brain tier decided it — where the money goes (budgets, seat moves)",
@@ -305,6 +308,8 @@ export function ChangeScorecardPanel() {
             Advisory only — nothing here is queued or uploaded. Source: V_CHANGE_SCORECARD (backend).
             Changes younger than their read gate (T+14, SB T+21) are deliberately absent: grading before
             the sales settle under-reads your own change and makes you reverse winners.
+            Changes seen on Amazon that OI never logged (usually ones you made by hand in the console) are
+            graded too, but they are not listed here or in the morning brief until you decide they should be.
           </div>
         </div>
       )}

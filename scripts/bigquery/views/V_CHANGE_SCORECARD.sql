@@ -150,8 +150,13 @@
 -- decision-grade) exactly as the logged pauses always have.
 -- DOWNSTREAM: V_DAILY_BRIEF, V_THRESHOLD_TUNER and V_ENGINE_HEALTH read this view WITHOUT the
 -- observed rows (source != 'OBSERVED' in each) so the morning brief, the threshold proposals and
--- the health board read what they read before the ledger existed. Letting graded hand changes
--- into them is Ori's decision. V_MANUAL_DIVERGENCE reads source = 'MANUAL' only.
+-- the health board read what they read before the ledger existed. So does Cube ChangeScorecard
+-- (cube/schema/ChangeScorecard.js, a live read with a 15-minute cache), which feeds the Weekly
+-- Run panel "How did last week's changes do?" (dashboard-react/src/pages/ChangeScorecardPanel.tsx):
+-- without its filter that panel listed hand changes as REVERSED with a value to restore.
+-- Letting graded hand changes into any of them is Ori's decision. V_MANUAL_DIVERGENCE reads
+-- source = 'MANUAL' only. Checks: OBSERVED_CHANGES_acceptance.sql C09 (the three views),
+-- check_change_scorecard_cube.py (the cube).
 --
 -- DETERMINISM: plain SUMs over fixed date windows; no ANY_VALUE pairs (v27.46 lesson — never divide
 -- two ANY_VALUEs out of one GROUP BY); the dedup QUALIFY is fully tie-broken on (applied_at,
