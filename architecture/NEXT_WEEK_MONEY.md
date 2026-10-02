@@ -125,8 +125,9 @@ shape**: it goes red the moment an active `plan_seed` row's settings stop matchi
 in-place edit now *survives*, but it leaves the row wearing the seed's label, so C09 asks you to
 convert it with the retire-then-insert recipe above. That recipe remains the supported one.
 
-Whether 0.50 is the right BOOST share is an open learning question — `V_PLAN_SCORECARD` and the
-backtest answer it per state on evidence, and until they do the seed stands.
+Whether 0.50 is the right BOOST share is an open learning question — the backtest (plan Task 6)
+answers it per state on evidence, and until it does the seed stands. `V_PLAN_SCORECARD` (§6) grades
+plan A against plan B and the last-day test; it does not grade the share.
 
 ### The other authority on `window_days`, and which one wins
 
@@ -1215,7 +1216,7 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
 
 ## 5. The plan book (Task 4) — to be written
 
-## 6. Grading, health and the surfaces (Tasks 5–7) — health built v27.152; grading and the surfaces to be written
+## 6. Grading, health and the surfaces (Tasks 5–7) — health built v27.152; grading built v27.154; the surfaces to be written
 
 ### Health (Task 5's second half, v27.152, 2026-10-01)
 
@@ -1274,4 +1275,145 @@ the rule settings' history (the 1.5× `strong_day_mult` and the 1-order `strong_
 the judgement view's `k` CTE are still literals), and does not re-run a failed step — nothing
 does; the line says so.
 
-### Grading (Task 5's first half) and the surfaces (Tasks 6–7) — to be written
+### Grading (Task 5's first half, v27.154, 2026-10-01)
+
+**What it answers.** Two questions, both read from what the plan WROTE that night and never from the
+judgement view (which re-anchors the moment the ads watermark moves):
+
+1. **Which plan puts its dollars where the money turned out to be?** Plans A and B are written every
+   night on the same keywords; nobody compared them until now.
+2. **Is the 1.5× last-day test (P-14c) holding the right keywords?** Every hold and every release is
+   graded once the window it judged has settled.
+
+| object | file | what it is |
+|---|---|---|
+| `FN_PLAN_SCORECARD(grade_date DATE)` | `scripts/bigquery/functions/FN_PLAN_SCORECARD.sql` | the grade, as a table function so the acceptance can run the SAME arithmetic with the clock moved forward (the guard has nothing old enough to grade until 2026-10-03) |
+| `V_PLAN_SCORECARD` | `scripts/bigquery/views/V_PLAN_SCORECARD.sql` | the function at today's Los Angeles date — the one to read |
+| acceptance | `scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql` | every row must read `PASS` |
+
+**Five row types.**
+
+| row_type | grain | what it says |
+|---|---|---|
+| `GRADE` | plan × family × calendar state, pooled over the graded nights | the dollars each plan allocated, what the keywords netted in the days that followed, and **net per allocated dollar** |
+| `RECOMMENDATION` | family × calendar state | the declared rule applied: `WAIT`, `KEEP_<live>` or `SWITCH_TO_<shadow>`, with a sentence |
+| `FAMILY_WEEK` | family × graded night | A and B side by side for one week, so the trajectory is visible and not only the pooled grade |
+| `GUARD` | week × outcome class (always all four classes for a week that has a graded decision) | held right / held wrong / released right / released wrong — counts, settled spend and net, and the last day's return (raw and as a multiple of the bar) at p25/p50/p75 |
+| `RULE_HINT` | exactly one row | what the GUARD grades say about the 1.5× threshold, or `WAIT` with the reason |
+
+**How a plan is graded.** One plan night per Sunday-start week (the house week) is graded: the latest
+night in that week that is at least 14 days old, the longer attribution window. For every keyword in
+that night's plan, the allocation is `planned_spend_per_day × window_days`, and the outcome is what
+the keyword netted (`GROSS_PROFIT − Ads_cost` in `FACT_AMAZON_ADS`, read today) over the
+`window_days` days starting on the plan night. **How settled that is:** the 14-day rule is on the
+plan night, so with a 7-day window the last day read is 8 days old at the earliest grade — past SP's
+7-day attribution window, inside SB's 14 — and the newest graded week can still move a little as SB
+orders land (the guard grade below waits for each window's own settle date instead). A plan's score is
+
+```
+net per allocated dollar = Σ allocation_k × (net_k / spend_k)  /  Σ allocation_k
+```
+
+— each allocated dollar is credited with what one ad dollar on that keyword actually netted in the
+days that followed (zero where the keyword spent nothing; those dollars are published as
+`allocated_unrealized_dollars`). A plan that puts more of its dollars on keywords that went on to make
+money scores higher. It assumes a dollar placed on a keyword earns what that keyword's dollars
+actually earned; the effect of the plan's own price change is not modelled (that is the learning
+contract's response model, piece 2), and neither plan has been uploaded yet, so this grades where
+each plan WOULD have put the money.
+
+**Why this is not the plan draft's formula.** The draft divided the keywords' total realized net by
+the plan's total allocation. Plans A and B are written on the **same keywords** every night, so that
+numerator is identical for both plans and the draft's comparison reduced to which plan allocated
+fewer dollars — the larger plan "won" whenever the family lost money and lost whenever it made money,
+whatever it did with the dollars. `realized_net` is still published on every GRADE row (it is the
+same for A and B by construction); check the identical-keyword premise any time:
+
+```sql
+SELECT a.as_of, COUNT(*) AS keyword_pairs,
+       COUNTIF(b.keyword_id IS NULL) AS a_only, COUNTIF(a.keyword_id IS NULL) AS b_only
+FROM (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'A') a
+FULL OUTER JOIN (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B') b
+  ON a.as_of = b.as_of AND a.campaign_id = b.campaign_id AND a.keyword_id = b.keyword_id
+GROUP BY 1 ORDER BY 1;
+```
+
+**The decision rule (P-9), declared in the function's `k` CTE.** With at least **3** graded weeks in
+a calendar state, if the shadow plan's net per allocated dollar beats the live plan's by at least
+**10% of the live plan's magnitude**, the row says `SWITCH_TO_<shadow>`; otherwise `KEEP_<live>`.
+The draft wrote the margin as `shadow ≥ live × 1.10`, which is right only while the live score is
+positive: at −0.50 it would switch to a shadow scoring −0.54, a worse plan. The live plan is read
+from the graded rows' `is_live_plan`, not assumed to be B. **Ori flips `DE_PLAN_CONFIG.live_plan`;
+the code never switches itself.**
+
+**How the guard is graded (P-14b / P-14c).** Every live-plan row written under the last-day test
+(it carries `last_day_strong`) that the judge HELD (`verdict = 'HELD_UNSETTLED'`) or LET THROUGH
+(`guard_released_by` is `LAST_DAY_NOT_STRONG` or `HOLD_EXPIRED`) is graded once its own
+`settle_due_on` has passed — 7 complete days after the window for SP, 14 for SB. The grade re-reads
+**the same window** (`window_from … window_to`) from `FACT_AMAZON_ADS` today: settled good = at least
+the order floor in force when the plan was built (`DE_PLAN_CONFIG.min_orders`, the row in force at
+`built_at`) and gross profit per ad dollar at or above the row's `family_bar`. The grade READS the
+judge's published decision; it never re-derives the guard. Each night's decision is graded on its own
+window, so a keyword held three nights running is three graded decisions; `keywords` counts the
+distinct ones beside them.
+
+**The hint on the 1.5×.** Below **20** graded decisions the RULE_HINT row says `WAIT` and why — with
+nothing old enough to grade it says how many decisions have been written and the date the first one
+settles. From 20 on it reads two populations: keywords **released** by the last-day test whose last
+day sat between 1.0× and 1.5× the bar (the ones a lower threshold would have held), and keywords
+**held**. If released-wrong is more than half of the first, the threshold looks too high
+(`LOWER_STRONG_DAY_MULT`); if held-wrong is more than half of the second, too low
+(`RAISE_STRONG_DAY_MULT`); both at once is `NO_CLEAN_SIGNAL`; neither is `KEEP_STRONG_DAY_MULT`. The
+row carries the counts and the dollars in words. It is a hint: the threshold lives in
+`V_PLAN_WINDOW_JUDGMENT`'s `k` CTE and nothing here changes it. The scorecard mirrors the 1.5× in its
+own `k` CTE and publishes the value it graded on as `rule_value`; acceptance C10 recomputes the plan's
+own `last_day_strong` from it (with the judge's one-order minimum) on every row written under P-14c
+and goes red the moment the two part.
+
+**Read it.**
+
+```sql
+-- the recommendations and the guard's grade
+SELECT row_type, family, calendar_state, graded_windows, graded_rows, recommendation, sentence
+FROM `onyga-482313.OI.V_PLAN_SCORECARD`
+WHERE row_type IN ('RECOMMENDATION', 'RULE_HINT') ORDER BY row_type, family, calendar_state;
+
+-- the weekly trajectory, A and B side by side
+SELECT family, week_start, graded_night, calendar_state, live_plan,
+       allocated_a, npd_a, allocated_b, npd_b, realized_net
+FROM `onyga-482313.OI.V_PLAN_SCORECARD`
+WHERE row_type = 'FAMILY_WEEK' ORDER BY family, graded_night;
+
+-- the guard, week by week
+SELECT week_start, outcome_class, class_rows, graded_rows, settled_spend, settled_net,
+       last_day_x_bar_p25, last_day_x_bar_p50, last_day_x_bar_p75
+FROM `onyga-482313.OI.V_PLAN_SCORECARD`
+WHERE row_type = 'GUARD' ORDER BY week_start, outcome_class;
+```
+
+**Young by design, and it says so.** On 2026-10-01 only the six August nights (2026-08-23 … 08-28,
+one Sunday week) are 14 days old, so GRADE carries one graded week and every RECOMMENDATION reads
+`WAIT`. The guard columns exist only from the 2026-09-28 partition, so GUARD is empty and RULE_HINT
+says when the first decision settles. The acceptance does not pass on that emptiness: C04 and C08
+compare what the scorecard grades with what the plan history makes gradable, and C06 also runs on
+the function with the clock moved 30 days forward, where the guard has real decisions to partition.
+
+**Deploy and verify.**
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/functions/FN_PLAN_SCORECARD.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_SCORECARD.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql)"
+```
+
+It is a view over a function, not a table: the FACT_AMAZON_ADS reads are clustered joins on a
+handful of plan nights, so nothing is materialised and nothing is added to the orchestrator. The
+acceptance reads only the nine `plan_*` checks of `V_ENGINE_HEALTH` by name, because a filter on
+`check_name` prunes the board's other arms; read the board whole and it costs the full board.
+
+**What this half does not do.** It does not freeze a grade (a view re-reads `FACT_AMAZON_ADS`, so a
+graded week moves slightly as late orders land; the learning contract's grader freezes grades), does
+not switch a plan, and does not change the last-day threshold. Those are Ori's, by one row each.
+
+### The surfaces (Tasks 6–7) — to be written
