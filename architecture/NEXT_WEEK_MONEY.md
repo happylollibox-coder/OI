@@ -614,10 +614,14 @@ dispositions, the same corrected margins. Check the agreement by joining the aud
 on `campaign_id, keyword_id` and comparing `rule_b_verdict` / `rule_b_decided_by` /
 `rule_b_settle_arm` with `verdict` / `decided_by` / `settle_arm` — it must be exact.
 
-**That divergence is closed (v27.137, corrected here in v27.138).** The book now reads P-5's
-one-window limit from `FACT_PLAN_NEXT_WEEK` with the SAME expression `V_PLAN_WINDOW_JUDGMENT` uses
-(the most recent `GRACE` later than the most recent `GOOD`), so the two cannot grant and refuse the
-same grace. Task 2 shipped and writes that table nightly, so `grace_limit_armed` reads FALSE only
+**That divergence was closed (v27.137, corrected here in v27.138) and is OPEN again since
+v27.156.** The book read P-5's one-window limit from `FACT_PLAN_NEXT_WEEK` with the expression
+`V_PLAN_WINDOW_JUDGMENT` used until v27.155 (the most recent `GRACE` later than the most recent
+`GOOD`). `tools/build_reprice_bulksheet.py` still carries that expression and none of P-14c, P-17,
+P-18 or P-29, so on 2026-10-02 it calls grace SPENT on 41 keywords the judge does not (31 of them
+GRACE that night: the v27.155 view's `prior_grace`, which is that expression, against the v27.156
+view's, same history). Read `prior_grace`, `verdict` and `hold_kept_by` from the judge rather than
+from the book until the book reads them too. Task 2 shipped and writes that table nightly, so `grace_limit_armed` reads FALSE only
 for a keyword the plan has no partition EARLIER THAN TODAY for; both artifacts say which condition
 is unmet and when it lifts, rather than the sentence they carried after the builder had already
 shipped ("no builder writes it until Task 2").
@@ -638,14 +642,20 @@ Four properties of those arms were repaired in **v27.134** and each is now asser
   to tell him on each one that the settle correction had already handled it.
 - **Grace is one window, not a standing exemption.** P-5 reads "two quiet windows in a row and rule
   B stands". The view implemented the grant and not the limit, so a settled winner with a
-  permanently quiet window kept the good side forever. **Ruled 2026-10-02 (P-17):** grace lasts
-  `window_days` nightly judgments, anchored to the night it was granted and to the window length in
-  force that night (a grace granted under a 7-day window keeps 7 nights after a switch to 3), and is
-  spent once that run has lasted its window. Piece-1 Task 2 builds it. Until that deploys, the view
-  grants grace for one nightly judgment and refuses it while the most recent `GRACE` is later than
-  the most recent `GOOD` (`prior_grace`, read back from `FACT_PLAN_NEXT_WEEK.verdict`, v27.135), and
-  `C12` asserts both halves. **The builder must write `verdict = 'GRACE'` faithfully** — a builder
-  that collapses GRACE into GOOD turns grace back into a permanent exemption.
+  permanently quiet window kept the good side forever. **Ruled 2026-10-02 (P-17), built v27.156
+  (2026-10-02):** grace lasts `window_days` nightly judgments, anchored to the night it was granted
+  and to the window length in force that night (a grace granted under a 7-day window keeps 7 nights
+  after a switch to 3), and is spent once that run has lasted its window — then refused until the
+  keyword earns a GOOD window back. The run starts at the first `GRACE` after the latest reset (a
+  `GOOD` night, or a night whose row records `memory_cleared_by_gap`, P-29 below); its length is
+  the `window_days` of that first night's row; nights are counted on the date `as_of` is keyed on
+  (Los Angeles until plan Task 6). Every row publishes `grace_since`, `grace_window_days` and
+  `grace_ends_on`, and the GRACE sentence prints "through <last night>". `C12` asserts the arm and
+  that a GRACE row is inside its run; `G1` asserts no run outlasts its window over the whole
+  history; `C22` asserts the sentence. (v27.135 to v27.155 granted ONE nightly judgment and
+  refused grace while the most recent `GRACE` was later than the most recent `GOOD`.) **The
+  builder must write `verdict = 'GRACE'` faithfully** — a builder that collapses GRACE into GOOD
+  turns grace back into a permanent exemption.
 - **"Was good" prefers last night's plan.** It is `IF(prior_seen, prior_good, ladder_settled_good)`,
   which is what this SOP and the ruling always described. It used to be an unconditional `OR`:
   invisible while the plan table is empty, and decisive once Task 2 fills it, because a keyword the
@@ -698,7 +708,8 @@ one condition** — neither the veto the first build produced nor an uncondition
 Read it on the row: `last_day_sp / last_day_ord / last_day_gp_corrected / last_day_ret`,
 `last_day_strong`, and on every NOT-GOOD row that was good, served and unsettled,
 `guard_released_by` = `LAST_DAY_NOT_STRONG` or `HOLD_EXPIRED`. The builder asserts that column is
-never NULL on such a row and that every HELD row has `last_day_strong` — it checks the judgement is
+never NULL on such a row and that every HELD row names what keeps it held (`hold_kept_by`, P-18
+below; until v27.156 it asserted `last_day_strong` on every HELD row) — it checks the judgement is
 complete and does not re-derive it (P-11). Acceptance C09 (restated) and C26.
 
 **Why this repair was urgent, and what it says about the two workers.** From 2026-08-29 to
@@ -724,6 +735,81 @@ not in force. Rows written before the columns existed (the 2026-09-28 … 10-01 
 updated; the scorecard reads them as 1.5 and 1, the values the judge's `k` CTE has carried since
 v27.147 (commit 41d2318: `git log -S` on either `k` line lists that commit alone, and the deployed
 view's definition read 1.5 / 1 on 2026-10-01).
+
+### The hold lasts while its very good day is in the window (P-18, v27.156)
+
+Ruled 2026-10-02 (R4), built v27.156. P-14c's own reason is "wait until that day's sales land", so
+a hold run lasts while **the very good day that started it is still inside the judged window**, and
+never past its clock: it lifts when that day leaves the window or when the window that started the
+hold settles, whichever is first. The run remembers that day as `hold_strong_day` (the `window_to`
+of the run's first night). The HELD arm reads `last_day_strong OR (a run is in force AND
+window_from <= hold_strong_day)`, and every HELD row publishes `hold_kept_by` = `LAST_DAY` or
+`STRONG_DAY_IN_WINDOW`; `guard_released_by = LAST_DAY_NOT_STRONG` only when neither holds. The
+builder's assertion, `V_ENGINE_HEALTH.plan_settle_guard_holds`, plan acceptance C26 and judge
+acceptance G2 all READ `hold_kept_by`; none re-derives the guard. The three HELD sentences say "held
+since <date> because <date> was very good; that day leaves the judged window after the window
+ending <date>, and the hold lifts then or when its window settles on <date>, whichever is first".
+
+**The clock is on the row from the first held night (audit fix #16).** `hold_since`,
+`hold_settles_on` and `hold_strong_day` used to be NULL on night one (the 9 hold runs started
+09-28 … 10-01 each wrote NULL on night one and night one's `as_of` on night two). The judge now
+publishes tonight's date, settle date and last day on a first HELD night. It never reads those
+columns back — only `as_of`, `verdict`, `settle_due_on`, `window_to`, `window_days` and
+`memory_cleared_by_gap` — so publishing them cannot re-anchor a run: on 2026-10-02 a run of the
+judge on a history whose clock columns were all junk equalled a run on the real one, row for row.
+
+```sql
+SELECT hold_kept_by, COUNT(*) AS kw, MIN(hold_since) AS oldest, MIN(hold_strong_day) AS strong_day,
+       ROUND(SUM(w_sp) / MAX(window_days), 2) AS spend_per_day
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` WHERE verdict = 'HELD_UNSETTLED' GROUP BY 1;
+```
+
+### Memory across an unwritten gap is checked first (P-29, v27.156)
+
+Ruled 2026-10-02 (R16), built v27.156. A grace run whose last `GRACE` night, or a hold run whose
+last night, is older than `today − window_days − 1` is honoured only after the judge reads the
+**gap** — the nights after it that wrote no live row for the keyword (the builder refused 08-29 …
+09-27; or the keyword was outside the universe). Each gap night *n* would have judged the window
+ending *n* − 2 (the P-14a fence) of the length its own calendar state carries
+(`FN_PLAN_CALENDAR_STATE(n)` → `DE_PLAN_CONFIG`); the windows ending after the memory's own window
+and before tonight's `window_from` are read from `FACT_AMAZON_ADS`, and if one is GOOD — orders at
+that state's floor and raw gross profit per ad dollar at tonight's family bar — the memory is
+cleared: no grace run, no hold run. The row publishes `memory_cleared_by_gap` (`GRACE` / `HOLD` /
+`GRACE_AND_HOLD`) and `memory_gap_good_window_to`. **`memory_cleared_by_gap` is memory, not a
+report:** `SP_BUILD_NEXT_WEEK_PLAN` stores it and the judge reads it back as a reset, because
+otherwise the next night's history would rebuild the same old run from the August `GRACE` (measured
+2026-10-02: with the stored reset the six fresh graces stay GRACE the next day; on a copy of the
+history with it nulled, all six read NO_SALE with their August grace spent). On 2026-10-02 it
+cleared 9 grace memories, all written 08-23 … 08-28; judge acceptance G4 re-computes the gap from
+the history and the ads record and found no honoured memory with a GOOD gap window (45 honoured
+memories, 18 with gap windows, 540 windows read).
+
+```sql
+SELECT memory_cleared_by_gap, verdict, COUNT(*) AS kw, MIN(memory_gap_good_window_to) AS first_good
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
+WHERE memory_cleared_by_gap IS NOT NULL GROUP BY 1, 2;
+```
+
+### What v27.156 moved, measured at deploy (2026-10-02, Los Angeles)
+
+Same data both sides — window 09-28 … 09-30 (BOOST, 3 days), 361 rows, `w_sp` equal on every row:
+the deployed v27.155 judge snapshotted at 12:10 UTC against the deployed v27.156 judge at 12:46 UTC.
+Sides moved only NOT_GOOD → GOOD (0 the other way). The plan columns are the builder's body run
+with the partition write removed: HEAD's builder on the v27.155 snapshot, then v27.156's on the
+v27.156 view (live plan B; the pot leaves holdout spend out, as the builder did until Task 4).
+
+| family | GRACE | HELD | released LAST_DAY_NOT_STRONG | moved by P-17 (kw, $/day) | moved by P-29 (kw, $/day) | of which holdout $/day | pot $/day | allowance target → ramped $/day | not-good today $/day | seats |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Bottle | 0 → 1 | 0 → 0 | 0 → 0 | 1, 8.08 | 0 | 8.08 | 0.00 → 0.00 | 0.00 → 0.49 before and after | 0.74 → 0.74 | 1 → 1 |
+| Fresh | 2 → 8 | 0 → 0 | 2 → 1 | 3, 27.15 | 3, 7.95 | 7.75 | 57.41 → 84.77 | 28.71 → 68.99 before; 42.38 → 55.31 after | 89.13 → 61.78 | 11 → 14 |
+| LolliME | 2 → 20 | 0 → 0 | 2 → 1 | 15, 45.33 | 3, 11.23 | 0.00 | 260.69 → 317.25 | 130.34 → 171.84 before; 158.62 → 158.62 after | 192.58 → 136.03 | 32 → 58 |
+| Lollibox | 0 → 6 | 0 → 0 | 6 → 4 | 6, 22.19 | 0 | 6.82 | 80.20 → 95.57 | 40.10 → 48.41 before; 47.78 → 47.78 after | 52.57 → 37.19 | 10 → 9 |
+| all | 4 → 35 | 0 → 0 | 10 → 6 | 25, 102.75 | 6, 19.18 | 22.65 | | | | 54 → 82 |
+
+LolliME's allowance target ($158.62/day) now exceeds its whole not-good side ($136.03/day), so its
+walk is rationed by nothing and its planned spend delta turned from −$20.82 to +$14.46 a day (raises
+at P-6's repaired prices). That is the case R5 (plan Task 3) and R7 (plan Task 4) close; it is not
+a Task 2 rule.
 
 ### THE OPEN QUESTION THIS LAYER PUT ON ORI'S DESK (answered by P-14c above; kept as the record)
 
@@ -972,9 +1058,20 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
 cd /Users/ori/Develop/OI
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_SETTLE_COMPLETION.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
+# v27.156 reads FACT_PLAN_NEXT_WEEK.memory_cleared_by_gap: the column migration goes first
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/migrations/2026-10-02_plan_judge_memory_columns.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
+# the negative controls: the acceptance's own text on doctored copies (exit 0 = every control as expected)
+python3 scripts/bigquery/tests/check_judge_memory_controls.py
 ```
+
+**v27.156: 27 checks** — the 23 below with C12 and C22 restated for P-17, plus G1 (no grace run
+outlasts its window, over the whole history), G2 (every HELD row names `hold_kept_by` and the reason
+stands on the row), G3 (the clock on every HELD row) and G4 (no memory honoured across a gap whose
+windows read GOOD, recomputed from the history and the ads record). Run 2026-10-02 on the deployed
+view: 27 rows, every one PASS, and the controls script exited 0 with all 17 controls as expected
+(each is listed with its measured value in the acceptance file's header).
 
 The acceptance is **twenty-two** checks and **every row must read PASS**: the fenced complete-days
 window (C01), the universe (C02), the keyword grain (C03), both plans' sides (C04), the
@@ -1095,7 +1192,12 @@ bootstrap for a keyword the plan has never seen), and `verdict = 'GRACE'` **spen
 window. So the builder writes `GRACE` as `GRACE` and never collapses it into `GOOD`: a builder that
 collapsed it would silently restore the permanent exemption §2 describes. `C13` of the acceptance
 asserts the live plan reproduces the view row for row on `side`, `verdict` and `is_candidate`, which
-is the check that stands over this. Confirm the limit is armed the morning after a first run:
+is the check that stands over this. Since v27.156 the judge also reads back
+`memory_cleared_by_gap` (P-29): a grace or hold memory a GOOD gap window cleared stays cleared the
+next night only because the builder stored that column, so it is copied faithfully too, with
+`hold_strong_day`, `hold_kept_by` and `grace_since` (migration
+`scripts/bigquery/migrations/2026-10-02_plan_judge_memory_columns.sql`). Confirm the limit is armed
+the morning after a first run:
 
 ```sql
 SELECT DISTINCT grace_limit_armed FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
@@ -1193,6 +1295,14 @@ FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = CURRENT_DATE('America/L
 
 (Both runs must land in the same Los Angeles day and behind the same ads watermark; if the watermark
 moved between them, re-run both.)
+
+**v27.156 (2026-10-02, piece-1 Task 2).** The builder copies `hold_strong_day`, `hold_kept_by`,
+`grace_since` and `memory_cleared_by_gap` (deploy the column migration
+`scripts/bigquery/migrations/2026-10-02_plan_judge_memory_columns.sql` before the judge and the
+builder), and its HELD assertion reads `hold_kept_by` (P-18) instead of requiring a very good last
+day on every hold. Measured at deploy: the builder body with the partition write removed passed every
+assertion on the deployed v27.156 judge, then one CALL wrote the 2026-10-02 partition (722 rows, no
+refusal). Plan acceptance 26 rows PASS, C26 restated with its controls in the file.
 
 ### Four checks that depart from the plan's draft, and why
 
@@ -1328,11 +1438,13 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
    fix the FLAG in the ladder snapshot so the judgement view excludes those keywords from the
    universe entirely — a Task 1 / ladder file, recorded here rather than patched from the builder,
    because widening candidacy inside the builder would break `C13`.
-6. **The book and the plan now read one grace memory.** `tools/build_reprice_bulksheet.py --rule-b`
-   reads `FACT_PLAN_NEXT_WEEK` for P-5's one-window limit with the same expression
-   `V_PLAN_WINDOW_JUDGMENT` uses, so the two cannot grant and refuse the same grace. Nothing to rule
-   unless Ori wants the book to stop judging at all and read the plan's `side` directly — which is
-   Task 4's design question, not a defect.
+6. **The book and the plan read one grace memory from v27.137 to v27.155, and not since v27.156.**
+   `tools/build_reprice_bulksheet.py --rule-b` reads `FACT_PLAN_NEXT_WEEK` for P-5's limit with the
+   v27.135 expression (the most recent GRACE later than the most recent GOOD); the judge now reads
+   P-17 / P-29 (§2), and on 2026-10-02 the two disagreed on 41 keywords' `prior_grace`. The book
+   also has no P-14c or P-18. Nothing to rule unless Ori wants the book to stop judging at all and
+   read the plan's `side` directly — which is Task 4's design question; until then the judge is the
+   authority.
 
 ## 4. Ownership and the preflight (Task 3) — to be written
 
@@ -1365,7 +1477,7 @@ check reads RED on an empty partition rather than vacuously green.
 | `plan_one_move_per_notgood` | one move per CANDIDATE, NONE on the good side and on rows with nothing to repair (§9 v27.135, the acceptance's C06 form; the draft read 152 violations on a healthy partition) | red > 0 |
 | `plan_ownership_no_foreign_go` | foreign GO rows on money levers inside live-plan campaigns — **a REPORT until Task 3 ships**, because no engine `PLAN` writes proposals and the plan owns nothing at the gate yet | INFO, then red > 0 |
 | `plan_both_plans_written` | exactly plans A and B in the latest partition | red otherwise |
-| `plan_settle_guard_holds` | **P-14b is a clock and P-14c a last-day test, not a veto.** A live-plan row demoted under the guard's preconditions (not-good, was good, served, unsettled) is legitimate iff the judge published `guard_released_by` as `HOLD_EXPIRED` or `LAST_DAY_NOT_STRONG`; a `HELD_UNSETTLED` row must have earned the hold with a very good last day. The check READS `guard_released_by` and never re-derives the guard — re-deriving it is what vetoed every partition for a month | red > 0 |
+| `plan_settle_guard_holds` | **P-14b is a clock and P-14c a last-day test, not a veto.** A live-plan row demoted under the guard's preconditions (not-good, was good, served, unsettled) is legitimate iff the judge published `guard_released_by` as `HOLD_EXPIRED` or `LAST_DAY_NOT_STRONG`; a `HELD_UNSETTLED` row must have earned the hold with a very good last day, or (P-18, v27.156) carry `hold_kept_by = STRONG_DAY_IN_WINDOW` with `window_from <= hold_strong_day`. The check READS `hold_kept_by` as well, and `guard_released_by` and never re-derives the guard — re-deriving it is what vetoed every partition for a month | red > 0 |
 | `plan_settle_curve_coverage` | share of live-plan rows the curve could correct | INFO |
 | `plan_proposal_lag_days` | the proposal snapshot's date against the live plan's | INFO, amber > 2 |
 | `plan_partition_fresh` | **ALARM.** The latest plan is older than the later of yesterday and the Los Angeles day the plan step last ran, OK or FAIL. Not "older than today": the pass runs three times a day and the first that can write today's partition is the 04:10 New York one, so "today" alone would be red between midnight and that pass every day. The detail says the last plan date and the nights missing | red > 0 |
@@ -1476,7 +1588,11 @@ the code never switches itself.**
 **the same window** (`window_from … window_to`) from `FACT_AMAZON_ADS` today: settled good = at least
 the order floor in force when the plan was built (`DE_PLAN_CONFIG.min_orders`, the row in force at
 `built_at`) and gross profit per ad dollar at or above the row's `family_bar`. The grade READS the
-judge's published decision; it never re-derives the guard. Each night's decision is graded on its own
+judge's published decision; it never re-derives the guard. **Open since v27.156 (P-18):** a hold
+kept by `STRONG_DAY_IN_WINDOW` is graded as a HELD decision like any other, though its own last day
+was not very good — so the hint's held group, which argues about `strong_day_mult`, can carry holds
+that multiplier did not decide. `hold_kept_by` is on the row, so `FN_PLAN_SCORECARD` can separate
+them; it does not yet (no such hold had been written as of 2026-10-02). Each night's decision is graded on its own
 window, so a keyword held three nights running is three graded decisions; `keywords` counts the
 distinct ones beside them.
 

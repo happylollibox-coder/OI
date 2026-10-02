@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   -- columns existed)
   strong_day_mult            FLOAT64,
   strong_day_min_orders      INT64,
+  -- v27.156: the judge's memory (P-17, P-18, P-29); NULL on rows written before the columns existed
+  hold_strong_day            DATE,
+  hold_kept_by               STRING,
+  grace_since                DATE,
+  memory_cleared_by_gap      STRING,
   rank_no                    INT64,
   seat_no                    INT64,
   seat_cost_per_day          FLOAT64,
@@ -222,3 +227,15 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS guard
 -- written before the columns existed (2026-09-28 .. 10-01); no existing row is updated.
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS strong_day_mult FLOAT64;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS strong_day_min_orders INT64;
+
+-- v27.156 (2026-10-02) — THE JUDGE'S MEMORY. Shipped as
+-- scripts/bigquery/migrations/2026-10-02_plan_judge_memory_columns.sql; mirrored here. Piece-1
+-- plan Task 2, Ori's rulings R3/R4/R16 = spec P-17/P-18/P-29: hold_strong_day (the very good day
+-- that started the hold run), hold_kept_by (LAST_DAY | STRONG_DAY_IN_WINDOW, NULL unless HELD),
+-- grace_since (the first night of the grace run) and memory_cleared_by_gap (GRACE | HOLD |
+-- GRACE_AND_HOLD — read back by V_PLAN_WINDOW_JUDGMENT as a reset, so it is memory, not a report).
+-- NULL on the partitions written before the columns existed; no existing row is updated.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_strong_day DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_kept_by STRING;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS grace_since DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS memory_cleared_by_gap STRING;

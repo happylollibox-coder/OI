@@ -335,9 +335,29 @@ c25 AS (
 -- the good side, and no sale-less window is held (a window that sold nothing cannot have a very
 -- good last day). Negative controls 2026-09-28 on a temp copy: one HELD row with
 -- last_day_strong flipped -> 1; one HELD row with w_ord set to 0 -> 1; live -> 0.
+-- RESTATED v27.156 (2026-10-02, P-18): a hold is also kept while the very good day that started
+-- it is still inside the window, so the check READS hold_kept_by and never re-derives the guard:
+-- every HELD row is kept by LAST_DAY with a very good last day, or by STRONG_DAY_IN_WINDOW with
+-- window_from <= hold_strong_day (a HELD row with no hold_kept_by fails: the check reads the
+-- latest partition, which SP_BUILD_NEXT_WEEK_PLAN v27.156 writes); a row that is not HELD names
+-- no reason. The sale-less term stays: the strong day that keeps a STRONG_DAY_IN_WINDOW hold had an order and
+-- is inside the window. Negative controls 2026-10-02 (Los Angeles) on temp copies of the plan
+-- table, this file's text with the table name swapped; the 2026-10-02 partition written by
+-- SP_BUILD_NEXT_WEEK_PLAN v27.156 holds no HELD row, so each control made the lowest-numbered
+-- live row that served with w_ord >= 1 (rn 371 of the partition) HELD on the good side first:
+--   LIVE 0 · strong day = window_from - 1, kept by STRONG_DAY_IN_WINDOW, last day not strong 1 ·
+--   strong day = window_from 0 · hold_kept_by NULL 1 · LAST_DAY with last day not strong 1 ·
+--   a non-HELD row naming LAST_DAY 1 · the strong-day-in row with w_ord 0 1.
+--   (C13 read 1 on every copy that changed a verdict, as it must: the copy no longer matches the
+--   judgement view.)
 c26 AS (
-  SELECT 'C26 P-14c: every HELD row has a very good last day and is on the good side; no sale-less window is held',
-         COUNTIF(verdict = 'HELD_UNSETTLED' AND (NOT COALESCE(last_day_strong, FALSE) OR side != 'GOOD'))
+  SELECT 'C26 P-14c/P-18: every HELD row is on the good side and kept by a very good last day or by the very good day that started it still in the window; no sale-less window is held',
+         COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND (side != 'GOOD'
+                      OR NOT COALESCE((hold_kept_by = 'LAST_DAY' AND last_day_strong)
+                                      OR (hold_kept_by = 'STRONG_DAY_IN_WINDOW'
+                                          AND window_from <= hold_strong_day), FALSE)))
+       + COUNTIF(verdict != 'HELD_UNSETTLED' AND hold_kept_by IS NOT NULL)
        + COUNTIF(verdict = 'HELD_UNSETTLED' AND COALESCE(w_ord, 0) = 0)
   FROM b
 )

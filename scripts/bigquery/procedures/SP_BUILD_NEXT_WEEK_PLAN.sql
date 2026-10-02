@@ -86,6 +86,14 @@
 --       below the money the plan can SEE inside the campaign (queue included), and a campaign the
 --       plan measured nothing in — or a brand-defense campaign — is not moved at all.
 --
+-- THE JUDGE'S MEMORY IS CARRIED (v27.156, 2026-10-02, rulings R3/R4/R16 = spec P-17/P-18/P-29).
+-- hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap are copied from the judge
+-- (migration 2026-10-02_plan_judge_memory_columns.sql). memory_cleared_by_gap is not a report:
+-- V_PLAN_WINDOW_JUDGMENT reads it back from this table as a reset, so a grace or hold memory a GOOD
+-- gap window cleared tonight stays cleared tomorrow. The HELD assertion reads hold_kept_by (P-18:
+-- a hold lasts while the very good day that started it is still in the window), so a hold kept by
+-- that day is not refused for lacking a very good LAST day.
+--
 -- THE RULE IS CARRIED (v27.154 follow-up, 2026-10-01). strong_day_mult and strong_day_min_orders
 -- are copied from the judge onto every row, so the plan table records the P-14c rule each decision
 -- was made under and FN_PLAN_SCORECARD never grades history against today's constant. A column
@@ -99,7 +107,7 @@
 -- SOP: architecture/NEXT_WEEK_MONEY.md §3.
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`()
-OPTIONS (description = "v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
+OPTIONS (description = "v27.156 (2026-10-02): copies hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap from V_PLAN_WINDOW_JUDGMENT (spec P-17, P-18, P-29; the judge reads memory_cleared_by_gap back as a reset); the HELD assertion reads hold_kept_by -- every HELD row names LAST_DAY (with last_day_strong) or STRONG_DAY_IN_WINDOW (with window_from <= hold_strong_day), and no other row names one -- instead of requiring a very good last day on every hold. v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
 BEGIN
   DECLARE as_of_d DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
   DECLARE live_plan_code STRING DEFAULT 'B';
@@ -503,6 +511,9 @@ BEGIN
      last_day_gp_corrected, last_day_ret, last_day_strong, guard_released_by,
      -- v27.154 follow-up: the P-14c rule the row was judged under, copied from the judge
      strong_day_mult, strong_day_min_orders,
+     -- v27.156: the judge's memory (P-17, P-18, P-29), copied; memory_cleared_by_gap is read back
+     -- by the judge as a reset, so a cleared memory stays cleared the next night
+     hold_strong_day, hold_kept_by, grace_since, memory_cleared_by_gap,
      rank_no, seat_no, seat_cost_per_day, current_bid, planned_bid, bid_floor, bid_park,
      bid_park_source, bid_park_seat_econ, move, planned_spend_per_day,
      planned_spend_delta_per_day, verdict_date, pot_per_day,
@@ -526,6 +537,7 @@ BEGIN
     p.hold_since, p.hold_settles_on, p.hold_expired, p.last_day_sp, p.last_day_clk, p.last_day_ord,
     p.last_day_gp, p.last_day_gp_corrected, p.last_day_ret, p.last_day_strong, p.guard_released_by,
     p.strong_day_mult, p.strong_day_min_orders,
+    p.hold_strong_day, p.hold_kept_by, p.grace_since, p.memory_cleared_by_gap,
     p.rank_no, p.seat_no,
     IF(p.side = 'GOOD', NULL, ROUND(p.plan_seat_cost, 4)),
     p.current_bid, p.planned_bid_final, p.bid_floor, p.bid_park, p.bid_park_source,
@@ -720,13 +732,24 @@ BEGIN
   -- carries the judge's own published release reason (HOLD_EXPIRED, or LAST_DAY_NOT_STRONG
   -- under Ori's 2026-09-17 ruling), and every row the judge holds is on the good side and
   -- earned the hold with a very good last day.
+  -- P-18 (Ori 2026-10-02, R4; v27.156): a hold also lasts while the very good day that started
+  -- its run is still inside the judged window, so the second assertion READS the judge's
+  -- hold_kept_by: every HELD row names what keeps it held, and the named reason stands on the
+  -- row (LAST_DAY with last_day_strong, or STRONG_DAY_IN_WINDOW with window_from <=
+  -- hold_strong_day); a row that is not held names nothing.
   ASSERT (SELECT COUNTIF(side = 'NOT_GOOD' AND was_good AND served AND NOT settled
                          AND guard_released_by IS NULL)
           FROM final WHERE is_live_plan) = 0
     AS 'a keyword that was good and served on an unsettled window is demoted only with the judge-published release reason: the hold clock expired, or its last day was not very good (P-14b/P-14c)';
-  ASSERT (SELECT COUNTIF(verdict = 'HELD_UNSETTLED' AND (side != 'GOOD' OR NOT COALESCE(last_day_strong, FALSE)))
+  ASSERT (SELECT COUNTIF(verdict = 'HELD_UNSETTLED'
+                         AND (side != 'GOOD'
+                              OR hold_kept_by IS NULL
+                              OR NOT ((hold_kept_by = 'LAST_DAY' AND COALESCE(last_day_strong, FALSE))
+                                      OR (hold_kept_by = 'STRONG_DAY_IN_WINDOW'
+                                          AND COALESCE(window_from <= hold_strong_day, FALSE)))))
+                + COUNTIF(verdict != 'HELD_UNSETTLED' AND hold_kept_by IS NOT NULL)
           FROM final WHERE is_live_plan) = 0
-    AS 'every keyword the guard holds is on the good side and earned the hold with a very good last day (P-14c)';
+    AS 'every keyword the guard holds is on the good side and names what keeps it held: a very good last day (P-14c), or the very good day that started its hold still inside the window (P-18)';
   ASSERT (SELECT COUNTIF(holdout AND (move NOT IN ('NONE', 'NONE_HOLDOUT') OR seat_no IS NOT NULL))
           FROM final) = 0
     AS 'a holdout campaign gets a record and no move';

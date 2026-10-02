@@ -60,6 +60,15 @@
 -- the view; the LIVE tie in C04f exercises the RED branch only, and the green branch can be tied
 -- to the deployed row only on a morning the board has no RED.
 --
+-- v27.156 (2026-10-02, piece-1 plan Task 2, P-18): c28's hold half reads hold_kept_by — a hold is
+-- also kept while the very good day that started it is still inside the window. The twin below
+-- mirrors it, NC_HELD_WEAK now names LAST_DAY on the row it weakens, and two copies that are never
+-- vacuous MAKE the lowest-numbered served row HELD first: C06d (strong day one day before
+-- window_from — must fire) and C06e (strong day on window_from — must not). Run 2026-10-02 (Los
+-- Angeles) after deploying V_ENGINE_HEALTH v27.156: 22 rows, every one PASS; the live plan
+-- (partition 2026-10-02) had 6 rows under the guard preconditions, all LAST_DAY_NOT_STRONG, and
+-- 0 HELD, so C06a fired on a real row and C06b was vacuous, as its name says.
+--
 -- The '(vacuous when ...)' controls C06a/C06b, and C04a's '(nothing to remove ...)', say so in
 -- their names: a negative control needs a row to doctor, and a live plan with no row under the
 -- guard and nothing held, or a board with no RED, is a legitimate state, not a defect — the live
@@ -137,13 +146,35 @@ CREATE TEMP TABLE plb_copies AS
   FROM plb
   UNION ALL
   SELECT 'NC_HELD_WEAK', * REPLACE (
-    IF(rn = (SELECT MIN(rn) FROM plb WHERE verdict = 'HELD_UNSETTLED'), FALSE, last_day_strong) AS last_day_strong)
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE verdict = 'HELD_UNSETTLED'), FALSE, last_day_strong) AS last_day_strong,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE verdict = 'HELD_UNSETTLED'), 'LAST_DAY', hold_kept_by) AS hold_kept_by)
+  FROM plb
+  -- v27.156 (P-18): a hold kept by the very good day that started it. The live plan may hold
+  -- nothing, so these two copies MAKE the lowest-numbered served row a HELD row first; they are
+  -- never vacuous. Strong day one day before window_from -> fires; on window_from -> holds.
+  UNION ALL
+  SELECT 'NC_HELD_SD_OUT', * REPLACE (
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), 'HELD_UNSETTLED', verdict) AS verdict,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), FALSE, last_day_strong) AS last_day_strong,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), 'STRONG_DAY_IN_WINDOW', hold_kept_by) AS hold_kept_by,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), DATE_SUB(window_from, INTERVAL 1 DAY), hold_strong_day) AS hold_strong_day)
+  FROM plb
+  UNION ALL
+  SELECT 'HC_HELD_SD_IN', * REPLACE (
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), 'HELD_UNSETTLED', verdict) AS verdict,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), FALSE, last_day_strong) AS last_day_strong,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), 'STRONG_DAY_IN_WINDOW', hold_kept_by) AS hold_kept_by,
+    IF(rn = (SELECT MIN(rn) FROM plb WHERE served), window_from, hold_strong_day) AS hold_strong_day)
   FROM plb;
 -- TWIN of V_ENGINE_HEALTH c28 (guard): the two COUNTIFs that make its measured value
+-- (v27.156: the hold half reads hold_kept_by, P-18)
 CREATE TEMP TABLE guard_fired AS
   SELECT copy,
          COUNTIF(under_guard AND COALESCE(guard_released_by, '') NOT IN ('HOLD_EXPIRED', 'LAST_DAY_NOT_STRONG'))
-       + COUNTIF(verdict = 'HELD_UNSETTLED' AND NOT COALESCE(last_day_strong, FALSE)) AS v
+       + COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND NOT (COALESCE(last_day_strong, FALSE)
+                          OR (COALESCE(hold_kept_by, '') = 'STRONG_DAY_IN_WINDOW'
+                              AND COALESCE(window_from <= hold_strong_day, FALSE)))) AS v
   FROM plb_copies GROUP BY 1;
 
 -- ---- C05: the brief's SYSTEM line — LIVE / every status GREEN / an alarm doctored RED ----
@@ -397,6 +428,19 @@ c06b AS (
          (SELECT IF((SELECT COUNTIF(verdict = 'HELD_UNSETTLED') FROM plb) = 0, 0,
                     IF((SELECT v FROM guard_fired WHERE copy = 'NC_HELD_WEAK') = 1, 0, 1)))
 ),
+-- P-18 (v27.156): A HOLD KEPT BY A STRONG DAY THAT HAS LEFT THE WINDOW READS GREEN.
+c06d AS (
+  SELECT 'C06d NEGATIVE CONTROL plan_settle_guard_holds FIRES: a HELD row kept by STRONG_DAY_IN_WINDOW whose strong day is one day before window_from -> 1',
+         (SELECT IF(v = (SELECT v FROM guard_fired WHERE copy = 'LIVE') + 1, 0, 1)
+          FROM guard_fired WHERE copy = 'NC_HELD_SD_OUT')
+),
+-- ...AND A HOLD KEPT BY A STRONG DAY STILL IN THE WINDOW READS RED: the board would cry wolf on
+-- the rule Ori ruled.
+c06e AS (
+  SELECT 'C06e plan_settle_guard_holds HOLDS: the same HELD row with its strong day on window_from -> unchanged from LIVE',
+         (SELECT IF(v = (SELECT v FROM guard_fired WHERE copy = 'LIVE'), 0, 1)
+          FROM guard_fired WHERE copy = 'HC_HELD_SD_IN')
+),
 c06c AS (
   SELECT 'C06c the deployed plan_settle_guard_holds agrees with this file\'s twin on the live plan',
          (SELECT IF(COUNT(*) = 0, 1, 0) FROM board WHERE check_name = 'plan_settle_guard_holds')
@@ -420,5 +464,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c02b
       UNION ALL SELECT * FROM c04c UNION ALL SELECT * FROM c04d UNION ALL SELECT * FROM c04e
       UNION ALL SELECT * FROM c04f UNION ALL SELECT * FROM c05a UNION ALL SELECT * FROM c05b
       UNION ALL SELECT * FROM c05c UNION ALL SELECT * FROM c06a UNION ALL SELECT * FROM c06b
-      UNION ALL SELECT * FROM c06c UNION ALL SELECT * FROM c07)
+      UNION ALL SELECT * FROM c06c UNION ALL SELECT * FROM c06d UNION ALL SELECT * FROM c06e
+      UNION ALL SELECT * FROM c07)
 ORDER BY check_name;

@@ -1,6 +1,7 @@
 -- =============================================================================================
 -- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.135 (2026-08-23); C06
--- restated 2026-10-02 for P-14c (see C06 below).
+-- restated 2026-10-02 for P-14c (see C06 below); C12 / C22 restated and G1..G4 added 2026-10-02
+-- for the judge's memory, v27.156 (see the v27.156 block below).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -109,6 +110,53 @@
 --     HC7 settle_due_on = today + 7, served left TRUE -> restated C06 0
 --   The old C06 read 10 on every copy except NC5 and NC6 (11 each).
 --   The whole file run on 2026-10-02 with C06 restated: 23 rows, every one PASS.
+--
+-- v27.156 (2026-10-02, piece-1 plan Task 2) — THE JUDGE'S MEMORY: C12 and C22 restated, G1..G4 new.
+--   C12 RESTATED for P-17 (grace lasts window_days nightly judgments from the night it was
+--       granted): the old two terms stand, because prior_grace now means "the run has lasted its
+--       window"; a GRACE row must also carry grace_since / grace_window_days / grace_ends_on with
+--       tonight inside the run.
+--   C22 RESTATED: every GRACE sentence names its last night ("through <grace_ends_on>") and says
+--       SPENT-from or NOT ARMED; the v27.135 wording "grace is now SPENT" (one nightly judgment)
+--       is gone.
+--   G1  P-17 over the live plan's history AND tonight: no GRACE night falls window_days or more
+--       nights after its run's first night, the length read from that first night's row. A run
+--       starts after a GOOD night, or ON a night whose row records that a gap cleared the grace
+--       memory (memory_cleared_by_gap) — the column the judge reads back as a reset.
+--   G2  P-18, READ never re-derived: every HELD row names hold_kept_by and the named reason stands
+--       on the row (LAST_DAY with last_day_strong; STRONG_DAY_IN_WINDOW with window_from <=
+--       hold_strong_day); no other row names one.
+--   G3  fix #16: every HELD row carries hold_since, hold_settles_on and hold_strong_day.
+--   G4  P-29, computed HERE from the history and FACT_AMAZON_ADS, never from the view's own flag:
+--       no honoured memory (a spent grace, a grace run from before tonight, a hold run from before
+--       tonight) whose last night is older than today - window_days - 1 has a window, judged by a
+--       night that wrote no row for the keyword and ending before tonight's window_from, that
+--       reads GOOD (orders at that night's state floor, raw gross profit per ad dollar at the bar).
+-- NEGATIVE CONTROLS: scripts/bigquery/tests/check_judge_memory_controls.py runs THIS file's text
+-- with the view and the plan table swapped for temp copies, one copy per control (exit 0 = all
+-- as expected). Run 2026-10-02 (Los Angeles) on the deployed v27.156 view, exit 0:
+--   LIVE: 27 rows, every one 0.
+--   G1: NC_G1_RUN_TOO_LONG (fake keyword, GRACE 09-01 window 3, GRACE 09-04) 1; HC_G1_INSIDE
+--       (second GRACE 09-03) 0; HC_G1_GOOD_RESET (GRACE 09-01, GOOD 09-02, GRACE 09-04) 0;
+--       HC_G1_GAP_RESET (GRACE 09-01, GRACE 09-10 on a night recording a GRACE clear) 0;
+--       NC_G1_NO_RESET (the same with no clear) 1; NC_G1_EMPTY_HISTORY 1 (the emptiness term).
+--   G2 (lowest-numbered served row made HELD on the good side): NC_G2_STRONG_DAY_OUT (strong day
+--       = window_from - 1) 1; HC_G2_STRONG_DAY_IN (strong day = window_from) 0;
+--       NC_G2_NO_REASON (hold_kept_by NULL) 1 — it read 0 on the first draft of G2, whose
+--       expression went NULL and dropped out of the COUNTIF; COALESCE added, re-run 1;
+--       NC_G2_LAST_DAY_WEAK 1; NC_G2_REASON_UNHELD (a non-HELD row naming LAST_DAY) 1.
+--   G3: NC_G3_NO_CLOCK (hold_since NULL) 1; HC_G2_STRONG_DAY_IN 0.
+--   G4: NC_G4_DOCTORED_GRACE — keyword 193040325034125 (campaign 130115986205897, the lowest key
+--       with a live 08-27 row, no GOOD or GRACE since, and a 3-day window ending 08-27..09-15
+--       reading GOOD): its 08-27 row made GRACE and its judgement row made to honour a spent
+--       grace -> 1; HC_G4_NOT_HONOURED (same history, row untouched) 0; NC_G4_CLEARED_HONOURED
+--       (a row the judge cleared tonight made to honour its grace) 1.
+--   C12: NC_C12_RUN_OVER (grace_ends_on = yesterday) 1. C22: NC_C22_NO_END_DATE 1.
+--   Doctoring a row to HELD also moves C07 and C14 on those copies (a held row on the good side
+--   with a price and a sub-floor order count); the harness prints them and does not assert them.
+-- G4 IS NOT VACUOUS ON LIVE (same day, its CTEs run with counting SELECTs): 45 honoured memories
+-- (43 grace, 2 hold), 18 of them with gap windows, 540 gap windows read, 9 at the order floor,
+-- 0 GOOD.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -205,10 +253,15 @@ c11 AS (
   FROM j
 ),
 c12 AS (
-  SELECT 'C12 P-5 answers for the winner it was written for, and grace is spent only once',
+  SELECT 'C12 P-5/P-17 answers for the winner it was written for; a GRACE row is inside its run and grace is never granted once spent',
          COUNTIF((ladder_state IN ('WINNER','PACED_WINNER') AND w_ord < min_orders
                   AND NOT prior_grace AND verdict != 'GRACE')
-                 OR (verdict = 'GRACE' AND prior_grace))
+                 OR (verdict = 'GRACE' AND prior_grace)
+                 -- P-17 (v27.156): a GRACE row carries its run, and tonight is inside it
+                 OR (verdict = 'GRACE'
+                     AND (grace_since IS NULL OR grace_window_days IS NULL OR grace_ends_on IS NULL
+                          OR grace_since > CURRENT_DATE('America/Los_Angeles')
+                          OR grace_ends_on < CURRENT_DATE('America/Los_Angeles'))))
   FROM j
 ),
 c13 AS (
@@ -266,10 +319,13 @@ c21 AS (
   FROM j
 ),
 c22 AS (
-  SELECT 'C22 the grace sentence says whether the one-window limit is armed',
+  SELECT 'C22 the grace sentence names the last night of its run and whether the limit is armed',
          COUNTIF(verdict = 'GRACE'
-                 AND NOT REGEXP_CONTAINS(sentence, r'(NOT ARMED TONIGHT|grace is now SPENT)'))
+                 AND NOT (REGEXP_CONTAINS(sentence, r'(NOT ARMED TONIGHT|grace is SPENT)')
+                          AND STRPOS(sentence, FORMAT('through %t', grace_ends_on)) > 0))
        + COUNTIF(REGEXP_CONTAINS(sentence, r'no builder writes'))
+       -- the v27.135 wording promised ONE nightly judgment of grace; P-17 retired that reading
+       + COUNTIF(REGEXP_CONTAINS(sentence, r'grace is now SPENT'))
   FROM j
 ),
 c23 AS (
@@ -280,6 +336,143 @@ c23 AS (
        + COUNTIF(hold_expired AND side_b = 'GOOD' AND verdict NOT IN ('GOOD', 'GRACE'))
        + COUNTIF(hold_since IS NOT NULL AND hold_settles_on IS NULL)
   FROM j
+),
+-- ---------------------------------------------------------------------------------------------
+-- G1..G4 (v27.156, piece-1 plan Task 2): THE JUDGE'S MEMORY. hist is the live plan's history
+-- before tonight; the clock is the Los Angeles date the plan's as_of is keyed on (plan Task 6
+-- moves both to New York).
+-- ---------------------------------------------------------------------------------------------
+hist AS (
+  SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(keyword_id AS STRING) AS keyword_id,
+         as_of, verdict, window_days, window_to, memory_cleared_by_gap
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles')
+),
+-- G1: every keyword-night of the history and tonight; a GRACE run starts at the first GRACE after
+-- the latest reset at or before that night (a GOOD night: the run may start the night after; a
+-- night whose row records that a gap cleared the grace memory: the run may start that night)
+g1_nights AS (
+  SELECT campaign_id, keyword_id, as_of, verdict, window_days, memory_cleared_by_gap FROM hist
+  UNION ALL
+  SELECT campaign_id, keyword_id, CURRENT_DATE('America/Los_Angeles'), verdict, window_days,
+         memory_cleared_by_gap
+  FROM j
+),
+g1_seg AS (
+  SELECT n.*,
+         MAX(CASE WHEN verdict = 'GOOD' THEN DATE_ADD(as_of, INTERVAL 1 DAY)
+                  WHEN memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD') THEN as_of END)
+           OVER (PARTITION BY campaign_id, keyword_id ORDER BY as_of
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS reset_from
+  FROM g1_nights n
+),
+g1_run AS (
+  SELECT s.*,
+         MIN(IF(verdict = 'GRACE', as_of, NULL))
+           OVER (PARTITION BY campaign_id, keyword_id, reset_from) AS anchor
+  FROM g1_seg s
+),
+g1 AS (
+  SELECT 'G1 P-17 a GRACE run never lasts beyond the window_days in force on the night it was granted',
+         COUNTIF(r.verdict = 'GRACE'
+                 AND (a.window_days IS NULL OR DATE_DIFF(r.as_of, r.anchor, DAY) >= a.window_days))
+       -- emptiness: a run over no history and no judgement passes vacuously
+       + IF((SELECT COUNT(*) FROM hist) = 0 OR (SELECT COUNT(*) FROM j) = 0, 1, 0)
+  FROM g1_run r
+  LEFT JOIN g1_nights a
+    ON a.campaign_id = r.campaign_id AND a.keyword_id = r.keyword_id AND a.as_of = r.anchor
+),
+-- G2: the hold names what keeps it, and the named reason stands on the row (READ, never re-derived)
+g2 AS (
+  SELECT 'G2 P-18 every HELD row is kept by a very good last day or by the very good day that started it still in the window',
+         -- COALESCE: a NULL hold_kept_by must count, not drop out of the COUNTIF (NC_G2_NO_REASON
+         -- read 0 on the first draft, which lacked it)
+         COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND NOT COALESCE((hold_kept_by = 'LAST_DAY' AND last_day_strong)
+                                  OR (hold_kept_by = 'STRONG_DAY_IN_WINDOW'
+                                      AND window_from <= hold_strong_day), FALSE))
+       + COUNTIF(verdict != 'HELD_UNSETTLED' AND hold_kept_by IS NOT NULL)
+  FROM j
+),
+-- G3: fix #16 — the clock is on the row from the first held night
+g3 AS (
+  SELECT 'G3 fix #16 every HELD row carries hold_since, hold_settles_on and hold_strong_day',
+         COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND (hold_since IS NULL OR hold_settles_on IS NULL OR hold_strong_day IS NULL
+                      OR hold_since > CURRENT_DATE('America/Los_Angeles')))
+  FROM j
+),
+-- G4: P-29, computed here from the history and the ads record, not read from the view's own flag.
+-- A memory the row honours: a spent grace (prior_grace), a grace run from before tonight
+-- (verdict GRACE with grace_since earlier than tonight), or a hold run from before tonight
+-- (hold_since earlier than tonight). Its last night: the last GRACE night after the latest grace
+-- reset, or the keyword's last plan night for a hold run (a hold run reaches it by construction).
+g4_mem AS (
+  SELECT j.campaign_id, j.keyword_id, j.window_from, j.window_days, j.family_bar, kind
+  FROM j,
+  UNNEST(ARRAY_CONCAT(
+    IF(j.prior_grace
+       OR (j.verdict = 'GRACE' AND j.grace_since < CURRENT_DATE('America/Los_Angeles')),
+       ['GRACE'], CAST([] AS ARRAY<STRING>)),
+    IF(j.hold_since < CURRENT_DATE('America/Los_Angeles'),
+       ['HOLD'], CAST([] AS ARRAY<STRING>)))) AS kind
+),
+g4_last AS (
+  SELECT h.campaign_id, h.keyword_id,
+         MAX(h.as_of) AS last_night,
+         MAX(IF(h.verdict = 'GRACE' AND (r.grace_from IS NULL OR h.as_of >= r.grace_from),
+                h.as_of, NULL)) AS last_grace_night
+  FROM hist h
+  JOIN (SELECT campaign_id, keyword_id,
+               MAX(CASE WHEN verdict = 'GOOD' THEN DATE_ADD(as_of, INTERVAL 1 DAY)
+                        WHEN memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD') THEN as_of END)
+                 AS grace_from
+        FROM hist GROUP BY 1, 2) r USING (campaign_id, keyword_id)
+  GROUP BY 1, 2
+),
+g4_m AS (
+  SELECT m.*, IF(m.kind = 'HOLD', l.last_night, l.last_grace_night) AS m_night
+  FROM g4_mem m
+  JOIN g4_last l USING (campaign_id, keyword_id)
+),
+g4_gap AS (
+  SELECT m.campaign_id, m.keyword_id, m.kind, m.family_bar, gn,
+         DATE_SUB(gn, INTERVAL 2 DAY) AS g_to
+  FROM g4_m m
+  JOIN hist mh
+    ON mh.campaign_id = m.campaign_id AND mh.keyword_id = m.keyword_id AND mh.as_of = m.m_night
+  CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(DATE_ADD(m.m_night, INTERVAL 1 DAY),
+                                        DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY))) AS gn
+  LEFT JOIN hist h ON h.campaign_id = m.campaign_id AND h.keyword_id = m.keyword_id AND h.as_of = gn
+  WHERE m.m_night < DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL m.window_days + 1 DAY)
+    AND h.as_of IS NULL
+    AND DATE_SUB(gn, INTERVAL 2 DAY) > mh.window_to
+    AND DATE_SUB(gn, INTERVAL 2 DAY) < m.window_from
+),
+g4_win AS (
+  SELECT g.*, c.window_days AS wd_n, c.min_orders AS min_orders_n
+  FROM (SELECT g0.*, `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(g0.gn) AS st FROM g4_gap g0) g
+  JOIN (SELECT calendar_state, window_days, min_orders
+        FROM `onyga-482313.OI.DE_PLAN_CONFIG` WHERE is_active
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1) c
+    ON c.calendar_state = g.st
+),
+g4_rec AS (
+  SELECT w.campaign_id, w.keyword_id, w.kind, w.g_to, w.min_orders_n, w.family_bar,
+         COALESCE(SUM(f.Ads_cost), 0) AS sp, COALESCE(SUM(f.Ads_orders), 0) AS ord,
+         COALESCE(SUM(f.GROSS_PROFIT), 0) AS gp
+  FROM g4_win w
+  LEFT JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
+    ON CAST(f.campaign_id AS STRING) = w.campaign_id AND CAST(f.keyword_id AS STRING) = w.keyword_id
+   AND f.date BETWEEN DATE_SUB(w.g_to, INTERVAL w.wd_n - 1 DAY) AND w.g_to
+  GROUP BY 1, 2, 3, 4, 5, 6
+),
+g4 AS (
+  SELECT 'G4 P-29 no grace or hold memory is honoured across an unwritten gap whose windows read GOOD',
+         COUNT(DISTINCT IF(ord >= min_orders_n
+                           AND COALESCE(SAFE_DIVIDE(gp, NULLIF(sp, 0)), -1) >= family_bar,
+                           CONCAT(campaign_id, '|', keyword_id, '|', kind), NULL))
+  FROM g4_rec
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -289,5 +482,7 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c13 UNION ALL SELECT * FROM c14 UNION ALL SELECT * FROM c15
       UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
-      UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23)
+      UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23
+      UNION ALL SELECT * FROM g1 UNION ALL SELECT * FROM g2 UNION ALL SELECT * FROM g3
+      UNION ALL SELECT * FROM g4)
 ORDER BY check_name;

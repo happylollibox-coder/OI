@@ -34,6 +34,11 @@
 -- (ANY procedure whose three most recent runs all logged FAIL — the generic form of the outage,
 -- which it would have named on day 1). V_DAILY_BRIEF reads this view's RED rows into one SYSTEM
 -- line (section_rank 7), so the alarm reaches the one query Ori reads every morning.
+-- v27.156 (2026-10-02, piece-1 plan Task 2, P-18): c28's hold half reads hold_kept_by. A hold now
+-- also lasts while the very good day that started it is still inside the window, so a HELD row
+-- is RED only when it has neither a very good last day nor hold_kept_by = STRONG_DAY_IN_WINDOW
+-- with window_from <= hold_strong_day; the detail counts the holds kept by that day. Only the
+-- guard and c28 CTEs changed.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -528,7 +533,13 @@ guard AS (  -- the P-14b/P-14c ledger on the live plan, counted once for c28
          COUNTIF(under_guard AND COALESCE(guard_released_by, '') NOT IN ('HOLD_EXPIRED', 'LAST_DAY_NOT_STRONG')) AS n_no_release,
          COUNTIF(under_guard AND guard_released_by IS NULL) AS n_null_release,
          COUNTIF(verdict = 'HELD_UNSETTLED') AS n_held,
-         COUNTIF(verdict = 'HELD_UNSETTLED' AND NOT COALESCE(last_day_strong, FALSE)) AS n_held_weak,
+         -- P-18 (v27.156): a hold is earned by a very good last day OR kept while the very good
+         -- day that started it is still inside the window; hold_kept_by is READ, never re-derived
+         COUNTIF(verdict = 'HELD_UNSETTLED'
+                 AND NOT (COALESCE(last_day_strong, FALSE)
+                          OR (COALESCE(hold_kept_by, '') = 'STRONG_DAY_IN_WINDOW'
+                              AND COALESCE(window_from <= hold_strong_day, FALSE)))) AS n_held_weak,
+         COUNTIF(verdict = 'HELD_UNSETTLED' AND hold_kept_by = 'STRONG_DAY_IN_WINDOW') AS n_held_kept_sd,
          SAFE_DIVIDE(SUM(IF(verdict = 'HELD_UNSETTLED', w_sp, 0)), MAX(window_days)) AS held_per_day
   FROM (SELECT *, (side = 'NOT_GOOD' AND COALESCE(was_good, FALSE) AND COALESCE(served, FALSE)
                    AND NOT COALESCE(settled, FALSE)) AS under_guard
@@ -537,7 +548,7 @@ guard AS (  -- the P-14b/P-14c ledger on the live plan, counted once for c28
 c28 AS (  -- P-14b is a clock and P-14c a last-day test, not a veto: every release is PUBLISHED, every hold is EARNED
   SELECT 'plan_settle_guard_holds',
     CAST(n_no_release + n_held_weak AS FLOAT64),
-    'live-plan rows demoted under the guard preconditions (not-good, was good, served, unsettled) with no release the judge published (HOLD_EXPIRED | LAST_DAY_NOT_STRONG), plus HELD_UNSETTLED rows whose last day was not very good · red > 0 (P-14b, P-14c); red when the live plan is empty',
+    'live-plan rows demoted under the guard preconditions (not-good, was good, served, unsettled) with no release the judge published (HOLD_EXPIRED | LAST_DAY_NOT_STRONG), plus HELD_UNSETTLED rows held by neither a very good last day nor (hold_kept_by STRONG_DAY_IN_WINDOW) the very good day that started the hold still inside the window · red > 0 (P-14b, P-14c, P-18); red when the live plan is empty',
     CASE WHEN n_rows = 0 THEN 'RED' WHEN n_no_release + n_held_weak > 0 THEN 'RED' ELSE 'GREEN' END,
     CONCAT('under the guard preconditions: ', CAST(n_under AS STRING),
            ' — released by LAST_DAY_NOT_STRONG ', CAST(n_lds AS STRING),
@@ -545,7 +556,8 @@ c28 AS (  -- P-14b is a clock and P-14c a last-day test, not a veto: every relea
            ', no release published ', CAST(n_null_release AS STRING),
            ', unknown reason ', CAST(n_no_release - n_null_release AS STRING),
            ' · held (HELD_UNSETTLED): ', CAST(n_held AS STRING),
-           ', of which last day not very good ', CAST(n_held_weak AS STRING),
+           ', of which kept by the very good day still in the window ', CAST(n_held_kept_sd AS STRING),
+           ', held by neither ', CAST(n_held_weak AS STRING),
            ' · the hold is $', FORMAT('%.2f', COALESCE(held_per_day, 0)),
            '/day of window spend the not-good side does not see yet')
   FROM guard
