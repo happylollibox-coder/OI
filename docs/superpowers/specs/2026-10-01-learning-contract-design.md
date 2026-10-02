@@ -271,7 +271,7 @@ do-nothing vs act totals per family.
 | 0 | alarm, observed changes, plan scorecard, rules with history (in flight) | all its acceptance suites green |
 | 1 | audit the 09-28 → today plans; fix what it finds and the two known gaps: proven winners whose quiet window sold nothing lose the seat the night after grace under P-14c; a family whose only good keywords sit in a holdout campaign gets a pot of zero (Bottle) | rules amended and re-ruled by Ori |
 | 2 | ledger view for the plan, response model v1, grader, `T_PREDICTION_SCORECARD`, health checks | first grades on 2026-10-12 (the 09-28 partition + 14 days) |
-| 3 | plan Tasks 3 + 4: the plan owns bids in the preflight; the plan bulksheet | first uploaded plan, so `ACT` and lift can be graded |
+| 3 | the Brain → Pacing handoff (`THREE_LAYERS.md` §3): the plan emits intents — REPAIR with a ceiling, TEST with a seat and a click target, PARK, STOP, EARN — and the preflight holds Pacing inside them (never above a REPAIR ceiling, never a raise on a PARK); and the plan's upload file | first uploaded plan, so `ACT` and lift can be graded |
 | 4 | `FACT_INTENT_FORECAST` and its Sunday procedure | first catalog grades two Sundays later |
 | 5 | plan Task 6, the backtest harness, serving the 12-month replay | replay rows marked `BACKTEST` |
 | 6 | proposer, apply, `DE_RULE_PROPOSALS`, the Proposals panel | the loop closes |
@@ -315,6 +315,9 @@ a capitalised comment on what breaks in production, and negative controls record
   down so it can be wrong in a measurable way.
 - **Outcomes restate.** Grades are frozen at first grading; a `regrade_from` run is the only way they
   move, and it is logged.
+- **The plan is the Brain, not the only engine.** P-11's "one engine" was superseded by
+  `THREE_LAYERS.md` on 2026-08-24: the plan issues intents and Pacing finds today's bid inside them,
+  so piece 3 builds that handoff rather than a preflight in which the plan is the sole price authority.
 
 ## 13. Not in this spec
 

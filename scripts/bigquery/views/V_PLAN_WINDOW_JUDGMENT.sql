@@ -653,8 +653,11 @@ judged AS (
       -- is what is judged; a losing window whose last day "won a little" is not good, and the
       -- guard does not postpone that. Only a last day strong enough to change the window's
       -- reading once its sales land earns the wait -- and the wait is still bounded by the
-      -- clock above. Measured 2026-09-28: of 45 keywords the expired clock was releasing, 4 had
-      -- a very good last day; 41 are judged on the window.
+      -- clock above. Read from the 2026-09-28 live partition of FACT_PLAN_NEXT_WEEK (spec §3b
+      -- publishes the query): all 44 keywords the expired clock released were judged on the
+      -- window -- 40 LAST_DAY_NOT_STRONG, and 4 HOLD_EXPIRED whose last day cleared 1.5x (1.90x,
+      -- 1.93x, 11.71x, 22.19x the bar) on August clocks that had run out. The 4 rows held that
+      -- night were first-night holds at 1.51x-1.65x the bar.
       WHEN s.was_good AND NOT s.settled AND s.served AND NOT s.hold_expired
            AND s.last_day_strong THEN 'HELD_UNSETTLED'
       WHEN s.w_ord >= s.min_orders THEN 'LOSING'

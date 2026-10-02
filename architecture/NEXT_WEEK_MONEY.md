@@ -1,6 +1,6 @@
 # Next Week's Money — SOP
 
-**Spec:** `docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md` (rulings P-1..P-14)
+**Spec:** `docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md` (rulings P-1..P-14c; P-15..P-29 ruled 2026-10-02 and built by `docs/superpowers/plans/2026-10-02-money-plan-rulings-piece1.md`)
 **Plan:** `docs/superpowers/plans/2026-08-23-next-week-money.md` (Tasks 0..8)
 **Status:** Task 0 shipped (v27.130), repaired (v27.131, v27.132); Task 1, the judgement layer, shipped (v27.133). This SOP grows one section per task; Task 8 completes it.
 
@@ -638,10 +638,14 @@ Four properties of those arms were repaired in **v27.134** and each is now asser
   to tell him on each one that the settle correction had already handled it.
 - **Grace is one window, not a standing exemption.** P-5 reads "two quiet windows in a row and rule
   B stands". The view implemented the grant and not the limit, so a settled winner with a
-  permanently quiet window kept the good side forever. Grace is now refused when last night's live
-  plan already granted it (`prior_grace`, read back from `FACT_PLAN_NEXT_WEEK.verdict`), and `C12`
-  asserts both halves. **Task 2 must write `verdict = 'GRACE'` faithfully** — a builder that
-  collapses GRACE into GOOD turns grace back into a permanent exemption.
+  permanently quiet window kept the good side forever. **Ruled 2026-10-02 (P-17):** grace lasts
+  `window_days` nightly judgments, anchored to the night it was granted and to the window length in
+  force that night (a grace granted under a 7-day window keeps 7 nights after a switch to 3), and is
+  spent once that run has lasted its window. Piece-1 Task 2 builds it. Until that deploys, the view
+  grants grace for one nightly judgment and refuses it while the most recent `GRACE` is later than
+  the most recent `GOOD` (`prior_grace`, read back from `FACT_PLAN_NEXT_WEEK.verdict`, v27.135), and
+  `C12` asserts both halves. **The builder must write `verdict = 'GRACE'` faithfully** — a builder
+  that collapses GRACE into GOOD turns grace back into a permanent exemption.
 - **"Was good" prefers last night's plan.** It is `IF(prior_seen, prior_good, ladder_settled_good)`,
   which is what this SOP and the ruling always described. It used to be an unconditional `OR`:
   invisible while the plan table is empty, and decisive once Task 2 fills it, because a keyword the
@@ -1020,7 +1024,7 @@ maintains and the judgement reads the snapshot 20.8 writes.
 |---|---|---|
 | 1 POT | the **GOOD side's** window spend per day, per family. Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2 |
 | 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
-| 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. A family already inside its allowance gets the full allowance and is never ramped *upwards* into a bigger loss budget. Recomputed from actual spend every night, so the sequence converges whether or not anyone uploads on schedule. | P-8 |
+| 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. As built (the builder's own comment in `fam2`): the ramp term alone closes one third of the gap in whichever direction it runs, and the `GREATEST` removes the downward half for a family already inside its allowance — instead of being ramped up one third at a time, it is handed **the whole allowance target on night one**, so a family whose target exceeds its not-good side gets a bigger loss budget immediately (audit 2026-10-02: Lollibox on 09-30, $3.43 a day above its not-good spend; 13 of 24 August family-nights). **Ruled 2026-10-02 (P-21):** the ramped allowance is capped at today's not-good spend, `LEAST(notgood_today, GREATEST(target, notgood_today − (notgood_today − target) / ramp_steps))`, so it never raises a family's loser spend above what it spends tonight; piece-1 Task 4 makes this true. Recomputed from actual spend every night, so the sequence converges whether or not anyone uploads on schedule. | P-8, P-21 |
 | 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, walked in rank order: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. The walk is a recursive rank walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, §4.4 |
 | 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`). | §4.5 |
 | 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. | P-4, §4.6 |
@@ -1102,8 +1106,10 @@ SELECT DISTINCT grace_limit_armed FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
 1. **The holdout is outside the money, not only outside the sheet.** A holdout campaign's spend is
    excluded from the pot, from the not-good side and from the ramp base: a measurement control's
    money is not the plan's to allocate. It still gets a row, a side and a sentence — the
-   counterfactual — and no move. No campaign is eligible before 2026-09-01, so this costs nothing
-   today and everything afterwards. *To overrule:* drop `AND NOT holdout` from the `fam` aggregation.
+   counterfactual — and no move. *To overrule:* drop `AND NOT holdout` from the `fam` aggregation.
+   **Ruled 2026-10-02 (P-15):** the pot counts every GOOD keyword of the family, holdout included;
+   the not-good base and every move keep excluding the holdout. Piece-1 Task 4 builds it; until it
+   deploys the builder reads as this item describes.
 2. **A not-good keyword with nothing to repair gets no move** (spec §9, v27.135): no spend, no
    clicks, no probe nomination means no seat, no queue position and `move = 'NONE'`. Parking a
    keyword that spends nothing saves nothing.
@@ -1293,10 +1299,12 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
    price, and re-derive `C05`, `C07`, `C15` and `C19` — the plan's not-good total would then read as
    the money at risk rather than as the money the plan intends.
 2. **A seat that raises.** P-6 costs a seat at the repaired price, and the ladder's repaired price
-   can be above today's bid; where a family's allowance exceeds its whole not-good side, nothing in
-   the ranking stops the plan spending more there. It is now published per row and per family
-   (`planned_spend_delta_per_day`). *To overrule:* forbid a seat whose repair raises the spend, or
-   cap the book's total raise — either is one predicate in step 4, and neither is in the spec today.
+   can be above today's bid; regardless of allowance headroom, nothing stops the plan spending more
+   there: the fit test has no direction term (audit 2026-10-02: seats raised spend in 16 of 16 live
+   family-nights 09-28 … 10-01; the allowance exceeded the whole not-good side in 1 of them). It is
+   published per row and per family (`planned_spend_delta_per_day`). **Ruled 2026-10-02 (P-19):** a
+   not-good seat whose corrected return is under the family bar is never priced above its current
+   bid; piece-1 Task 3 builds it in the judge.
 3. **P-7's degenerate rank still hands out the seats** (§2's open ruling, unchanged): every
    spend-with-no-sale keyword scores exactly zero, so the biggest bleeders rank last. The fit test
    now lets cheap candidates behind them take seats, which *reduces* the damage but does not fix the
