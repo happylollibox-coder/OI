@@ -134,9 +134,24 @@
 -- than taken on faith. Restrict such a check to window_used = 'PRIMARY' — the EXTENDED window
 -- overlaps next14 and would be circular.
 --
--- SOURCE: V_PPC_CHANGE_LOG_APPLIED, never raw FACT_PPC_CHANGE_LOG — the applied view already drops
--- the 40 FAILED_UPLOAD rows from the 2026-08-06 silent upload failure, and grading a change that
--- never landed in Amazon is grading noise.
+-- SOURCE: V_PPC_CHANGE_LOG_LANDED (since 2026-10-01), never raw FACT_PPC_CHANGE_LOG. LANDED is
+-- V_PPC_CHANGE_LOG_APPLIED — which drops the FAILED_UPLOAD rows of the 2026-08-06 silent upload
+-- failure, the superseded and the still-pending books, because grading a change that never landed
+-- in Amazon is grading noise — PLUS the changes SP_RECORD_OBSERVED_CHANGES reads off the DIM SCD2
+-- trail from 2026-08-20 (source = 'OBSERVED'): the hand changes made in the console, which the log
+-- never saw. A logged change whose landing was also observed is ONE row (the logged one, marked
+-- landed_evidence = 'LOGGED_AND_SEEN_ON_AMAZON'); see V_PPC_CHANGE_LOG_LANDED for the pairing.
+-- Observed rows are graded by exactly the logic above: same windows, same read gate, same verdict
+-- ladder, and they count as later changes in the contamination flags of the rows around them.
+-- Split them with `source` (COACH / MANUAL / OBSERVED / the books' BRAIN:*, CATALOG:*, PACING:*).
+-- The observed rows carry no coach snapshot (target_*_8w NULL, coach_mode NULL). Their action
+-- names are the log's (INCREASE_BID / REDUCE_BID / BUDGET_CHANGE / KEYWORD_PAUSE / ...), so
+-- KEYWORD_PAUSE, KEYWORD_ENABLE and CAMPAIGN_PAUSE land in OTHER (campaign grain, not
+-- decision-grade) exactly as the logged pauses always have.
+-- DOWNSTREAM: V_DAILY_BRIEF, V_THRESHOLD_TUNER and V_ENGINE_HEALTH read this view WITHOUT the
+-- observed rows (source != 'OBSERVED' in each) so the morning brief, the threshold proposals and
+-- the health board read what they read before the ledger existed. Letting graded hand changes
+-- into them is Ori's decision. V_MANUAL_DIVERGENCE reads source = 'MANUAL' only.
 --
 -- DETERMINISM: plain SUMs over fixed date windows; no ANY_VALUE pairs (v27.46 lesson — never divide
 -- two ANY_VALUEs out of one GROUP BY); the dedup QUALIFY is fully tie-broken on (applied_at,
@@ -177,8 +192,9 @@ chg_raw AS (
     c.product,
     c.old_bid, c.new_bid, c.old_budget, c.new_budget,
     c.target_spend_8w, c.target_orders_8w, c.target_net_roas_8w,
-    c.coach_mode, c.source
-  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED` c
+    c.coach_mode, c.source,
+    c.landed_evidence, c.paired_change_id
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED` c
   WHERE DATE(c.applied_at, 'America/Los_Angeles')
         >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 180 DAY)
     AND c.campaign_id IS NOT NULL
@@ -606,5 +622,8 @@ SELECT
   IF(f.next14_readable, f.next14_spend,  NULL) AS next14_spend,
   IF(f.next14_readable, f.next14_orders, NULL) AS next14_orders,
   IF(f.next14_readable, f.next14_gp,     NULL) AS next14_gp,
-  IF(f.next14_readable, f.next14_gp_roas_raw, NULL) AS next14_gp_roas
+  IF(f.next14_readable, f.next14_gp_roas_raw, NULL) AS next14_gp_roas,
+
+  -- ── provenance of the action record (2026-10-01; see V_PPC_CHANGE_LOG_LANDED) ───────────────
+  f.landed_evidence, f.paired_change_id
 FROM fin2 f;

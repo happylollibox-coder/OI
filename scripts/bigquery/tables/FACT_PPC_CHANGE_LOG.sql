@@ -7,7 +7,12 @@
 -- time so each change is explainable and scoreable later.
 --
 -- Writer:  Flask POST /api/ppc-change-log (data-entry-app/app.py)
--- Reader:  V_PPC_ACTION_OUTCOMES (pre/post window outcome scoring)
+--          tools/build_*_bulksheet.py, tools/build_weekly_book.py (books, PENDING_UPLOAD until confirmed)
+--          SP_RECORD_OBSERVED_CHANGES (2026-10-01: changes the DIM SCD2 trail shows on Amazon,
+--          source OBSERVED, upload_status OBSERVED_ON_AMAZON; see migration
+--          2026-10-01_change_log_observed_status.sql for the status list)
+-- Reader:  V_PPC_CHANGE_LOG_APPLIED (the engines; excludes OBSERVED_ON_AMAZON),
+--          V_PPC_CHANGE_LOG_LANDED (the grader, V_CHANGE_SCORECARD)
 -- SOP:     architecture/PPC_CLOSE_THE_LOOP.md
 --
 -- applied_at is a UTC TIMESTAMP; downstream views derive the LA-local

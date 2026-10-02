@@ -23,4 +23,15 @@ FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
 -- as applied — otherwise the keyword state machine re-reads them as changes that happened
 -- (cooldowns, holds and re-judge dates all moved on a file that was still on disk). Flip the
 -- status to NULL on confirmation; never delete the rows.
-WHERE COALESCE(upload_status, '') NOT IN ('FAILED_UPLOAD', 'SUPERSEDED_NEVER_UPLOADED', 'PENDING_UPLOAD');
+-- OBSERVED_ON_AMAZON (2026-10-01, SP_RECORD_OBSERVED_CHANGES): a change read off the DIM SCD2 trail
+-- (source = 'OBSERVED') — hand changes made in the console, and the landing of changes OI logged.
+-- They are kept OUT of this view on purpose. Every reader of this view (cooldowns, the keyword
+-- state machine's probation clock, seat registers, 48-hour change detection, negative sync, the
+-- outcome views; list them with SELECT table_name FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
+-- WHERE STRPOS(view_definition, 'V_PPC_CHANGE_LOG_APPLIED') > 0, and the same on ROUTINES) keeps
+-- reading exactly the rows it read before the ledger existed (OBSERVED_CHANGES_acceptance.sql C06);
+-- letting hand changes in would move cooldowns and clocks, which is a decision for Ori, not a side
+-- effect of recording. The grader reads them through V_PPC_CHANGE_LOG_LANDED, which unions this
+-- view with the observed rows and counts a logged change and its observed landing once.
+WHERE COALESCE(upload_status, '') NOT IN ('FAILED_UPLOAD', 'SUPERSEDED_NEVER_UPLOADED', 'PENDING_UPLOAD',
+                                          'OBSERVED_ON_AMAZON');

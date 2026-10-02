@@ -31,6 +31,9 @@ WITH graded AS (
          ELSE 'step >20%' END AS step_bucket
   FROM `onyga-482313.OI.V_CHANGE_SCORECARD`
   WHERE verdict IS NOT NULL AND verdict != 'INSUFFICIENT'
+    -- 2026-10-01: graded hand changes (source OBSERVED, read off the DIM SCD2 trail) are not yet
+    -- evidence for the coach's step sizes; admitting them is Ori's call (PPC_CLOSE_THE_LOOP.md)
+    AND source != 'OBSERVED'
 ),
 cells AS (
   SELECT action_group, step_bucket,

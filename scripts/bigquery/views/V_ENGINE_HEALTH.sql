@@ -41,10 +41,14 @@ ks AS (SELECT * FROM `onyga-482313.OI.FACT_KEYWORD_STATE`),
 -- ONE shared scorecard scan (review 2026-08-16, planner safety): c6 and c7 both read THIS CTE.
 -- Before this, c7 read V_MANUAL_DIVERGENCE, which embeds its own full V_CHANGE_SCORECARD scan —
 -- two copies of the ceiling view inlined into one statement.
+-- 2026-10-01: the scorecard now also grades changes observed on Amazon (source = 'OBSERVED', hand
+-- changes from the DIM SCD2 trail). They are left out here so c6 and c7 measure what they always
+-- measured; counting graded hand changes on the board is Ori's call (PPC_CLOSE_THE_LOOP.md).
 sc AS (
   SELECT source, verdict, change_date, change_id, campaign_id, keyword_id, action_group,
          SAFE_CAST(new_value AS FLOAT64) AS new_val
   FROM `onyga-482313.OI.V_CHANGE_SCORECARD`
+  WHERE source != 'OBSERVED'
 ),
 
 c1 AS (  -- contradiction rate: EXCLUDE share of the day's instructions

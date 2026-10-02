@@ -112,6 +112,55 @@ Timezone note (per the layered model): `applied_at` is a UTC `TIMESTAMP`;
 **all window math happens in `V_PPC_ACTION_OUTCOMES` using
 `DATE(applied_at, 'America/Los_Angeles')`** so it aligns with `FACT_AMAZON_ADS.date`.
 
+## Observed changes — every real change on Amazon is recorded (2026-10-01)
+
+The log records what OI's tooling put through. From late August 2026 the changes were made by
+hand in the console, and the log saw none of them; only the DIM SCD2 trail did. The learning loop
+(decision → **action** → outcome → grade → rule) therefore had no action record, and the scorecard
+graded proposals that were never applied while missing the changes that were.
+
+```
+DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
+  └─> V_AMAZON_OBSERVED_CHANGES     one row per changed attribute (bid, state, budget, default bid);
+        │                            a new entity's first version is a creation, never a row
+        └─> SP_RECORD_OBSERVED_CHANGES   (Refresh Task 2.2a, nightly, idempotent)
+              └─> FACT_PPC_CHANGE_LOG    source 'OBSERVED', upload_status 'OBSERVED_ON_AMAZON',
+                    │                     change_id 'obs|<DIM>|<id>|<attribute>|<effective_from>'
+                    ├─X V_PPC_CHANGE_LOG_APPLIED   EXCLUDES them: every engine reads what it read before
+                    └─> V_PPC_CHANGE_LOG_LANDED    APPLIED + observed rows, a confirmed pair counted once
+                          └─> V_CHANGE_SCORECARD   grades them with the same logic; split by `source`
+                                ├─X V_DAILY_BRIEF / V_THRESHOLD_TUNER / V_ENGINE_HEALTH  (source != 'OBSERVED')
+                                └─> Cube ChangeScorecard (carries `source`)
+```
+
+- **Ledger scope**: effective_from after 2026-08-20 (declared in the view's `in_ledger_scope`).
+  The watermark is `MAX(applied_at)` of the OBSERVED rows; each run rescans 7 days before it
+  because Fivetran delivers a version hours after its own timestamp.
+- **applied_at** = `TIMESTAMP(effective_from, 'UTC')`: the DIM loaders keep the UTC wall clock, so
+  this is the real instant and readers take the LA day exactly as for every other row. For SP
+  keywords, product targets and campaigns the instant is Amazon's `last_updated_date`; for SB
+  keywords (the `sb_keyword` mirror keeps no history) it is the sync that first saw the value.
+- **Reconciliation, not duplication**: a change OI logged and that then landed shows up twice. The
+  observed row is still written (log rows are never updated) with `upload_note` starting
+  `CONFIRMS <change_id>`; `V_PPC_CHANGE_LOG_LANDED` keeps the log row (`landed_evidence =
+  'LOGGED_AND_SEEN_ON_AMAZON'`) and drops its twin. Match: same keyword (bid, keyword state) or
+  campaign (budget, campaign state), same new value (bid ±$0.005, budget ±$0.01), landed within
+  `[log stamp − 1 day, log stamp + 3 days]` — the day before because Ori uploads first and marks
+  the batch after. Only NULL or PENDING_UPLOAD log rows can be confirmed; a FAILED_UPLOAD /
+  SUPERSEDED row whose value landed anyway leaves the observed row UNLOGGED with a note naming it.
+- **Why the engines do not read them (yet)**: a hand cut to the floor would start the keyword
+  state machine's probation clock, a hand change would count as the keyword's last change for the
+  coach's cooldown, the seat register's last applied bid would move. That may be right, but it is Ori's decision, not a side effect of recording.
+  Same for the morning brief (restores of hand changes), the board's reversed share and the
+  threshold tuner. To turn any of them on, drop its `source != 'OBSERVED'` filter (or, for the
+  engines, the `OBSERVED_ON_AMAZON` exclusion in `V_PPC_CHANGE_LOG_APPLIED`).
+- **Grain caveat**: observed KEYWORD_PAUSE / KEYWORD_ENABLE / CAMPAIGN_PAUSE land in the
+  scorecard's `OTHER` group (campaign grain, not decision-grade), as the logged pauses always have.
+- **Acceptance**: `scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql` — completeness and
+  idempotence, no first version, every row a real DIM version pair, the 2026-08-26 ME-SP/AUTO
+  close-match raise, APPLIED unchanged, LANDED counts each change once, the downstream filters —
+  each with a negative control.
+
 ## V_PPC_ACTION_OUTCOMES
 
 - **SQL**: `scripts/bigquery/views/V_PPC_ACTION_OUTCOMES.sql`
@@ -434,6 +483,7 @@ so Weekly Run always renders.
 | 2026-08-22 | **`SUPERSEDED_NEVER_UPLOADED` + `upload_note`**: the reprice book's 07:56 UTC batch `reprice_book_20260822` (54 rows: 27 raises, 22 cuts, 5 KEYWORD_PAUSE with NULL new_bid) failed adversarial verification and was never uploaded; labelled by migration `2026-08-22_reprice_batch_superseded.sql`, `V_PPC_CHANGE_LOG_APPLIED` now excludes both non-NULL statuses, and `SP_SNAPSHOT_KEYWORD_STATE` v27.105 reads the applied view for its probation clock. The generator (`tools/build_reprice_bulksheet.py`) asserts sheet rows == logged rows and labels prior batches only by explicit `--supersede`. |
 | 2026-08-12 | **`V_CHANGE_SCORECARD`** — the settled OUTCOME half of Ori's "1 day for opportunity, 7 days for outcome" doctrine, finally built. Graded `[T+1,T+7]` (SB `[T+1,T+14]`) read no earlier than T+14 (SB T+21), against the entity's own settled `[T-28,T-1]` record. Verdicts CONFIRMED / NEUTRAL / REVERSED / INSUFFICIENT; REVERSED restores the pre-change value and never goes lower. Tier-COGS GP-ROAS, same currency as the revival bar. |
 | 2026-08-12 | **Weekly Run surfaces**: `ChangeScorecard` cube + "How did last week's changes do?" panel (this doc, §Cube + Dashboard), and `ParkReverdict` cube + Revivals panel (`SEASON_CONTEXT_LEDGER.md` §7.11). Both display-only, both on the page where Ori initiates changes. Not deployed — needs a cube restart + cache stamp. |
+| 2026-10-01 | **Observed changes** (learning-system Task B): `SP_RECORD_OBSERVED_CHANGES` (Refresh Task 2.2a) writes every change the DIM SCD2 trail shows since 2026-08-20 into the log as `source='OBSERVED'`, `upload_status='OBSERVED_ON_AMAZON'`; `V_PPC_CHANGE_LOG_APPLIED` excludes them; `V_PPC_CHANGE_LOG_LANDED` feeds them to `V_CHANGE_SCORECARD`; the brief, tuner and board filter them out until Ori decides. See §Observed changes. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |
 
 

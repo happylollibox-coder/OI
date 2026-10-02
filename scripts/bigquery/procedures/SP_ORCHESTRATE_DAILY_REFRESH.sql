@@ -352,6 +352,48 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 2.2a: SP_RECORD_OBSERVED_CHANGES (depends on DIM_KEYWORD, DIM_CAMPAIGN, DIM_AD_GROUP)
+  --   Added 2026-10-01 (learning-system Task B). Writes every change the three SCD2 loads above
+  --   saw on Amazon (bids, states, budgets, ad-group default bids) into FACT_PPC_CHANGE_LOG as
+  --   source OBSERVED, upload_status OBSERVED_ON_AMAZON, naming the logged row each one confirms.
+  --   It is the only record of changes made by hand in the console. Placed right after the last
+  --   DIM load so it reads the versions this pass just wrote. Idempotent; re-runs insert nothing
+  --   twice. V_PPC_CHANGE_LOG_APPLIED excludes these rows, so no engine step reads them;
+  --   V_CHANGE_SCORECARD grades them through V_PPC_CHANGE_LOG_LANDED.
+  -- ============================================
+  SET procedure_name = 'SP_RECORD_OBSERVED_CHANGES';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_RECORD_OBSERVED_CHANGES`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 2.3: DIM_LISTING_HISTORY (SCD2)
   -- ============================================
   SET procedure_name = 'SP_LOAD_DIM_LISTING_HISTORY';

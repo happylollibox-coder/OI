@@ -305,6 +305,9 @@ verdict_new AS (
   FROM `onyga-482313.OI.V_CHANGE_SCORECARD` s
   WHERE s.read_gate_date BETWEEN DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 3 DAY)
                              AND CURRENT_DATE('America/Los_Angeles')
+    -- 2026-10-01: graded hand changes (source OBSERVED, read off the DIM SCD2 trail) stay off the
+    -- brief until Ori decides they belong here; the scorecard itself carries them.
+    AND s.source != 'OBSERVED'
 ),
 
 action_items AS (
@@ -366,6 +369,9 @@ action_items AS (
     AND ABS(COALESCE(live_kw.bid, live_c.daily_budget) - SAFE_CAST(s.new_value AS FLOAT64)) <= 0.011
     AND ABS(SAFE_CAST(s.remedy_value AS FLOAT64) - SAFE_CAST(s.new_value AS FLOAT64)) > 0.011  -- no-op remedies out
     AND s.read_gate_date >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 14 DAY)
+    -- 2026-10-01: no restore of a hand change (source OBSERVED) is put on the morning list until
+    -- Ori decides graded hand changes belong here (PPC_CLOSE_THE_LOOP.md §Observed changes)
+    AND s.source != 'OBSERVED'
 ),
 
 -- v27.123 SEATS. The register's image, read once: a small table scan, not a plan (the register
