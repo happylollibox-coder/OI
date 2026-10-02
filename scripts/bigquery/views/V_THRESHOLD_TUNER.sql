@@ -19,10 +19,19 @@
 -- as-of change dates, which accumulates from 2026-08-16 (FACT_KEYWORD_STATE) and grades from
 -- ~2026-08-29. The first question is queued in the SOP: did family context separate good raises
 -- from bad. NOT computable yet — absent here, not faked.
+--
+-- HAND CHANGES ARE EVIDENCE, LABELLED AS ORI'S (Ori ruled 2026-10-02). The scorecard grades the
+-- changes SP_RECORD_OBSERVED_CHANGES reads off the DIM SCD2 trail (source = 'OBSERVED': bid, state
+-- and budget changes made by hand on Amazon). From 2026-10-01 to 10-02 they were held out of this
+-- view pending that ruling; without them the tuner had no new evidence after 2026-08-24, the last
+-- day OI's own tooling logged a change. They now count in every cell, and every cell says how many
+-- of its graded changes were Ori's (era_split carries `hand H/N`, the proposal sentence names H), so
+-- a proposal resting mostly on hand changes reads as such. The brief, the health board and the
+-- engines' own clocks still leave them out; that was not part of the ruling.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_THRESHOLD_TUNER` AS
 WITH graded AS (
-  SELECT action_group, verdict, change_date,
+  SELECT action_group, verdict, change_date, source,
     -- era split: two halves of the graded history, for the two-era promotion bar
     IF(change_date < DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 21 DAY), 'ERA_1', 'ERA_2') AS era,
     CASE WHEN ABS(COALESCE(pct_change, 0)) <= 7.5 THEN 'step ≤5%'
@@ -31,9 +40,6 @@ WITH graded AS (
          ELSE 'step >20%' END AS step_bucket
   FROM `onyga-482313.OI.V_CHANGE_SCORECARD`
   WHERE verdict IS NOT NULL AND verdict != 'INSUFFICIENT'
-    -- 2026-10-01: graded hand changes (source OBSERVED, read off the DIM SCD2 trail) are not yet
-    -- evidence for the coach's step sizes; admitting them is Ori's call (PPC_CLOSE_THE_LOOP.md)
-    AND source != 'OBSERVED'
 ),
 cells AS (
   SELECT action_group, step_bucket,
@@ -44,7 +50,12 @@ cells AS (
     CONCAT('era1 ', CAST(COUNTIF(era = 'ERA_1' AND verdict = 'REVERSED') AS STRING), '/',
            CAST(COUNTIF(era = 'ERA_1') AS STRING), ' rev · era2 ',
            CAST(COUNTIF(era = 'ERA_2' AND verdict = 'REVERSED') AS STRING), '/',
-           CAST(COUNTIF(era = 'ERA_2') AS STRING)) AS era_split
+           CAST(COUNTIF(era = 'ERA_2') AS STRING),
+           ' · hand ', CAST(COUNTIF(source = 'OBSERVED') AS STRING), '/', CAST(COUNT(*) AS STRING)) AS era_split,
+    COUNTIF(source = 'OBSERVED') AS n_hand,
+    IF(COUNTIF(source = 'OBSERVED') > 0,
+       CONCAT(' (', CAST(COUNTIF(source = 'OBSERVED') AS STRING), " of them Ori's own changes on Amazon)"),
+       '') AS hand_note
   FROM graded
   GROUP BY 1, 2
   HAVING COUNT(*) >= 20
@@ -56,11 +67,11 @@ proposals AS (
     CASE
       WHEN reversed_rate > 0.40 THEN
         CONCAT('REVERSED at ', CAST(CAST(reversed_rate * 100 AS INT64) AS STRING), '% of ',
-               CAST(n AS STRING), ' graded — propose the next-GENTLER step for this action class ',
+               CAST(n AS STRING), ' graded', hand_note, ' — propose the next-GENTLER step for this action class ',
                '(a false cut kills a winner forever; a false gentle step costs a day)')
       WHEN confirm_rate > 0.70 AND action_group IN ('BID_UP', 'BUDGET_UP') THEN
         CONCAT('CONFIRMED at ', CAST(CAST(confirm_rate * 100 AS INT64) AS STRING), '% of ',
-               CAST(n AS STRING), ' graded raises — propose widening the raise gate one notch ',
+               CAST(n AS STRING), ' graded raises', hand_note, ' — propose widening the raise gate one notch ',
                '(evidence says this raise class pays)')
       ELSE NULL END AS proposal,
     CAST(NULL AS STRING) AS write_target  -- no coach-grain key matches a ladder-step proposal yet

@@ -148,9 +148,10 @@
 -- names are the log's (INCREASE_BID / REDUCE_BID / BUDGET_CHANGE / KEYWORD_PAUSE / ...), so
 -- KEYWORD_PAUSE, KEYWORD_ENABLE and CAMPAIGN_PAUSE land in OTHER (campaign grain, not
 -- decision-grade) exactly as the logged pauses always have.
--- DOWNSTREAM: V_DAILY_BRIEF, V_THRESHOLD_TUNER and V_ENGINE_HEALTH read this view WITHOUT the
--- observed rows (source != 'OBSERVED' in each) so the morning brief, the threshold proposals and
--- the health board read what they read before the ledger existed. So does Cube ChangeScorecard
+-- DOWNSTREAM: V_DAILY_BRIEF and V_ENGINE_HEALTH read this view WITHOUT the observed rows
+-- (source != 'OBSERVED' in each) so the morning brief and the health board read what they read
+-- before the ledger existed. V_THRESHOLD_TUNER reads them since Ori's ruling of 2026-10-02 and
+-- labels each cell with how many were his hand changes. So does Cube ChangeScorecard
 -- (cube/schema/ChangeScorecard.js, a live read with a 15-minute cache), which feeds the Weekly
 -- Run panel "How did last week's changes do?" (dashboard-react/src/pages/ChangeScorecardPanel.tsx):
 -- without its filter that panel listed hand changes as REVERSED with a value to restore.

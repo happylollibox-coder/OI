@@ -129,7 +129,8 @@ DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
                     ├─X V_PPC_CHANGE_LOG_APPLIED   EXCLUDES them: every engine reads what it read before
                     └─> V_PPC_CHANGE_LOG_LANDED    APPLIED + observed rows, a confirmed pair counted once
                           └─> V_CHANGE_SCORECARD   grades them with the same logic; split by `source`
-                                ├─X V_DAILY_BRIEF / V_THRESHOLD_TUNER / V_ENGINE_HEALTH  (source != 'OBSERVED')
+                                ├─X V_DAILY_BRIEF / V_ENGINE_HEALTH  (source != 'OBSERVED')
+                                ├─> V_THRESHOLD_TUNER   counts them, labelled `hand H/N` per cell (Ori, 2026-10-02)
                                 └─X Cube ChangeScorecard  (source != 'OBSERVED' in its sql; live, 15-min cache)
                                       └─> Weekly Run panel "How did last week's changes do?"
 ```
@@ -491,6 +492,7 @@ so Weekly Run always renders.
 | 2026-08-12 | **Weekly Run surfaces**: `ChangeScorecard` cube + "How did last week's changes do?" panel (this doc, §Cube + Dashboard), and `ParkReverdict` cube + Revivals panel (`SEASON_CONTEXT_LEDGER.md` §7.11). Both display-only, both on the page where Ori initiates changes. Not deployed — needs a cube restart + cache stamp. |
 | 2026-10-01 | **Observed changes** (learning-system Task B): `SP_RECORD_OBSERVED_CHANGES` (Refresh Task 2.2a) writes every change the DIM SCD2 trail shows since 2026-08-20 into the log as `source='OBSERVED'`, `upload_status='OBSERVED_ON_AMAZON'`; `V_PPC_CHANGE_LOG_APPLIED` excludes them; `V_PPC_CHANGE_LOG_LANDED` feeds them to `V_CHANGE_SCORECARD`; the brief, tuner and board filter them out until Ori decides. See §Observed changes. |
 | 2026-10-01 | **Weekly Run panel holds hand changes out too** (Task B follow-up): Cube `ChangeScorecard` reads `V_CHANGE_SCORECARD` with `WHERE source != 'OBSERVED'`, the brief's decision, so the panel no longer lists hand changes under "restore". Not live until the cube is restarted / redeployed. File check `scripts/bigquery/tests/check_change_scorecard_cube.py`. |
+| 2026-10-02 | **Ori ruled: hand changes are evidence, labelled as his** — for the threshold tuner and the Weekly Run panel (the brief, the board and the engines' clocks were not part of the ruling and still leave them out). `V_THRESHOLD_TUNER` drops its `source != 'OBSERVED'` filter; every cell's `era_split` ends `hand H/N` and the proposal sentence names H. With them, era 2 has graded changes for the first time since 2026-08-24. `OBSERVED_CHANGES_acceptance` C09 now holds the tuner to the twin WITH the observed rows and checks the printed hand count; C09n turned round. The panel side is the separate task 'Label observed hand changes in the scorecard panel'. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |
 
 

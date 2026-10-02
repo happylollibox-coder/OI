@@ -7,7 +7,8 @@
 --          scripts/bigquery/views/V_PPC_CHANGE_LOG_APPLIED.sql (excludes OBSERVED_ON_AMAZON),
 --          scripts/bigquery/views/V_PPC_CHANGE_LOG_LANDED.sql (the grader's source),
 --          scripts/bigquery/views/V_CHANGE_SCORECARD.sql (grades the observed rows too),
---          V_DAILY_BRIEF / V_ENGINE_HEALTH / V_THRESHOLD_TUNER (read the scorecard without them).
+--          V_DAILY_BRIEF / V_ENGINE_HEALTH (read the scorecard without them); V_THRESHOLD_TUNER reads them,
+--          labelled as Ori's, since his ruling of 2026-10-02.
 -- The fourth reader of the scorecard, Cube ChangeScorecard (cube/schema/ChangeScorecard.js, the
 -- Weekly Run panel), is a JavaScript file no query can read; its filter is checked by
 -- scripts/bigquery/tests/check_change_scorecard_cube.py, not here.
@@ -125,7 +126,7 @@ CREATE TEMP TABLE brief AS
 CREATE TEMP TABLE board AS
   SELECT check_name, measured, detail FROM `onyga-482313.OI.V_ENGINE_HEALTH`;
 CREATE TEMP TABLE tuner AS
-  SELECT scope, n FROM `onyga-482313.OI.V_THRESHOLD_TUNER`;
+  SELECT scope, n, era_split FROM `onyga-482313.OI.V_THRESHOLD_TUNER`;
 
 -- every DIM version, keyed by what an observed change_id names: entity, id, effective_from.
 -- The predecessor is found through the loader's own close-out stamp (effective_to = the next
@@ -458,14 +459,15 @@ CREATE TEMP TABLE tuner_twin AS
                      WHEN ABS(COALESCE(pct_change, 0)) <= 12.5 THEN 'step ~10%'
                      WHEN ABS(COALESCE(pct_change, 0)) <= 20 THEN 'step ~15%'
                      ELSE 'step >20%' END) AS scope,
-         COUNT(*) AS n
+         COUNT(*) AS n,
+         COUNTIF(source = 'OBSERVED') AS n_hand
   FROM sc, UNNEST(['WITHOUT', 'WITH']) AS w
   WHERE verdict IS NOT NULL AND verdict != 'INSUFFICIENT'
     AND (w = 'WITH' OR source != 'OBSERVED')
   GROUP BY 1, 2
   HAVING COUNT(*) >= 20;
 -- the tuner's printed proposal rows (the static PARK citation row carries n = 0 and no cell)
-CREATE TEMP TABLE tuner_rows AS SELECT scope, n FROM tuner WHERE scope NOT LIKE 'PARK calibration%';
+CREATE TEMP TABLE tuner_rows AS SELECT scope, n, SAFE_CAST(REGEXP_EXTRACT(era_split, r'hand (\d+)/') AS INT64) AS n_hand FROM tuner WHERE scope NOT LIKE 'PARK calibration%';
 
 WITH
 L AS (SELECT * FROM per_copy WHERE copy = 'LIVE'),
@@ -569,29 +571,35 @@ c08n AS (
          (SELECT IF(v >= 1, 0, 1) FROM sc_v WHERE copy = 'NC_TWIN_GRADED')
        + (SELECT IF(v >= 1, 0, 1) FROM sc_v WHERE copy = 'NC_ORPHAN')
 ),
--- THE MORNING BRIEF, THE BOARD OR THE TUNER CHANGED UNDER ORI WITHOUT A DECISION: a restore of a
--- hand change on the action list, a moved reversed-share, a threshold proposal fed by hand changes.
+-- THE MORNING BRIEF OR THE BOARD CHANGED UNDER ORI WITHOUT A DECISION (a restore of a hand change on
+-- the action list, a moved reversed-share), OR THE TUNER LOST ORI'S HAND CHANGES OR STOPPED SAYING SO.
+-- Ori ruled 2026-10-02 that graded hand changes are evidence for the threshold tuner, labelled as
+-- his; the brief and the board were not part of that ruling and still leave them out. So the tuner
+-- arm compares with the twin computed WITH the observed rows, and its printed `hand H/N` must equal
+-- the twin's hand count on every scope.
 c09 AS (
-  SELECT 'C09 brief VERDICT_NEW, board c6 and tuner n equal their twins computed WITHOUT the observed rows',
+  SELECT 'C09 brief VERDICT_NEW and board c6 equal their twins WITHOUT the observed rows; tuner n and its hand count equal the twin WITH them',
          (SELECT IF((SELECT COUNTIF(section = 'VERDICT_NEW') FROM brief) = n_without, 0, 1) FROM brief_twin)
        + (SELECT IF(COUNT(*) = 1, 0, 1) FROM board WHERE check_name = 'scorecard_reversed_share')
        + (SELECT COUNTIF(NOT COALESCE(b.measured = t.measured AND b.detail = t.detail, FALSE))
           FROM board b, c6_twin t WHERE b.check_name = 'scorecard_reversed_share' AND t.copy = 'WITHOUT')
        + (SELECT COUNT(*) FROM tuner_rows r
-          WHERE NOT EXISTS (SELECT 1 FROM tuner_twin t WHERE t.copy = 'WITHOUT' AND t.scope = r.scope AND t.n = r.n))
+          WHERE NOT EXISTS (SELECT 1 FROM tuner_twin t WHERE t.copy = 'WITH' AND t.scope = r.scope
+                                                         AND t.n = r.n AND t.n_hand = r.n_hand))
 ),
 c09n AS (
-  SELECT 'C09n NEGATIVE CONTROL the twins WITH the observed rows differ from the deployed figures (each vacuous when no observed row falls in its window)',
+  SELECT 'C09n NEGATIVE CONTROL brief and board twins WITH the observed rows, and the tuner twin WITHOUT them, differ from the deployed figures (each vacuous when no observed row falls in its window)',
          (SELECT COUNTIF(NOT (w.measured = o.measured AND w.detail = o.detail)   -- equal: no observed row in 42 days, vacuous
                          AND COALESCE(b.measured = w.measured AND b.detail = w.detail, FALSE))
           FROM c6_twin w JOIN c6_twin o ON w.copy = 'WITH' AND o.copy = 'WITHOUT'
           CROSS JOIN board b WHERE b.check_name = 'scorecard_reversed_share')
        + (SELECT IF(n_with = n_without, 0,
                     IF((SELECT COUNTIF(section = 'VERDICT_NEW') FROM brief) != n_with, 0, 1)) FROM brief_twin)
-       + (SELECT IF((SELECT COUNT(*) FROM tuner_rows r JOIN tuner_twin t ON t.copy = 'WITH' AND t.scope = r.scope AND t.n != r.n) > 0
-                    OR NOT EXISTS (SELECT 1 FROM tuner_twin w JOIN tuner_twin o ON o.copy = 'WITHOUT' AND o.scope = w.scope
-                                   JOIN tuner_rows r ON r.scope = w.scope
-                                   WHERE w.copy = 'WITH' AND w.n != o.n), 0, 1))
+       -- tuner, turned round with the 2026-10-02 ruling: the twin WITHOUT the observed rows must differ
+       -- from the deployed n on at least one printed scope (vacuous, 0, when no printed scope holds a
+       -- hand change)
+       + (SELECT IF((SELECT COUNT(*) FROM tuner_rows r JOIN tuner_twin t ON t.copy = 'WITHOUT' AND t.scope = r.scope AND t.n != r.n) > 0
+                    OR NOT EXISTS (SELECT 1 FROM tuner_rows r WHERE r.n_hand > 0), 0, 1))
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c01n UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c02n
