@@ -45,6 +45,48 @@
 --       plan that RAISES the not-good side says so in a column and not only in prose.
 --   C21 NEW — PAUSE fires only on a keyword the ladder has already closed (§4.5, "paused if
 --       already closed"), and a paused row carries no planned bid for a book to upload.
+--
+-- v27.158 (2026-10-02, piece-1 plan Task 4 — Ori's rulings R1 / R7 / R8 = spec P-15 / P-21 / P-22,
+-- audit fixes #11 #12 #15 #24). RESTATED: C03 (the pot counts every GOOD keyword, holdout included),
+-- C04 (the ramped allowance is capped at today's not-good spend), C08 (a holdout campaign's cap is
+-- not moved, NO_MOVE_HOLDOUT, and every holdout row says it is a measurement control), C11 (the band
+-- and the floor at need govern caps the plan MOVES), C15 (pot + not-good = the window spend outside
+-- the not-good holdout rows), C16 (ramp_step = LEAST(ramp_steps, plan_uploads_landed)). NEW: M1
+-- (allowance <= not-good today), M2 (every cap names its §4.7 rule and follows it), M3 (expected
+-- after upload and share_closed recount from the rows). Each restated and new check carries an
+-- emptiness term: an empty partition reads 1, not 0.
+-- NEGATIVE CONTROLS, run 2026-10-02 (Los Angeles) by scripts/bigquery/tests/check_plan_money_controls.py
+-- (this file's own text on doctored copies of the plan's latest two partitions, with the judgement
+-- read from the snapshot OI._tmp_t4_judge taken 14:50 UTC: the builder's dry run on that snapshot
+-- and the partition the CALL wrote from the deployed view at 15:10 UTC differ only by <= 3e-14 on
+-- 12 float columns; exit 0; job bqjob_r6a564fa2d4a74eb9_000001a0fd2fb384_1, 6,729 slot-seconds
+-- for LIVE + 20 copies). Run directly on the live partition and the deployed view, 29 rows PASS
+-- (job t4_acc_1790953980, 1,247 slot-seconds). Doctored rows were chosen in the live plan B:
+--   LIVE: 29 checks, every one 0.
+--   NC_EMPTY (no rows): C03 1, C04 1, C08 1, C15 1, C16 1, M1 1, M2 1, M3 1.
+--   NC_C03_POT_WITHOUT_HOLDOUT (Bottle's pot put back to v27.157's reading, $0.00): C03 1.
+--   NC_C15_NOTGOOD_WITH_HOLDOUT (Bottle's not-good side + its $0.78/day of holdout not-good): C15 1.
+--   NC_M1_ABOVE_NOTGOOD (Bottle given the whole target, $6.27 over $0.74 not-good): M1 1, C04 1.
+--   NC_C08_HOLDOUT_CAP_MOVED (one holdout row's cap delta +$5.00): C08 1.
+--   NC_C08_HOLDOUT_BASIS (one holdout row labelled RAMPED): C08 1.
+--   NC_C08_HOLDOUT_SILENT (one GOOD holdout row without "measurement control (HOLDOUT from"): C08 1.
+--   NC_C11_MOVED_UNDER_NEED (RAMPED campaign 172872442210536 capped at $1.00): C11 1. LIVE carries 5
+--     holdout campaigns whose need is above their unchanged budget, and C11 reads 0 on them.
+--   NC_M2_RAMPED_OFF (that campaign's cap + $1.00): M2 1.
+--   NC_M2_FLOORED_OFF (FLOORED_AT_NEED campaign 130115986205897's cap + $1.00): M2 1.
+--   NC_M2_SENTENCE_SAYS_RAMP (a FLOORED_AT_NEED row saying "the one-third ramp decided it"): M2 1.
+--   NC_M3_SEAT_DROPPED (one seat removed): M3 1.
+--   NC_M3_QUEUE_DROPPED (the plan's control, one queued row removed): M3 0 — VACUOUS on this
+--     partition: every queued candidate is a probe that bought nothing in the window (w_sp 0), so
+--     its queue spend is $0.00; NC_M3_QUEUE_UNCOUNTED carries the case.
+--   NC_M3_QUEUE_UNCOUNTED (that queued row given $3.00/day more spend than was counted): M3 1.
+--   NC_M3_SHARE_OFF (Fresh's share_closed + 0.10 on its live rows): M3 57 (the family term + 56
+--     sentences that no longer print it).
+--   NC_M3_SENTENCE_SILENT (one row without "Expected after the upload: $"): M3 1.
+--   NC_C16_STEP_WITHOUT_UPLOAD (ramp_step 1 with no upload landed): C16 1.
+--   NC_C16_SENTENCE (a no-upload row saying "Ramp: step 1"): C16 1.
+--   HC_C16_UPLOADS_LANDED (Bottle given 2 landed uploads, step 2 and "Ramp: step 2 of 3" in both
+--     plans): C16 0.
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -73,23 +115,30 @@ c02 AS (
        + (SELECT COUNTIF(n != 1) FROM (SELECT plan, COUNT(DISTINCT is_live_plan) n FROM p GROUP BY 1))
        + (SELECT ABS(1 - COUNT(DISTINCT plan)) FROM p WHERE is_live_plan)
 ),
+-- C03 RESTATED v27.158 (2026-10-02, P-15, audit fix #24). The pot is every GOOD keyword's window
+-- spend, holdout included. Until v27.157 the check summed `side = 'GOOD' AND NOT holdout` under the
+-- label "(P-2)", enforcing the builder's reading (a) while naming the ruling it departed from. The
+-- last term is the emptiness term: an empty partition is a failure, not a pass.
 c03 AS (
-  SELECT 'C03 pot = the GOOD side window spend per day, to the cent (P-2)',
-         COUNTIF(ABS(pot_per_day - good_spend) > 0.01)
-  FROM (
-    SELECT plan, family, MAX(pot_per_day) pot_per_day,
-           SAFE_DIVIDE(SUM(IF(side = 'GOOD' AND NOT holdout, w_sp, 0)), MAX(window_days)) good_spend
-    FROM p GROUP BY 1, 2)
+  SELECT 'C03 pot = every GOOD keyword window spend per day, holdout included, to the cent (P-15)',
+         (SELECT COUNTIF(ABS(pot_per_day - good_spend) > 0.01)
+          FROM (SELECT plan, family, MAX(pot_per_day) pot_per_day,
+                       SAFE_DIVIDE(SUM(IF(side = 'GOOD', w_sp, 0)), MAX(window_days)) good_spend
+                FROM p GROUP BY 1, 2))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
+-- C04 RESTATED v27.158 (P-21): the ramped allowance is LEAST(not-good today, the P-8 ramp).
 c04 AS (
-  SELECT 'C04 allowance = share x pot, ramped one step of the gap (P-2, P-8)',
-         COUNTIF(ABS(allowance_target_per_day - allowance_share * pot_per_day) > 0.01
+  SELECT 'C04 allowance = share x pot, ramped one step of the gap, never above today not-good spend (P-2, P-8, P-21)',
+         (SELECT COUNTIF(ABS(allowance_target_per_day - allowance_share * pot_per_day) > 0.01
                  OR ABS(allowance_ramped_per_day
-                        - GREATEST(allowance_share * pot_per_day,
-                                   notgood_today_per_day
-                                   - (notgood_today_per_day - allowance_share * pot_per_day) / ramp_steps)) > 0.01)
-  FROM (SELECT DISTINCT plan, family, allowance_share, pot_per_day, allowance_target_per_day,
-                        allowance_ramped_per_day, notgood_today_per_day, ramp_steps FROM p)
+                        - LEAST(notgood_today_per_day,
+                                GREATEST(allowance_share * pot_per_day,
+                                         notgood_today_per_day
+                                         - (notgood_today_per_day - allowance_share * pot_per_day) / ramp_steps))) > 0.01)
+          FROM (SELECT DISTINCT plan, family, allowance_share, pot_per_day, allowance_target_per_day,
+                                allowance_ramped_per_day, notgood_today_per_day, ramp_steps FROM p))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
 c05 AS (
   SELECT 'C05 seats fit the ramped allowance; every seat is numbered exactly once (P-2, P-7, P-8)',
@@ -127,11 +176,23 @@ c07 AS (
                  AND ABS(planned_spend_per_day - SAFE_DIVIDE(w_sp, window_days)) > 0.005)
   FROM p
 ),
+-- C08 EXTENDED v27.158 (audit fix #11): the cap is a move too. A holdout campaign's cap is left
+-- where it is (delta 0, basis NO_MOVE_HOLDOUT), no other campaign carries that basis, and every
+-- holdout row — the GOOD ones too (move NONE, P-4) — says in words that it is a measurement
+-- control and that its cap is unchanged.
+-- Vacuous only when no holdout campaign is eligible on the partition (8 were on 2026-10-02).
 c08 AS (
-  SELECT 'C08 no holdout campaign is repriced, parked, paused or seated by the plan (house rule)',
+  SELECT 'C08 no holdout campaign is repriced, parked, paused, seated or has its cap moved by the plan (house rule, fix #11)',
          COUNTIF(holdout AND move NOT IN ('NONE', 'NONE_HOLDOUT'))
        + COUNTIF(holdout AND seat_no IS NOT NULL)
        + COUNTIF(holdout AND is_candidate)
+       + COUNTIF(holdout AND ABS(campaign_planned_budget_delta_per_day) > 0.005)
+       + COUNTIF(holdout AND COALESCE(campaign_budget_basis, '') != 'NO_MOVE_HOLDOUT')
+       + COUNTIF(NOT COALESCE(holdout, FALSE) AND campaign_budget_basis = 'NO_MOVE_HOLDOUT')
+       + COUNTIF(holdout
+                 AND (sentence NOT LIKE '%This campaign is a measurement control (HOLDOUT from%'
+                      OR sentence NOT LIKE '%CAMPAIGN CAP: unchanged at $% a day — this campaign is in the HOLDOUT arm from%'))
+       + IF(COUNT(*) = 0, 1, 0)
   FROM p
 ),
 -- C09, RESTATED v27.147 (2026-09-28). The v27.134 form copied the guard's preconditions and
@@ -157,15 +218,20 @@ c10 AS (
        + COUNTIF(seat_no IS NULL AND verdict_date IS NOT NULL)
   FROM p
 ),
+-- C11 RESTATED v27.158 (audit fix #11): the band and the floor at need govern a cap the plan
+-- MOVES. A cap the plan leaves where it is (NO_MOVE_*) is neither a move into the band nor the
+-- plan's squeeze: on the 2026-10-02 partition 5 holdout campaigns' visible spend sat above today's
+-- budget, and a holdout cap may not be moved (C08).
 c11 AS (
-  SELECT "C11 budgets: outside the forbidden band, over $1.00, and never under the money the plan can SEE inside them (P-4)",
+  SELECT "C11 budgets the plan moves: outside the forbidden band, over $1.00, and never under the money the plan can SEE inside them (P-4)",
          (SELECT COUNTIF(campaign_planned_budget > 20.00 AND campaign_planned_budget < 32.00
                          AND campaign_budget_basis NOT IN
-                             ('NO_MOVE_UNMEASURED', 'NO_MOVE_BRAND_DEFENSE'))
+                             ('NO_MOVE_UNMEASURED', 'NO_MOVE_BRAND_DEFENSE', 'NO_MOVE_HOLDOUT'))
                 + COUNTIF(campaign_planned_budget < 1.00)
                 + COUNTIF(campaign_planned_budget IS NULL) FROM p)
        + (SELECT COUNTIF(bud < good_spend - 0.005) + COUNTIF(bud < need - 0.005)
           FROM (SELECT plan, campaign_id, MAX(campaign_planned_budget) bud,
+                       MAX(campaign_budget_basis) basis,
                        SUM(IF(side = 'GOOD', planned_spend_per_day, 0)) good_spend,
                        -- v27.138: the plan's own arithmetic counts a queued keyword at ZERO, and
                        -- the plan's own PARK sentence says parking does not stop a spend. Flooring
@@ -174,7 +240,8 @@ c11 AS (
                        SUM(planned_spend_per_day)
                        + SUM(IF(is_candidate AND seat_no IS NULL AND move != 'PAUSE',
                                 COALESCE(SAFE_DIVIDE(w_sp, window_days), 0), 0)) need
-                FROM p GROUP BY 1, 2))
+                FROM p GROUP BY 1, 2)
+          WHERE NOT STARTS_WITH(COALESCE(basis, ''), 'NO_MOVE_'))
 ),
 c12 AS (
   SELECT 'C12 prices: no planned bid below the row floor or above the house ceiling; NONE on the good side (P-4)',
@@ -199,19 +266,33 @@ c14 AS (
        + COUNTIF(is_candidate AND rank_no IS NULL)
   FROM p
 ),
+-- C15 RESTATED v27.158 (P-15): pot (every GOOD row, holdout included) + not-good (holdout excluded)
+-- = the window spend of every row except the not-good holdout rows.
 c15 AS (
-  SELECT 'C15 pot + not-good = the whole non-holdout window spend per day, to the cent (P-2)',
-         COUNTIF(ABS(pot + notgood - total) > 0.01)
-  FROM (SELECT plan, family, MAX(pot_per_day) pot, MAX(notgood_today_per_day) notgood,
-               SAFE_DIVIDE(SUM(IF(NOT holdout, w_sp, 0)), MAX(window_days)) total
-        FROM p GROUP BY 1, 2)
+  SELECT 'C15 pot + not-good = the window spend per day outside the not-good holdout rows, to the cent (P-15)',
+         (SELECT COUNTIF(ABS(pot + notgood - total) > 0.01)
+          FROM (SELECT plan, family, MAX(pot_per_day) pot, MAX(notgood_today_per_day) notgood,
+                       SAFE_DIVIDE(SUM(IF(COALESCE(holdout, FALSE) AND side = 'NOT_GOOD', 0, w_sp)),
+                                   MAX(window_days)) total
+                FROM p GROUP BY 1, 2))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
+-- C16 RESTATED v27.158 (audit fix #15): ramp_step counts plan uploads that LANDED, so it is
+-- LEAST(ramp_steps, plan_uploads_landed), 0 when none has; plan_uploads_landed is one number per
+-- family; and the sentence says "no step taken yet" exactly on the rows whose family has none.
+-- Until v27.157 it was a calendar count of windows (ramp_step >= 1 was asserted here).
 c16 AS (
-  SELECT 'C16 the ramp step is a report inside its own bounds, and the settings are the declared ones',
-         COUNTIF(ramp_step < 1 OR ramp_step > ramp_steps OR ramp_steps < 1
-                 OR allowance_share <= 0 OR allowance_share > 1
-                 OR calendar_state IS NULL OR sentence IS NULL OR family IS NULL)
-  FROM p
+  SELECT 'C16 the ramp step counts plan uploads that landed, inside its bounds, and the settings are the declared ones (fix #15)',
+         (SELECT COUNTIF(ramp_step IS NULL OR ramp_step < 0 OR ramp_step > ramp_steps OR ramp_steps < 1
+                         OR plan_uploads_landed IS NULL OR plan_uploads_landed < 0
+                         OR ramp_step != LEAST(ramp_steps, plan_uploads_landed)
+                         OR allowance_share <= 0 OR allowance_share > 1
+                         OR calendar_state IS NULL OR sentence IS NULL OR family IS NULL)
+                + COUNTIF((plan_uploads_landed = 0) != (sentence LIKE '%Ramp: no step taken yet%'))
+          FROM p)
+       + (SELECT COUNTIF(n > 1)
+          FROM (SELECT family, COUNT(DISTINCT plan_uploads_landed) n FROM p GROUP BY 1))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
 c17 AS (
   SELECT 'C17 no seat number the register still holds OPEN for another keyword is reissued (§9)',
@@ -360,6 +441,82 @@ c26 AS (
        + COUNTIF(verdict != 'HELD_UNSETTLED' AND hold_kept_by IS NOT NULL)
        + COUNTIF(verdict = 'HELD_UNSETTLED' AND COALESCE(w_ord, 0) = 0)
   FROM b
+),
+-- ---- v27.158 (2026-10-02, piece-1 plan Task 4): the builder's money ----
+-- M1 (P-21): the ramped allowance never exceeds today's not-good spend, per plan x family.
+m1 AS (
+  SELECT 'M1 the ramped allowance never exceeds today not-good spend (P-21)',
+         (SELECT COUNTIF(allowance_ramped_per_day > notgood_today_per_day + 0.0001)
+          FROM (SELECT DISTINCT plan, family, allowance_ramped_per_day, notgood_today_per_day FROM p))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
+),
+-- M2 (audit fix #12): every cap's basis is one of the §4.7 rules, one per campaign, and the number
+-- follows the rule it names: RAMPED is ROUND(current + (need - current) / ramp_steps, 2) to the
+-- cent; FLOORED_AT_NEED is need to the cent; BAND_SNAPPED_UP is $32.00 and _DOWN $20.00;
+-- FLOORED_AT_MINIMUM is $1.00; NO_MOVE_* is today's budget. need is recounted from the rows the way
+-- C11 counts it (4-decimal money, so a ramp value can round a cent the other way: tolerance one
+-- cent). The row term: the sentence says "the one-third ramp decided it" exactly on RAMPED rows.
+cap AS (
+  SELECT plan, campaign_id, MAX(campaign_planned_budget) bud, MAX(campaign_current_budget) cur,
+         MAX(campaign_budget_basis) basis, COUNT(DISTINCT campaign_budget_basis) n_basis,
+         MAX(ramp_steps) steps,
+         SUM(planned_spend_per_day)
+         + SUM(IF(is_candidate AND seat_no IS NULL AND move != 'PAUSE',
+                  COALESCE(SAFE_DIVIDE(w_sp, window_days), 0), 0)) need
+  FROM p GROUP BY 1, 2
+),
+m2 AS (
+  SELECT 'M2 every campaign cap names the rule that set it and its number follows that rule (fix #12)',
+         (SELECT COUNTIF(n_basis > 1 OR basis IS NULL
+                         OR basis NOT IN ('RAMPED', 'FLOORED_AT_NEED', 'BAND_SNAPPED_UP',
+                                          'BAND_SNAPPED_DOWN', 'FLOORED_AT_MINIMUM', 'NO_MOVE_HOLDOUT',
+                                          'NO_MOVE_BRAND_DEFENSE', 'NO_MOVE_UNMEASURED')
+                         OR (basis = 'RAMPED'
+                             AND ROUND(ABS(bud - ROUND(COALESCE(cur, need)
+                                                       + (need - COALESCE(cur, need)) / steps, 2)), 4) > 0.01)
+                         OR (basis = 'FLOORED_AT_NEED' AND ROUND(ABS(bud - need), 4) > 0.01)
+                         OR (basis = 'BAND_SNAPPED_UP' AND ABS(bud - 32.00) > 0.005)
+                         OR (basis = 'BAND_SNAPPED_DOWN' AND ABS(bud - 20.00) > 0.005)
+                         OR (basis = 'FLOORED_AT_MINIMUM' AND ABS(bud - 1.00) > 0.005)
+                         OR (STARTS_WITH(basis, 'NO_MOVE_') AND ABS(bud - COALESCE(cur, bud)) > 0.005))
+          FROM cap)
+       + (SELECT COUNTIF((campaign_budget_basis = 'RAMPED')
+                         != (sentence LIKE '%tonight the one-third ramp decided it%')) FROM p)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM cap)
+),
+-- M3 (P-22): expected_after_upload_per_day is one number per plan x family and equals the seats'
+-- cost + every queued candidate's window spend per day x (planned bid / current bid), PAUSE at
+-- zero; share_closed is (not-good today - expected) / (not-good today - target) when that gap is
+-- above $0.005 a day and NULL otherwise; and every row's sentence prints the expected figure and
+-- the share (or "no gap to close").
+fam_m AS (
+  SELECT plan, family,
+         MAX(expected_after_upload_per_day) ex, MIN(expected_after_upload_per_day) ex_min,
+         COUNTIF(expected_after_upload_per_day IS NULL) ex_null,
+         MAX(share_closed) sh, MIN(share_closed) sh_min, COUNTIF(share_closed IS NULL) sh_null,
+         COUNT(*) n, MAX(notgood_today_per_day) ng, MAX(allowance_target_per_day) tgt,
+         SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0))
+         + SUM(IF(is_candidate AND seat_no IS NULL AND move != 'PAUSE',
+                  COALESCE(SAFE_DIVIDE(w_sp, window_days), 0)
+                  * COALESCE(SAFE_DIVIDE(planned_bid, NULLIF(current_bid, 0)), 1), 0)) recount
+  FROM p GROUP BY 1, 2
+),
+m3 AS (
+  SELECT 'M3 expected after upload = the seats + the queue at the price the plan leaves it at; share_closed follows (P-22)',
+         (SELECT COUNTIF(ex_null > 0 OR ex != ex_min
+                         OR ABS(ex - recount) > 0.001
+                         OR (ng - tgt > 0.005
+                             AND (sh_null > 0 OR sh != sh_min
+                                  OR ABS(sh - (ng - ex) / (ng - tgt)) > 0.0005))
+                         OR (ng - tgt <= 0.005 AND sh_null != n))
+          FROM fam_m)
+       + (SELECT COUNTIF(STRPOS(sentence, FORMAT('Expected after the upload: $%.2f a day',
+                                                 expected_after_upload_per_day)) = 0
+                         OR STRPOS(sentence, IF(share_closed IS NULL, 'so there is no gap to close',
+                                                FORMAT('%.0f%% of the gap to the allowance target closes',
+                                                       100 * share_closed))) = 0)
+          FROM p)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM fam_m)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -370,5 +527,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c16 UNION ALL SELECT * FROM c17 UNION ALL SELECT * FROM c18
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
       UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM c24
-      UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26)
+      UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM m1
+      UNION ALL SELECT * FROM m2 UNION ALL SELECT * FROM m3)
 ORDER BY check_name;

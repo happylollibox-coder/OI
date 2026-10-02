@@ -24,7 +24,8 @@
 -- draft window test 0 but fails after 22:00 Los Angeles by the acceptance's own finding, draft pot
 -- test 7, draft move test 152; the acceptance suite's v27.147 forms 0, 0, 0), so each takes the
 -- form FACT_PLAN_NEXT_WEEK_acceptance.sql already holds: C01 (the age-2 fence), C03 (holdout spend
--- is outside the pot) and C06 (one move per CANDIDATE). c28 is restated for P-14c: the guard is a
+-- is outside the pot — the builder's unruled reading then; Ori ruled the opposite on 2026-10-02,
+-- P-15, and v27.158 restates both) and C06 (one move per CANDIDATE). c28 is restated for P-14c: the guard is a
 -- clock and a last-day test, not a veto — a demotion under its preconditions is legitimate iff the
 -- judge published guard_released_by, and this check READS that column and never re-derives the
 -- guard (the builder vetoed every partition for a month by re-deriving it). c26 is a REPORT until
@@ -39,6 +40,12 @@
 -- is RED only when it has neither a very good last day nor hold_kept_by = STRONG_DAY_IN_WINDOW
 -- with window_from <= hold_strong_day; the detail counts the holds kept by that day. Only the
 -- guard and c28 CTEs changed.
+-- v27.158 (2026-10-02, piece-1 plan Task 4, P-15, audit fix #24): plan_pot_reconciliation reads
+-- the pot as Ori ruled it — every GOOD keyword's window spend, holdout included. The v27.152 form
+-- (and the paragraph above calling the all-GOOD sum the draft's error) enforced the builder's
+-- unruled reading (a) under a "(P-2)" label. The detail now prints each family's not-good side,
+-- the expected spend after the upload and the share of the gap it closes (P-22). Only the pot_rec
+-- and c24 CTEs changed.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -445,25 +452,31 @@ c23 AS (  -- the window is complete days only, fenced to age 2, and exactly wind
   FROM pl
 ),
 pot_rec AS (  -- the pot and the allowance per (plan, family), the acceptance's C03/C04 form
-  -- Holdout spend is OUTSIDE the pot (the builder's own arithmetic): the draft summed every good
-  -- row and read 7 families off by more than a cent on a partition the acceptance passes.
+  -- P-15 (Ori 2026-10-02, v27.158): the pot is every GOOD keyword's window spend, holdout included
+  -- (P-2's own words). The v27.152 form excluded holdout rows under a "(P-2)" label (audit fix #24).
   SELECT plan, family, MAX(pot_per_day) AS pot, MAX(allowance_target_per_day) AS alw,
          MAX(allowance_share) AS share, MAX(allowance_ramped_per_day) AS ramped,
-         SAFE_DIVIDE(SUM(IF(side = 'GOOD' AND NOT COALESCE(holdout, FALSE), w_sp, 0)), MAX(window_days)) AS good
+         MAX(notgood_today_per_day) AS ng, MAX(expected_after_upload_per_day) AS exp_after,
+         MAX(share_closed) AS closed,
+         SAFE_DIVIDE(SUM(IF(side = 'GOOD', w_sp, 0)), MAX(window_days)) AS good
   FROM pl GROUP BY 1, 2
 ),
 c24 AS (  -- the pot and the allowance reconcile to the cent
   SELECT 'plan_pot_reconciliation',
     CAST(COUNTIF(ABS(pot - good) > 0.01 OR ABS(alw - share * pot) > 0.01) AS FLOAT64),
-    'plan x family rows whose pot or allowance is off by more than a cent · red > 0 (P-2); red when the partition is empty',
+    'plan x family rows whose pot (every GOOD keyword, holdout included) or allowance (share x pot) is off by more than a cent · red > 0 (P-15, P-2); red when the partition is empty',
     CASE WHEN COUNT(*) = 0 THEN 'RED'
          WHEN COUNTIF(ABS(pot - good) > 0.01 OR ABS(alw - share * pot) > 0.01) > 0 THEN 'RED'
          ELSE 'GREEN' END,
     -- the per-family line is built one level down: an aggregate may not enclose another
     CONCAT('per family, live plan: ',
            COALESCE((SELECT STRING_AGG(line, ', ' ORDER BY line) FROM (
-                       SELECT FORMAT('%s pot $%.2f/d allowance $%.2f/d', COALESCE(p.family, '(no family)'),
-                                     COALESCE(p.pot, 0), COALESCE(p.ramped, 0)) AS line
+                       SELECT FORMAT('%s pot $%.2f/d allowance $%.2f/d not-good $%.2f/d expected after upload $%.2f/d %s',
+                                     COALESCE(p.family, '(no family)'),
+                                     COALESCE(p.pot, 0), COALESCE(p.ramped, 0), COALESCE(p.ng, 0),
+                                     COALESCE(p.exp_after, 0),
+                                     IF(p.closed IS NULL, '(no gap to close)',
+                                        FORMAT('(%.0f%% of the gap closes)', 100 * p.closed))) AS line
                        FROM pot_rec p JOIN (SELECT DISTINCT plan FROM plb) l USING (plan))), 'none'))
   FROM pot_rec
 ),

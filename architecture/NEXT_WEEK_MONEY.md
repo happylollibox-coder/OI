@@ -1218,13 +1218,13 @@ maintains and the judgement reads the snapshot 20.8 writes.
 
 | step | what it does | ruling |
 |---|---|---|
-| 1 POT | the **GOOD side's** window spend per day, per family. Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2 |
+| 1 POT | the **GOOD side's** window spend per day, per family — **every GOOD keyword of the family, holdout included** (P-15, built v27.158). Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2, P-15 |
 | 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
-| 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. As built (the builder's own comment in `fam2`): the ramp term alone closes one third of the gap in whichever direction it runs, and the `GREATEST` removes the downward half for a family already inside its allowance — instead of being ramped up one third at a time, it is handed **the whole allowance target on night one**, so a family whose target exceeds its not-good side gets a bigger loss budget immediately (audit 2026-10-02: Lollibox on 09-30, $3.43 a day above its not-good spend; 13 of 24 August family-nights). **Ruled 2026-10-02 (P-21):** the ramped allowance is capped at today's not-good spend, `LEAST(notgood_today, GREATEST(target, notgood_today − (notgood_today − target) / ramp_steps))`, so it never raises a family's loser spend above what it spends tonight; piece-1 Task 4 makes this true. Recomputed from actual spend every night, so the sequence converges whether or not anyone uploads on schedule. | P-8, P-21 |
+| 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. As built (the builder's own comment in `fam2`): the ramp term alone closes one third of the gap in whichever direction it runs, and the `GREATEST` removes the downward half for a family already inside its allowance — instead of being ramped up one third at a time, it is handed **the whole allowance target on night one**, so a family whose target exceeds its not-good side gets a bigger loss budget immediately (audit 2026-10-02: Lollibox on 09-30, $3.43 a day above its not-good spend; 13 of 24 August family-nights). **Ruled 2026-10-02 (P-21), built v27.158:** the ramped allowance is capped at today's not-good spend, `LEAST(notgood_today, GREATEST(target, notgood_today − (notgood_today − target) / ramp_steps))`, so it never raises a family's loser spend above what it spends tonight (acceptance `M1`, `C04`). The ramp is re-anchored on tonight's actual not-good spend, so it descends only as uploads cut that spend: with no upload, each night re-takes the same one-third step from a base that drifts with the window. `ramp_step` counts the plan uploads that **landed** for the family since its first plan night (`plan_uploads_landed`, capped at `ramp_steps`; 0 prints "no step taken yet") — until v27.157 it was a calendar count of windows and read 3 of 3 on every live row although no plan batch had landed since 2026-08-25 (audit fix #15). | P-8, P-21 |
 | 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, walked in rank order: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. The walk is a recursive rank walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, §4.4 |
-| 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`). | §4.5 |
+| 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`). Since v27.158 the family's **expected spend after the upload** (seats + the queue at the price the plan leaves it at) and the **share of the gap it closes** are published beside the allowance (P-22). | §4.5, P-22 |
 | 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. | P-4, §4.6 |
-| 7 BUDGETS | the sum of the campaign's planned spend, ramped one step, floored at **that same sum** — the campaign's good side plus the seats the plan seated inside it — snapped out of the forbidden $20.01–$31.99 band, floored at $1.00. | §4.7 |
+| 7 BUDGETS | `GREATEST(current + (need − current) / ramp_steps, need, good side, $1.00)` — **need** being the good side + the seats + the queue at today's rate — snapped out of the forbidden $20.01–$31.99 band. No move on a brand-defense, an unmeasured or (v27.158) a **holdout** campaign. `campaign_budget_basis` names what bound the cap (v27.158): `RAMPED` (the one-third number), `FLOORED_AT_NEED`, `BAND_SNAPPED_UP` / `_DOWN`, `FLOORED_AT_MINIMUM`, `NO_MOVE_*`. | §4.7, P-27 |
 
 **Seat numbers are the ledger's, not the plan's — and a number is FREE only when the ledger has
 freed it.** A continuing occupant keeps the number `DE_FAMILY_SEAT_LEDGER` holds for it; a new
@@ -1268,18 +1268,52 @@ GROUP BY 1 ORDER BY 2 DESC;
 **The queue's residual is not zero money.** A queued row's PLANNED spend is zero because parking
 lowers a price and does not stop a spend; what the family actually keeps paying until the park price
 bites is the difference between its real not-good spend and the seats' cost. §9's reconciliation is
-restated to the identity that holds (`C19`), and whether the arithmetic should carry the residual
-instead is one of Ori's open rulings below.
+restated to the identity that holds (`C19`). **Ruled 2026-10-02 (P-22, option (b)), built v27.158:**
+the arithmetic stays and the residual is published beside the allowance, per family on every row:
+
+- `expected_after_upload_per_day` = the seats' cost + each queued candidate's window spend per day
+  × (the price the plan leaves it at ÷ its current bid): the park price on a `PARK` row, its current
+  bid on a `HOLD_AT_PARK` row (nothing uploads), **zero** on a `PAUSE` row. Linear in price, the same
+  model as a seat's cost; the queue's true park spend is re-decided once an upload has been scored.
+- `share_closed` = (not-good today − expected after upload) ÷ (not-good today − allowance target).
+  **NULL** when the family's not-good spend is already at or under its target (a gap of $0.005 a day
+  or less): there is no gap to close, and the ratio's sign would read backwards. The formula in the
+  plan's Task 4 divides by `NULLIF(gap, 0)` only; a negative gap is the case that guard did not name.
+
+Both are printed in the **FAMILY clause** every row's sentence now ends with ("Expected after the
+upload: $X a day — the seats $S plus the queue at the price the plan leaves it at $Q — N% of the gap
+to the allowance target closes", or "…so there is no gap to close"), and acceptance `M3` recounts
+both from the row columns. Read them per family:
+
+```sql
+SELECT family, ROUND(MAX(notgood_today_per_day), 2) AS notgood_today,
+       ROUND(MAX(allowance_target_per_day), 2) AS target, ROUND(MAX(allowance_ramped_per_day), 2) AS allowed,
+       ROUND(MAX(expected_after_upload_per_day), 2) AS expected_after_upload,
+       ROUND(MAX(share_closed), 3) AS share_closed, MAX(ramp_step) AS ramp_step,
+       MAX(plan_uploads_landed) AS plan_uploads_landed
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
+GROUP BY 1 ORDER BY 1;
+```
 
 **The ramp is geometric, not linear, and three windows is not the whole gap.** One third of the
-*remaining* gap closes each window, exactly like the three-step bid cap, so after three windows
-about seventy per cent of the original gap is closed and the rest follows. Anybody who reads
-"ramped over three windows" as "arrives at the allowance on the third upload" will be wrong by the
-last third. Read where a family actually is:
+*remaining* gap closes each window **in which an upload cuts the spend**, exactly like the
+three-step bid cap, so after three such windows about seventy per cent of the original gap is
+closed and the rest follows. The allowance is re-anchored on tonight's actual not-good spend, so
+without an upload it does not descend: each night re-takes the same one-third step from a base that
+drifts with the window. `ramp_step` says which (v27.158): the plan uploads that have landed for the
+family since its first plan night, capped at `ramp_steps` — a plan batch is a `batch_id` of the
+book's `BRAIN:*` / `PACING:*` / `CATALOG:*` rows that is in `V_PPC_CHANGE_LOG_APPLIED` or that an
+observed change confirms (`CONFIRMS <change_id>`), on a campaign of the family. On 2026-10-02 it is
+0 for every family: the last plan batches (2026-08-25) are `PENDING_UPLOAD` or
+`SUPERSEDED_NEVER_UPLOADED`. And P-8's third is the *allowance*, not the realised cut —
+`share_closed` above is the realised one. Anybody who reads "ramped over three windows" as "arrives
+at the allowance on the third upload" will be wrong by the last third. Read where a family actually is:
 
 ```sql
 SELECT family, MAX(notgood_today_per_day) AS notgood_day, MAX(allowance_target_per_day) AS allowance_day,
-       MAX(allowance_ramped_per_day) AS this_window_day, MAX(ramp_step) AS step_of, MAX(ramp_steps) AS steps
+       MAX(allowance_ramped_per_day) AS this_window_day, MAX(ramp_step) AS step_of, MAX(ramp_steps) AS steps,
+       MAX(plan_uploads_landed) AS uploads_landed
 FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
 WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND is_live_plan
 GROUP BY 1 ORDER BY 2 DESC;
@@ -1310,9 +1344,13 @@ SELECT DISTINCT grace_limit_armed FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
    excluded from the pot, from the not-good side and from the ramp base: a measurement control's
    money is not the plan's to allocate. It still gets a row, a side and a sentence — the
    counterfactual — and no move. *To overrule:* drop `AND NOT holdout` from the `fam` aggregation.
-   **Ruled 2026-10-02 (P-15):** the pot counts every GOOD keyword of the family, holdout included;
-   the not-good base and every move keep excluding the holdout. Piece-1 Task 4 builds it; until it
-   deploys the builder reads as this item describes.
+   **Ruled 2026-10-02 (P-15), built v27.158:** the pot counts every GOOD keyword of the family,
+   holdout included; the not-good base and every move keep excluding the holdout (acceptance `C03`,
+   `C15`, `V_ENGINE_HEALTH.plan_pot_reconciliation`). And the holdout's **campaign cap** is no
+   longer moved (`NO_MOVE_HOLDOUT`, audit fix #11; acceptance `C08`): on every live partition
+   2026-09-28 … 10-02 the plan had moved the caps of 7 of the 8 holdout campaigns ($57.53–$82.35 a
+   day of raises a night; query in "What v27.158 moved" below). Its GOOD keywords keep move `NONE`
+   (P-4) and their sentence now says they are a measurement control.
 2. **A not-good keyword with nothing to repair gets no move** (spec §9, v27.135): no spend, no
    clicks, no probe nomination means no seat, no queue position and `move = 'NONE'`. Parking a
    keyword that spends nothing saves nothing.
@@ -1405,6 +1443,92 @@ day on every hold. Measured at deploy: the builder body with the partition write
 assertion on the deployed v27.156 judge, then one CALL wrote the 2026-10-02 partition (722 rows, no
 refusal). Plan acceptance 26 rows PASS, C26 restated with its controls in the file.
 
+**v27.158 (2026-10-02, piece-1 Task 4 — P-15, P-21, P-22, audit fixes #11 #12 #15 #24).** Deploy
+the column migration first, then the builder, then `V_ENGINE_HEALTH`; run the acceptance and the
+negative controls:
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/migrations/2026-10-02_plan_money_columns.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
+# the negative controls: the acceptance's own text on doctored copies (exit 0 = every control as expected)
+python3 scripts/bigquery/tests/check_plan_money_controls.py
+```
+
+Measured at deploy: the builder body with the partition write removed passed every assertion on a
+snapshot of the judgement (`OI._tmp_t4_judge`, 14:50 UTC), then one CALL wrote the 2026-10-02
+partition (722 rows, no refusal; job `t4_call_1790953757`, 2,141.5 slot-seconds including the
+judgement view). The deployed bodies of the procedure and the view equal their files
+(`INFORMATION_SCHEMA.ROUTINES` / `VIEWS`, whitespace and comments aside). Plan acceptance 29 rows
+PASS on the live partition; the controls script exit 0 (its results are in the acceptance file's
+header); `PLAN_HEALTH_acceptance.sql` 22 rows PASS on the redeployed board. The builder's new read is
+`FACT_PPC_CHANGE_LOG` + `V_PPC_CHANGE_LOG_APPLIED` (52.5 slot-seconds alone); nothing new reads
+`FACT_AMAZON_ADS`. The uploads count was proved on a doctored log: one observed confirmation of a
+row of the pending batch `weekly_book_20260825_214435` (a LolliME campaign) reads LolliME 1 and the
+other families 0; the live log reads 0 for every family (3–4 plan batches logged per family since
+2026-08-23, none applied or confirmed).
+
+### What v27.158 moved, measured at deploy (2026-10-02)
+
+Same judgement on both sides (the snapshot, window 09-28 … 09-30, BOOST, share 0.50): the v27.156
+builder body (dry run) against the v27.158 partition, live plan B, $ a day. "Expected after" on the
+v27.156 side is the P-22 formula applied to its rows (that builder did not publish it).
+
+| family | pot | target | not-good today | allowance | seats (probes) | seat cost | queued | expected after | share closed |
+|---|---|---|---|---|---|---|---|---|---|
+| Bottle v27.156 | 0.00 | 0.00 | 0.74 | 0.49 | 1 (0) | 0.39 | 2 | 0.55 | — |
+| Bottle v27.158 | 12.54 | 6.27 | 0.74 | 0.74 | 3 (0) | 0.70 | 0 | 0.70 | no gap |
+| Fresh v27.156 | 84.77 | 42.38 | 61.78 | 55.31 | 18 (0) | 55.30 | 5 | 55.94 | — |
+| Fresh v27.158 | 104.40 | 52.20 | 61.78 | 58.58 | 22 (1) | 57.05 | 1 | 57.05 | 49 % |
+| LolliME v27.156 | 317.25 | 158.62 | 136.03 | 158.62 | 54 (5) | 157.19 | 4 | 157.19 | — |
+| LolliME v27.158 | 337.69 | 168.84 | 136.03 | 136.03 | 49 (0) | 132.35 | 9 | 132.35 | no gap |
+| Lollibox v27.156 | 95.57 | 47.78 | 37.19 | 47.78 | 9 (1) | 41.84 | 0 | 41.84 | — |
+| Lollibox v27.158 | 147.25 | 73.62 | 37.19 | 37.19 | 8 (0) | 36.76 | 1 | 36.76 | no gap |
+
+- **P-15** raised every pot by its holdout GOOD spend: Bottle $0.00 → $12.54 (all of its GOOD
+  keywords sit in the holdout campaign BOTTLE-SP/AUTO), Lollibox +$51.68, Fresh +$19.63, LolliME
+  +$20.44. Three of the four targets now sit above the family's not-good side (LolliME's and
+  Lollibox's already did, and v27.156's `GREATEST` handed them the whole target).
+- **P-21** then holds those three families at today's not-good spend: LolliME's allowance fell
+  $158.62 → $136.03 and Lollibox's $47.78 → $37.19; Bottle rose $0.49 → $0.74 (its own not-good
+  side). Fresh is the one family above its target and ramps by a third ($55.31 → $58.58, because
+  its target rose with P-15). Seat cost per family: LolliME −$24.84, Lollibox −$5.08, Fresh
+  +$1.75, Bottle +$0.31 a day (−$27.86 in all). The 6 probe seats of v27.156 (5 LolliME,
+  1 Lollibox; P-25 prices them at LIFT's `PROBE_START` bid) no longer fit: they rank last (LolliME
+  ranks 50–58), and after the candidates ahead of them LolliME has $3.68 a day of allowance left and
+  Lollibox $0.43, against probe seat costs of $4.52–$5.08. Every queued candidate tonight is such a
+  probe (window spend $0), so the queue adds $0.00 to the expected figure. Fresh seated 4 more (its
+  probe among them).
+- **P-22**: Fresh is expected to close 49 % of its gap to the target after the upload (P-8 asks a
+  third of the allowance); the other three have no gap to close.
+- **Fix #11**: the 7 holdout caps v27.156 moved ($76.28 a day of raises, $17.51 of cuts) are left
+  where they are (`NO_MOVE_HOLDOUT`, 8 campaigns); 5 of them show need above today's budget, which
+  the floor assertion now leaves to the control.
+- **Fix #12**: of the 35 caps moved outside the holdout, 21 are the ramp's number (`RAMPED`, all
+  cuts, $128.66 a day), 9 landed on need (`FLOORED_AT_NEED`, raises $90.29), 4 were moved up to
+  $32.00 by the band (`BAND_SNAPPED_UP`: raises $18.00, cuts $14.75 — a snap up can shorten a cut)
+  and 1 down to $20.00 (`BAND_SNAPPED_DOWN`, a cut of $12.00). v27.156 called all 42 `RAMPED`.
+  5 caps outside the holdout changed their number because their seats changed (by $17.47 a day in
+  all).
+- **Fix #15**: `ramp_step` 3 → 0 on every row ("no step taken yet").
+
+```sql
+-- the caps by the rule that set them, and the holdout's caps v27.157 and earlier moved
+SELECT as_of, COUNTIF(h) AS holdout_campaigns, COUNTIF(h AND ABS(d) > 0.005) AS holdout_moved,
+       ROUND(SUM(IF(h AND d > 0, d, 0)), 2) AS holdout_raises, ROUND(SUM(IF(h AND d < 0, -d, 0)), 2) AS holdout_cuts
+FROM (SELECT as_of, campaign_id, LOGICAL_OR(holdout) h, MAX(campaign_planned_budget_delta_per_day) d
+      FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of >= '2026-09-28' AND is_live_plan GROUP BY 1, 2)
+GROUP BY 1 ORDER BY 1;
+```
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
@@ -1485,7 +1609,9 @@ Again nothing in the doctrine moved. Five things did, and each is a number a rea
 5. **Every seat sentence names the direction**, not only the repriced ones (`C25`).
 
 ```sql
--- what the caps did tonight, by the reason the plan gives
+-- what the caps did tonight, by the reason the plan gives (v27.158: the basis names what bound
+-- the cap — RAMPED, FLOORED_AT_NEED, BAND_SNAPPED_UP / _DOWN, FLOORED_AT_MINIMUM — and NO_MOVE_HOLDOUT
+-- is the holdout's row, never moved; before v27.158 every moved cap read RAMPED)
 SELECT campaign_budget_basis, COUNT(*) AS campaigns,
        ROUND(SUM(GREATEST(d, 0)), 2) AS raises_per_day,
        ROUND(SUM(GREATEST(-d, 0)), 2) AS cuts_per_day
@@ -1505,10 +1631,10 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
 ### What Ori rules from this pass
 
 1. **The queue's residual.** A queued keyword's planned spend is zero and its real spend is not.
-   §9's reconciliation is restated (`C19`) rather than left as a claim nothing checked. *To
-   overrule:* make `planned_spend_per_day` on a queued row the spend it will keep making at the park
-   price, and re-derive `C05`, `C07`, `C15` and `C19` — the plan's not-good total would then read as
-   the money at risk rather than as the money the plan intends.
+   §9's reconciliation is restated (`C19`) rather than left as a claim nothing checked. **Ruled
+   2026-10-02 (P-22, option (b)), built v27.158:** the arithmetic stays, and
+   `expected_after_upload_per_day` / `share_closed` are published beside the allowance (§3, "The
+   queue's residual is not zero money").
 2. **A seat that raises.** P-6 costs a seat at the repaired price, and the ladder's repaired price
    can be above today's bid; regardless of allowance headroom, nothing stops the plan spending more
    there: the fit test has no direction term (audit 2026-10-02: seats raised spend in 16 of 16 live
@@ -1575,7 +1701,7 @@ check reads RED on an empty partition rather than vacuously green.
 | check | reads | status |
 |---|---|---|
 | `plan_window_complete_days` | the fence: `window_to = LEAST(watermark − 1, as_of − 2)` and `window_days` long (the Task 5 draft's `watermark − 1` fails after 22:00 Los Angeles — §2 "why it is fenced") | red > 0 |
-| `plan_pot_reconciliation` | pot = good-side spend outside the holdout, allowance = share × pot, to the cent (the acceptance's C03/C04 form; the draft counted holdout spend into the pot) | red > 0 |
+| `plan_pot_reconciliation` | pot = every GOOD keyword's window spend, holdout included (P-15, v27.158), allowance = share × pot, to the cent (the acceptance's C03/C04 form; v27.152–v27.157 excluded the holdout under a "(P-2)" label, audit fix #24); the detail prints each family's not-good side, expected spend after the upload and share of the gap closed (P-22) | red > 0 |
 | `plan_one_move_per_notgood` | one move per CANDIDATE, NONE on the good side and on rows with nothing to repair (§9 v27.135, the acceptance's C06 form; the draft read 152 violations on a healthy partition) | red > 0 |
 | `plan_ownership_no_foreign_go` | foreign GO rows on money levers inside live-plan campaigns — **a REPORT until Task 3 ships**, because no engine `PLAN` writes proposals and the plan owns nothing at the gate yet | INFO, then red > 0 |
 | `plan_both_plans_written` | exactly plans A and B in the latest partition | red otherwise |

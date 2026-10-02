@@ -153,7 +153,14 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   holdout_member             BOOL,
   holdout_eligible_from      DATE,
   sentence                   STRING,
-  built_at                   TIMESTAMP
+  built_at                   TIMESTAMP,
+  -- v27.158 (P-22, audit fix #15): per family, the not-good spend expected after the upload (the
+  -- seats + the queue at the price the plan leaves it at), the share of the gap to the allowance
+  -- target that closes (NULL when there is no gap), and the plan uploads that landed since the
+  -- family's first plan night (ramp_step = LEAST(ramp_steps, plan_uploads_landed))
+  expected_after_upload_per_day FLOAT64,
+  share_closed               FLOAT64,
+  plan_uploads_landed        INT64
 )
 PARTITION BY as_of
 CLUSTER BY plan, family, campaign_id
@@ -239,3 +246,12 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS hold_kept_by STRING;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS grace_since DATE;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS memory_cleared_by_gap STRING;
+
+-- v27.158 (2026-10-02) — THE FAMILY'S REALISED CUT AND THE UPLOADS THAT LANDED. Shipped as
+-- scripts/bigquery/migrations/2026-10-02_plan_money_columns.sql; mirrored here. Piece-1 plan
+-- Task 4, Ori's ruling R8 = spec P-22 (expected_after_upload_per_day, share_closed) and audit fix
+-- #15 (plan_uploads_landed: ramp_step counts uploads that landed, not windows on the calendar).
+-- NULL on the partitions written before the columns existed; no existing row is updated.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS expected_after_upload_per_day FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS share_closed FLOAT64;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS plan_uploads_landed INT64;
