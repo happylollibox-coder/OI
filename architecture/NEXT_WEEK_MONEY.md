@@ -18,7 +18,8 @@ as a literal.
 
 | object | file | what it answers |
 |---|---|---|
-| `DE_PLAN_CONFIG` | `scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql` | given a calendar state, how long is the window, what share of the good side does the not-good side get, over how many windows does the allowance ramp, how many orders make a keyword good, and which plan is live |
+| `DE_PLAN_CONFIG` | `scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql` | given a calendar state, how long is the window, what share of the good side does the not-good side get, over how many windows does the allowance ramp, how many orders make a keyword good, which plan is live, and (v27.155) how good the last day must be to earn the P-14b hold (P-14c) |
+| `FACT_THRESHOLD_HISTORY` | `scripts/bigquery/tables/FACT_THRESHOLD_HISTORY.sql` | (v27.155) every value this table and `DE_COACH_THRESHOLDS` have held, and when a pass first saw it |
 | `FN_PLAN_CALENDAR_STATE(d DATE)` | `scripts/bigquery/functions/FN_PLAN_CALENDAR_STATE.sql` | which calendar state a date is in |
 | acceptance | `scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql` | every row must read `PASS` |
 
@@ -27,7 +28,8 @@ as a literal.
 Always join, never hardcode. The pattern every plan object follows:
 
 ```sql
-SELECT c.window_days, c.allowance_share, c.live_plan, c.ramp_steps, c.min_orders
+SELECT c.window_days, c.allowance_share, c.live_plan, c.ramp_steps, c.min_orders,
+       c.strong_day_mult, c.strong_day_min_orders
 FROM `onyga-482313.OI.DE_PLAN_CONFIG` c
 WHERE c.is_active
   AND c.calendar_state = `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(CURRENT_DATE('America/New_York'))
@@ -81,6 +83,22 @@ in BOOST and PEAK; a 0.20 share off-peak and in PEAK and 0.50 in BOOST; three ra
 one third of the gap per window — `ramp_steps` and "ramp thirds" are the same setting); two
 orders in the window; plan `B` live with plan `A` written nightly in shadow (P-9).
 
+**Two more settings, and a column for the reason (v27.155, 2026-10-01).**
+
+| column | what it is | seeded |
+|---|---|---|
+| `strong_day_mult` | P-14c: the P-14b hold is granted only when the **last complete day** of the window returned, corrected, at least this many times the family bar | 1.5 in every state |
+| `strong_day_min_orders` | …and carried at least this many observed orders on that day | 1 in every state |
+| `change_reason` | why the row was written, in words (or, once the learning contract's proposer exists, the proposal id) | the seed rows name the rulings they encode |
+
+Until v27.155 the two P-14c numbers were literals in `V_PLAN_WINDOW_JUDGMENT`'s `k` CTE, so the
+rule had no history and could only change by a deploy. The judge now reads them from this table
+with the other settings of today's calendar state, and the seed carries the values the `k` CTE
+carried, so moving them changed no verdict (the before/after comparison is in the view's header).
+A NULL in either column is **not a setting**: `C02` fails on it, and the judge raises an error
+naming the state rather than judge with no rule — the plan's builder then fails, and
+`LOG_PIPELINE_RUNS` records the step as `FAIL`. So every row you insert must carry both.
+
 **Ori changes a setting without a deploy.** **Retire first, insert second** — in that order, and
 retire *whatever is active for the state*, not only the seed:
 
@@ -91,9 +109,18 @@ WHERE calendar_state = 'BOOST' AND is_active;
 
 INSERT INTO `onyga-482313.OI.DE_PLAN_CONFIG`
   (calendar_state, window_days, allowance_share, live_plan, ramp_steps, min_orders,
-   is_active, description, updated_at, updated_by)
-VALUES ('BOOST', 3, 0.35, 'B', 3, 2, TRUE, 'why this changed, in words', CURRENT_TIMESTAMP(), 'ori');
+   strong_day_mult, strong_day_min_orders,
+   is_active, description, change_reason, updated_at, updated_by)
+VALUES ('BOOST', 3, 0.35, 'B', 3, 2, 1.5, 1,
+        TRUE, 'what this row says, in words', 'why it changed, in words', CURRENT_TIMESTAMP(), 'ori');
 ```
+
+Copy every setting of the row you retire and change only the one you mean to change — the new row
+replaces the old one whole. To move the last-day test, for example from 1.5 to 1.3 in OFF_PEAK,
+retire OFF_PEAK and insert its row with `strong_day_mult = 1.3` and the other settings as they
+were. The judge reads it on its next read; the builder writes the rule it used onto every plan row
+(`FACT_PLAN_NEXT_WEEK.strong_day_mult / strong_day_min_orders`), so `V_PLAN_SCORECARD` grades each
+night against the rule that night was judged under.
 
 Written that way the recipe is **idempotent**: run it ten times and the state still holds exactly
 one active row, with every superseded row kept for the audit trail. The v27.130 recipe retired
@@ -102,10 +129,20 @@ retire, left the first hand row active alongside the new one, and turned `C01` p
 
 Never edit the DDL file to change a live setting.
 
-**THE DEPLOY GUARANTEE, STATED EXACTLY (v27.132).** Re-running `DE_PLAN_CONFIG.sql` can never
-change the **settings** of any state, *however* you changed them — a new active row, or an
-`UPDATE` in place — and can never re-activate a state you retired. All it can do is refresh the
-**description** of a seed row whose settings still equal the declared seed to the value.
+**THE DEPLOY GUARANTEE, STATED EXACTLY (v27.132; v27.155).** Re-running `DE_PLAN_CONFIG.sql` can
+never change a **setting that holds a value**, in any state, *however* you changed it — a new
+active row, or an `UPDATE` in place — and can never re-activate a state you retired. All it can do
+is refresh the **description** and `change_reason` of a seed row whose settings still equal the
+declared seed to the value, and fill `strong_day_mult` / `strong_day_min_orders` on a seed row where
+they are still NULL. That last clause is how v27.155 converts the three seed rows written before the
+columns existed: the guard reads NULL in the two new columns as "not set yet", deletes the row (its
+six older settings must still equal the seed), and the INSERT writes it back with 1.5 / 1, the same
+sentinel `updated_at` and the seed's `change_reason`. The DELETE and the INSERT run in one
+transaction. One consequence: setting one of those two columns back to NULL by an `UPDATE` in place
+on an otherwise untouched seed row makes it look untouched, and the next deploy writes 1.5 / 1 there
+— NULL is not a setting, so that is the one in-place edit a deploy still reverts. A row someone else
+wrote is never touched, NULL or not. Every case was replayed on `TMP_` copies (the DDL header lists
+them).
 
 That guarantee took two goes, and the first two shapes both moved money:
 
@@ -124,6 +161,43 @@ That guarantee took two goes, and the first two shapes both moved money:
 shape**: it goes red the moment an active `plan_seed` row's settings stop matching the DDL. An
 in-place edit now *survives*, but it leaves the row wearing the seed's label, so C09 asks you to
 convert it with the retire-then-insert recipe above. That recipe remains the supported one.
+
+### The history of every setting (v27.155)
+
+A learning system changes its rules from graded evidence, and a change can only be graded later if
+the record says which value was in force on which day. Two records keep it:
+
+1. **This table.** Retire-then-insert keeps every superseded row, `is_active = FALSE`, with the
+   `updated_at` it was written with. **No row is ever deleted** except by the seed guard above, and
+   the guard deletes only the untouched seed, which the INSERT writes straight back.
+2. **`FACT_THRESHOLD_HISTORY`.** `SP_SNAPSHOT_THRESHOLDS` (orchestrator Refresh Task 10.1, right
+   after `SP_DATA_ENTRY_UPDATES`, every pass) appends one row for every row of `DE_PLAN_CONFIG` and
+   of `DE_COACH_THRESHOLDS` that differs from its last snapshot: `SEEDED` on the first run, then
+   `ADDED`, `CHANGED` or `REMOVED`. A pass with nothing changed writes nothing. It also records the
+   two shapes the table's own trail cannot date: an `UPDATE` in place, and a retirement (the flip
+   of `is_active` moves no `updated_at`). In `DE_PLAN_CONFIG` the key is the row itself (state ×
+   `updated_by` × `updated_at`), so a retire-then-insert reads as the old row `CHANGED` to
+   `is_active = FALSE` and the new row `ADDED`, both in the same pass.
+
+What was in force on a day, for a state — read it, never a number from this page:
+
+```sql
+-- every setting of the plan's active row for PEAK as the history saw it on 2026-10-15
+SELECT h.*
+FROM `onyga-482313.OI.FACT_THRESHOLD_HISTORY` h
+WHERE h.source_table = 'DE_PLAN_CONFIG' AND h.calendar_state = 'PEAK'
+  AND h.snapshot_at < TIMESTAMP '2026-10-16'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY h.row_key, h.key_ordinal ORDER BY h.snapshot_at DESC) = 1
+    AND h.change_kind != 'REMOVED' AND h.is_active;
+```
+
+Limits, stated: the history holds what each pass **saw**. A value that lived between two passes
+is not recorded, and `snapshot_at` is when a pass saw the change (`source_updated_at` is when the
+writer stamped it, where it stamps one). The acceptance is
+`scripts/bigquery/tests/THRESHOLD_HISTORY_acceptance.sql`; it runs the nightly procedure on
+`TMP_` copies (one changed value writes exactly one row, a second run writes none, a
+retire-then-insert writes two) and holds the live history to "every current row covered, nothing
+changed since the last pass".
 
 Whether 0.50 is the right BOOST share is an open learning question — the backtest (plan Task 6)
 answers it per state on evidence, and until it does the seed stands. `V_PLAN_SCORECARD` (§6) grades
@@ -255,6 +329,25 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql)"
 ```
 
+**v27.155, in this order** (each step needs the one before it; the view names columns the
+v27.154 table does not have, and the snapshot procedure reads them):
+
+```bash
+Q='bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache'
+$Q "$(grep -v '^--' scripts/bigquery/tables/DE/DE_PLAN_CONFIG.sql)"                 # columns + seed conversion
+$Q "$(grep -v '^--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"             # reads the two settings
+$Q "$(grep -v '^--' scripts/bigquery/tables/FACT_THRESHOLD_HISTORY.sql)"
+$Q "$(grep -v '^--' scripts/bigquery/procedures/SP_SNAPSHOT_THRESHOLDS_INTO.sql)"
+$Q "$(grep -v '^--' scripts/bigquery/procedures/SP_SNAPSHOT_THRESHOLDS.sql)"
+$Q 'CALL `onyga-482313.OI.SP_SNAPSHOT_THRESHOLDS`()'                                # first run: SEEDED
+$Q "$(grep -v '^--' scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql)"  # Refresh Task 10.1
+$Q "$(grep -v '^--' scripts/bigquery/tests/PLAN_CONFIG_acceptance.sql)"
+$Q "$(grep -v '^--' scripts/bigquery/tests/THRESHOLD_HISTORY_acceptance.sql)"
+```
+
+BigQuery allows five metadata updates per table in ten seconds; the DDL makes four (SET OPTIONS and
+three `ADD COLUMN`). Do not run it twice inside ten seconds.
+
 The DDL is idempotent **and deferential**: `CREATE TABLE IF NOT EXISTS`, then
 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so a re-run converges against a table that already
 exists (a bare `CREATE TABLE IF NOT EXISTS` is a silent no-op there), then a seed that writes
@@ -270,7 +363,8 @@ Do not write them down here — read them:
 ```sql
 SELECT CURRENT_DATE('America/New_York') AS today_ny,
        `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(CURRENT_DATE('America/New_York')) AS state,
-       c.window_days, c.allowance_share, c.live_plan, c.ramp_steps, c.min_orders, c.description
+       c.window_days, c.allowance_share, c.live_plan, c.ramp_steps, c.min_orders,
+       c.strong_day_mult, c.strong_day_min_orders, c.description, c.change_reason
 FROM `onyga-482313.OI.DE_PLAN_CONFIG` c
 WHERE c.is_active
   AND c.calendar_state = `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(CURRENT_DATE('America/New_York'));
@@ -585,7 +679,8 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 3 DESC;
 
 Ruled 2026-09-17, built 2026-09-28. The hold is granted **only when the last complete day of the
 window was very good** — at least one order and a corrected return of at least 1.5× the family bar
-(`strong_day_min_orders`, `strong_day_mult` in the judge's `k` CTE). A losing window whose last day
+(`strong_day_min_orders`, `strong_day_mult`: in the judge's `k` CTE until v27.155, in
+`DE_PLAN_CONFIG` per calendar state since — §1). A losing window whose last day
 won a little is judged on the window. So the guard is a **delay, bounded by the clock, granted on
 one condition** — neither the veto the first build produced nor an unconditional wait.
 

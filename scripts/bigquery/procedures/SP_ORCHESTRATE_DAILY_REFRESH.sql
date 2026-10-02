@@ -772,6 +772,48 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 10.1: SP_SNAPSHOT_THRESHOLDS (depends on DE_COACH_THRESHOLDS, DE_PLAN_CONFIG)
+  --   Added 2026-10-01 (v27.155, learning-contract piece 0 Task D). Appends to
+  --   FACT_THRESHOLD_HISTORY one row for every rule-table row that differs from its last
+  --   snapshot (SEEDED on the first run, then ADDED / CHANGED / REMOVED); a pass with nothing
+  --   changed writes nothing. This step is the rule history's ONLY schedule. Placed right after
+  --   SP_DATA_ENTRY_UPDATES. Reads two small tables; no FACT_AMAZON_ADS. A refit that
+  --   SP_SCORE_INTENT_INDEXES applies later in the same pass (Task 16.1) is recorded by the
+  --   next pass.
+  -- ============================================
+  SET procedure_name = 'SP_SNAPSHOT_THRESHOLDS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_THRESHOLDS`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'OK %s completed successfully in %d seconds',
+      procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)
+    ) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT(
+      'FAIL %s failed: %s (Error at %s)',
+      procedure_name,
+      @@error.message,
+      CAST(CURRENT_TIMESTAMP() AS STRING)
+    ) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 10.5: SRC_ACC_INVENTORY_FBA (Daton → V_SRC → SRC_ACC)
   -- Accumulates daily FBA inventory snapshot from Fivetran.
   -- Replaces manual file uploads to SRC_ACC_INVENTORY_FBA.

@@ -88,7 +88,8 @@
 --               day was VERY good does it postpone its decision." So the guard is granted only
 --               when the LAST complete day of the window (window_to) carried at least
 --               strong_day_min_orders order(s) AND a corrected return of at least
---               strong_day_mult x the family bar (both declared in the k CTE). Otherwise the
+--               strong_day_mult x the family bar (both read from DE_PLAN_CONFIG for today's
+--               calendar state since v27.155; the k CTE declared them before). Otherwise the
 --               window is judged as it reads and the row publishes guard_released_by =
 --               LAST_DAY_NOT_STRONG; a hold whose anchored clock has run out publishes
 --               HOLD_EXPIRED. The builder asserts every demotion under the guard's
@@ -103,12 +104,35 @@
 --               THE RULE IS ON THE ROW (v27.154 follow-up, 2026-10-01). strong_day_mult and
 --               strong_day_min_orders are published on every row, and SP_BUILD_NEXT_WEEK_PLAN
 --               copies them into FACT_PLAN_NEXT_WEEK, so FN_PLAN_SCORECARD grades each hold and
---               release against the rule it was made under, never against today's k CTE. Only
+--               release against the rule it was made under, never against today's setting. Only
 --               the final SELECT changed. Measured at deploy, 2026-10-01: the view before (HEAD's
 --               body run as a query) and after, keyed on campaign x keyword, 361 rows each side,
 --               every published column equal except seat_cost_per_day on 2 rows, which moved by
 --               0.0001 at its 4-decimal rounding (0.343 / 0.3429 and 1.0805 / 1.0804). Every row
 --               carried 1.5 and 1.
+--               THE RULE IS A SETTING WITH A HISTORY (v27.155, 2026-10-01). strong_day_mult and
+--               strong_day_min_orders are no longer literals here: the cfg CTE reads them from
+--               DE_PLAN_CONFIG with the other settings of today's calendar state, the win CTE
+--               carries them, and a NULL raises an error instead of judging with no rule. A
+--               change is Ori's retire-then-insert on DE_PLAN_CONFIG (SOP §1), its old value stays
+--               in that table retired, and FACT_THRESHOLD_HISTORY records it the next orchestrator
+--               pass. Only the k, cfg and win CTEs and one line of base changed; the seed carries
+--               the 1.5 / 1 the k CTE carried. A NULL in the row of TODAY's state raises the
+--               error; a NULL in another state's row does not, until that state comes round
+--               (both run on TMP_ copies, 2026-10-01). Deploy DE_PLAN_CONFIG.sql BEFORE this
+--               file: this body names columns the v27.154 table does not have.
+--               Measured 2026-10-01 (LA), before deploy, on the same data: this body run as a
+--               query on a TMP_ copy of DE_PLAN_CONFIG converted by its v27.155 DDL, against the
+--               deployed v27.154 view run twice. 361 rows each; all 87 columns other than the key
+--               equal (floats to 1e-9 relative) to the second run. The first run differed from
+--               both on seat_cost_per_day on 2 rows at the 4th decimal: the deployed view's own
+--               run-to-run noise. SP_BUILD_NEXT_WEEK_PLAN's body run on each output, partition
+--               write removed: 722 rows each; side, verdict and guard_released_by differ on 0
+--               rows; every other column but built_at equal, except rank_no on 4 rows (two pairs
+--               whose rank_score ties to the last bit — rank_score differs in its last bit on 15
+--               rows between two runs of the deployed view, so the tie order is not stable from
+--               run to run). Both runs then stopped on the seat-number continuity assertion,
+--               which also stopped the orchestrator's build at 2026-10-01 16:58 UTC.
 --   LOSING / ONE_ORDER / NO_SALE / NOT_SERVING — the not-good side.
 -- decided_by names the ruling that decided the row: P-3, P-14b or P-5. settle_arm names what the
 -- correction did: SETTLED, CORRECTED, PROMOTED_ON_FRESH, HELD_UNSETTLED, NOT_CORRECTABLE_NO_GP,
@@ -272,7 +296,7 @@
 -- Acceptance: scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql.
 -- =============================================================================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`
-OPTIONS (description = "v27.154 follow-up (2026-10-01): publishes strong_day_mult and strong_day_min_orders (the P-14c settings of the k CTE) on every row so SP_BUILD_NEXT_WEEK_PLAN stores the rule each decision was judged under and FN_PLAN_SCORECARD grades against it; no verdict changes. v27.147 (2026-09-28) P-14c (Ori, 2026-09-17): the P-14b hold is granted ONLY when the last complete day of the window was very good -- at least 1 order and a corrected return of at least 1.5x the family bar, declared in the k CTE -- so a losing window whose last day won a little is judged on the window. Publishes last_day_sp/clk/ord/gp/gp_corrected/ret, last_day_strong and guard_released_by (LAST_DAY_NOT_STRONG | HOLD_EXPIRED) so SP_BUILD_NEXT_WEEK_PLAN asserts every demotion under the guard's preconditions carries this view's own reason instead of re-deriving the guard: the builder's v27.136 copy read P-14b as a veto while this view read it as a clock, and from the first expired clock (2026-08-29) the builder refused every partition for a month. held_with_no_sale is now FALSE by construction. Earlier: one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing whether the plan has a partition EARLIER than today to read it from (v27.138: SP_BUILD_NEXT_WEEK_PLAN ships and writes that table nightly, so the old wording 'no builder writes it yet' was live and false in this description and in the row's own sentence). Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight; and v27.138 gives the hold a CLOCK — it is anchored via hold_since / hold_settles_on to the window that TRIGGERED it and lifts when that window settles, because was_good reads last night's side and a held row's side is GOOD, which made the protected side a one-way door no keyword could ever leave and left P-5's one-window limit inert in money), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
+OPTIONS (description = "v27.155 (2026-10-01): strong_day_mult and strong_day_min_orders, the P-14c last-day test, are read from DE_PLAN_CONFIG for today's calendar state (cfg CTE) instead of being literals in the k CTE, so the rule is a setting Ori changes by retire-then-insert, with its old values kept; a NULL raises an error rather than judge with no rule; the seed carries the 1.5 / 1 the k CTE carried. v27.154 follow-up (2026-10-01): publishes strong_day_mult and strong_day_min_orders (the P-14c settings of the k CTE) on every row so SP_BUILD_NEXT_WEEK_PLAN stores the rule each decision was judged under and FN_PLAN_SCORECARD grades against it; no verdict changes. v27.147 (2026-09-28) P-14c (Ori, 2026-09-17): the P-14b hold is granted ONLY when the last complete day of the window was very good -- at least 1 order and a corrected return of at least 1.5x the family bar, declared in the k CTE -- so a losing window whose last day won a little is judged on the window. Publishes last_day_sp/clk/ord/gp/gp_corrected/ret, last_day_strong and guard_released_by (LAST_DAY_NOT_STRONG | HOLD_EXPIRED) so SP_BUILD_NEXT_WEEK_PLAN asserts every demotion under the guard's preconditions carries this view's own reason instead of re-deriving the guard: the builder's v27.136 copy read P-14b as a veto while this view read it as a clock, and from the first expired clock (2026-08-29) the builder refused every partition for a month. held_with_no_sale is now FALSE by construction. Earlier: one row per working-family (HARVEST) keyword — the complete-days window from DE_PLAN_CONFIG for today's calendar state, fenced so no judged day is younger than age 2 (P-10 + P-14a), the keyword's record in it raw AND corrected for settle completion via V_PLAN_SETTLE_COMPLETION, the side rule B gives it (P-1/P-3), and the arms in the order P-5 then P-14b: the grace for a ladder-settled winner with a quiet window comes FIRST (v27.135 — with the guard first it reached 36 of 39 such winners, so the ruling that buys ONE window was replaced by the one that buys every window, the shipped reprice book named a different ruling on the same rows, and the published unguarded counterfactual was wrong by 28% of the pot), and the grace limit is ONE WINDOW read from the live plan's own history — spent until the keyword earns a GOOD window back — with grace_limit_armed publishing whether the plan has a partition EARLIER than today to read it from (v27.138: SP_BUILD_NEXT_WEEK_PLAN ships and writes that table nightly, so the old wording 'no builder writes it yet' was live and false in this description and in the row's own sentence). Then the P-14b asymmetric guard (promote on fresh evidence, never demote until the window has settled: SP 7 / SB 14; the guard requires that the keyword actually SERVED, because a keyword with no clicks has no sales in flight; and v27.138 gives the hold a CLOCK — it is anchored via hold_since / hold_settles_on to the window that TRIGGERED it and lifts when that window settles, because was_good reads last night's side and a held row's side is GOOD, which made the protected side a one-way door no keyword could ever leave and left P-5's one-window limit inert in money), with held_despite_evidence AND held_with_no_sale naming the two populations it holds — the second is the larger by money and used to be told that promotion is allowed on fresh evidence on a window with no gross profit to promote. Also the shadow plan A side (P-9), the repaired price capped at three 5% steps and floored at the row's own bid_floor (P-6) published on the NOT-GOOD side only because P-4 forbids re-pricing the good side, the seat cost at that price, the park price with a declared source and a bid_floor fallback, and the P-7 rank — whose two named factors are published separately (rank_dollars_at_stake, rank_closeness) because their product cancels the spend identically and the ordering is corrected gross profit alone. Every seat sentence branches on is_candidate, so no row is promised a seat its own column refuses it and a keyword with no seat and no queue position says so. Publishes settle_arm, decided_by and two plain sentences on every row. Judges only; SP_BUILD_NEXT_WEEK_PLAN does the potting, seating and queueing. Spec P-1..P-14, §3a. SOP: architecture/NEXT_WEEK_MONEY.md")
 AS
 WITH k AS (
   -- P-3/P-13: min_orders is NOT a literal — it is read from DE_PLAN_CONFIG in the cfg CTE below
@@ -283,17 +307,9 @@ WITH k AS (
          2.00   AS raise_ceiling,     -- the house bid ceiling (GUARDIAN threshold redesign)
          4      AS click_goal_day,    -- mirrored from V_FAMILY_SEAT_REGISTER k.click_goal_day
          7      AS settle_days_sp,    -- SP attribution window, complete days (P-12, P-14b)
-         14     AS settle_days_sb,    -- SB attribution window, complete days
-         -- P-14c (Ori, 2026-09-17): the P-14b hold is granted only when the LAST complete day
-         -- of the window was VERY GOOD -- at least strong_day_min_orders order(s) on that day
-         -- and a corrected return of at least strong_day_mult x the family bar. Measured on the
-         -- 45 keywords the expired clock was releasing on 2026-09-28: 7 sold on their last day,
-         -- 6 clear 1.0x the bar, 4 clear 1.5x, 2 clear 2.0x. 1.5x is where a last day that
-         -- "won a little" (3 orders at 1.29x the bar on a window returning 0.54) is judged on
-         -- the window and a very good one (1.86x and up) earns the wait. A ruling constant,
-         -- declared beside the settle days; move it to DE_PLAN_CONFIG if it becomes per-state.
-         1.5    AS strong_day_mult,
-         1      AS strong_day_min_orders
+         14     AS settle_days_sb     -- SB attribution window, complete days
+         -- P-14c's strong_day_mult and strong_day_min_orders are read from DE_PLAN_CONFIG in the
+         -- cfg CTE (v27.155), like min_orders: a literal here would be a second copy of the rule.
 ),
 caps AS (
   SELECT k.*,
@@ -307,7 +323,8 @@ today AS (
 ),
 cfg AS (
   -- Every setting, min_orders included. Copy this CTE, not a subset of it.
-  SELECT calendar_state, window_days, allowance_share, live_plan, ramp_steps, min_orders
+  SELECT calendar_state, window_days, allowance_share, live_plan, ramp_steps, min_orders,
+         strong_day_mult, strong_day_min_orders
   FROM `onyga-482313.OI.DE_PLAN_CONFIG`
   WHERE is_active
   QUALIFY ROW_NUMBER() OVER (PARTITION BY calendar_state ORDER BY updated_at DESC) = 1
@@ -324,6 +341,13 @@ win AS (
   -- P-10 + the P-14a FENCE (see the header).
   SELECT s.calendar_state, c.window_days, c.allowance_share, c.live_plan, c.ramp_steps,
          c.min_orders,
+         -- P-14c (v27.155): the rule is a setting. NULL is not one: refuse to judge without it.
+         COALESCE(c.strong_day_mult, ERROR(FORMAT(
+           'DE_PLAN_CONFIG: the active %s row has no strong_day_mult (P-14c); retire it and insert a row that carries one (SOP: architecture/NEXT_WEEK_MONEY.md section 1)',
+           s.calendar_state)))                                 AS strong_day_mult,
+         COALESCE(c.strong_day_min_orders, ERROR(FORMAT(
+           'DE_PLAN_CONFIG: the active %s row has no strong_day_min_orders (P-14c); retire it and insert a row that carries one (SOP: architecture/NEXT_WEEK_MONEY.md section 1)',
+           s.calendar_state)))                                 AS strong_day_min_orders,
          wm.d                                                  AS watermark,
          LEAST(DATE_SUB(wm.d, INTERVAL 1 DAY),
                DATE_SUB(t.d_la, INTERVAL 2 DAY))               AS window_to,
@@ -548,7 +572,7 @@ base AS (
     h.eligible_from AS holdout_eligible_from,
     IF(ks.channel = 'SB', caps.settle_days_sb, caps.settle_days_sp) AS settle_days,
     win.min_orders, caps.cap_up, caps.cap_down, caps.raise_ceiling, caps.click_goal_day,
-    caps.strong_day_mult, caps.strong_day_min_orders,
+    win.strong_day_mult, win.strong_day_min_orders,
     t.d_la AS today_la
   FROM ks
   CROSS JOIN win
