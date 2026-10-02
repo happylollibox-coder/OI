@@ -1,5 +1,6 @@
 -- =============================================================================================
--- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.135 (2026-08-23).
+-- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.135 (2026-08-23); C06
+-- restated 2026-10-02 for P-14c (see C06 below).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -17,11 +18,19 @@
 --   C05 P-14a: the corrected gross profit never flips sign and is never smaller in magnitude than
 --       the raw one; the per-day factor floor is in (0, 1]; a row the curve could not answer for
 --       says UNCORRECTED_NO_CURVE and carries factor 1.0.
---   C06 P-14b: no keyword that was good AND SERVED IN THE WINDOW sits on the not-good side while
---       its window is unsettled, and every HELD_UNSETTLED row is on the good side, with a
---       settle-due date in the future AND a window it actually served in. The service clause is
---       the doctrine, not a loophole: the guard exists because sales are still ARRIVING, and a
---       keyword with no clicks in the window has none in flight (v27.134).
+--   C06 P-14b/P-14c, RESTATED 2026-10-02. Until then C06 read P-14b as a VETO: no keyword that
+--       was good and served could sit on the not-good side while its window was unsettled. This
+--       file was last changed in e007cc5 (v27.138, 2026-08-24), before v27.147 (41d2318, P-14c,
+--       ruled by Ori 2026-09-17), and from v27.147 the judge demotes such a row legitimately and
+--       publishes why in guard_released_by: HOLD_EXPIRED or LAST_DAY_NOT_STRONG. P-14b/P-14c
+--       are a clock and a last-day test, not a veto, so C06 now READS guard_released_by and never
+--       re-derives the guard: it counts a row under the guard's preconditions (side_b NOT_GOOD,
+--       was_good, served, NOT settled) only when guard_released_by is NULL, UNEXPLAINED or any
+--       value outside those two reasons. The HELD_UNSETTLED terms are unchanged: every
+--       HELD_UNSETTLED row is on the good side, with a settle-due date in the future AND a
+--       window it actually served in. The service clause is the doctrine, not a loophole: the
+--       guard exists because sales are still ARRIVING, and a keyword with no clicks in the
+--       window has none in flight (v27.134).
 --   C07 P-3: a GOOD row has min_orders OBSERVED orders (counts are never inflated) unless the
 --       grace or the guard put it there; every row names decided_by.
 --   C08 P-6/P-7: every not-good row has a planned price at or above its own floor, a seat cost
@@ -80,6 +89,26 @@
 --       row's side is GOOD, while `settled` reads a window that rolls forward nightly, so the
 --       guard used to re-arm itself forever: every HELD row must carry the anchor date its hold
 --       lifts on, no row may be held past that date, and no expired hold may still read GOOD.
+--
+-- C06 RESTATEMENT, MEASURED 2026-10-02 (America/Los_Angeles). One script snapshotted the view
+-- into a TEMP table (361 rows), numbered it ROW_NUMBER() OVER (ORDER BY campaign_id,
+-- keyword_id), doctored one row per copy, and ran the restated C06 expression and the old one
+-- over every copy:
+--   LIVE: 10 rows under the guard's preconditions, all 10 LAST_DAY_NOT_STRONG (0 HOLD_EXPIRED,
+--         0 UNEXPLAINED, 0 NULL); 0 HELD_UNSETTLED rows. Old C06 10 (FAIL); restated C06 0.
+--   On the lowest-numbered row with a published release (guard_released_by set to):
+--     NC1 NULL                                   -> restated C06 1
+--     NC2 'UNEXPLAINED'                          -> restated C06 1
+--     NC3 'HOLD_EXPRIED' (a misspelt reason)     -> restated C06 1
+--     HC4 'HOLD_EXPIRED' (the other legitimate reason) -> restated C06 0
+--   The HELD_UNSETTLED terms are VACUOUS on live (0 held rows), so they were run on the
+--   lowest-numbered row that served with no published release, set to settle_arm =
+--   HELD_UNSETTLED and side_b = GOOD:
+--     NC5 settle_due_on = today                       -> restated C06 1
+--     NC6 settle_due_on = today + 7, served = FALSE   -> restated C06 1
+--     HC7 settle_due_on = today + 7, served left TRUE -> restated C06 0
+--   The old C06 read 10 on every copy except NC5 and NC6 (11 each).
+--   The whole file run on 2026-10-02 with C06 restated: 23 rows, every one PASS.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -113,9 +142,20 @@ c05 AS (
                  OR (settle_arm = 'UNCORRECTED_NO_CURVE' AND settle_factor_min != 1.0))
   FROM j
 ),
+-- C06, RESTATED 2026-10-02. READS guard_released_by AS PUBLISHED; NEVER RE-DERIVES THE GUARD.
+-- A DEMOTION UNDER THE GUARD'S PRECONDITIONS THAT THE JUDGE DID NOT EXPLAIN: a keyword that was
+-- good, served and sits on an unsettled window is put on the not-good side on a reason no ruling
+-- names. SP_BUILD_NEXT_WEEK_PLAN's P-14b ASSERT counts the NULL case only (it tests IS NULL --
+-- read from the procedure, not run here), so an UNEXPLAINED or unrecognised reason goes red
+-- here and nowhere in that ASSERT.
+-- A HOLD PAST ITS SETTLE-DUE DATE OR ON A WINDOW IT DID NOT SERVE IN: P-4 forbids repricing the
+-- good side, so the hold keeps a keyword's price untouched with no clock left, or with no sales
+-- in flight to wait for. A HELD ROW OFF THE GOOD SIDE: the row says it is protected while its
+-- side says it is not.
 c06 AS (
-  SELECT 'C06 P-14b no unsettled demotion of a keyword that was good and served',
-         COUNTIF((side_b = 'NOT_GOOD' AND was_good AND NOT settled AND served)
+  SELECT 'C06 P-14b/P-14c a demotion under the guard preconditions names the judge release reason; a HELD row is good, served and not yet due',
+         COUNTIF((side_b = 'NOT_GOOD' AND was_good AND NOT settled AND served
+                  AND COALESCE(guard_released_by, '') NOT IN ('HOLD_EXPIRED', 'LAST_DAY_NOT_STRONG'))
                  OR (settle_arm = 'HELD_UNSETTLED'
                      AND (settle_due_on IS NULL
                           OR settle_due_on <= CURRENT_DATE('America/Los_Angeles')
