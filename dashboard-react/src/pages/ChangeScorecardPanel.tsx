@@ -65,6 +65,22 @@ const REMEDY_LABEL: Record<string, string> = {
   REVIEW: 'review by hand',
 };
 
+// Who made the change — copy + colour for the view's `source`. Colour marks a change a person made
+// (MANUAL logged on the DO page, OBSERVED seen on Amazon only); OI-built rows (the coach, the weekly
+// book's tiers, tagged '<TIER>:<book source>') stay faint. Labels only — the view does the split.
+const BOOK_TIER_TITLE: Record<string, string> = {
+  CATALOG: "the weekly book's Catalog tier decided it — whether this is worth having (pause, negate, park)",
+  BRAIN: "the weekly book's Brain tier decided it — where the money goes (budgets, seat moves)",
+  PACING: "the weekly book's Pacing tier decided it — a bid move to get the clicks the plan asked for",
+};
+function sourceMeta(source: string): { cls: string; title: string } {
+  if (source === 'MANUAL') return { cls: 'text-violet-400', title: 'you made this change by hand and logged it in OI' };
+  if (source === 'OBSERVED') return { cls: 'text-pink-400', title: 'seen on Amazon, not logged by OI — usually a change you made in the console' };
+  if (source === 'COACH') return { cls: 'text-faint', title: 'the coach suggested it' };
+  const tier = BOOK_TIER_TITLE[source.split(':')[0]];
+  return { cls: 'text-faint', title: tier ?? `source: ${source}` };
+}
+
 // What the change was, in one cell: campaign ▸ target / term, at the grain the view scored it on.
 function ItemCell({ r }: { r: Row }) {
   const leaf = r.scopeGrain === 'TERM' ? r.searchTerm : r.scopeGrain === 'TARGET' ? r.targeting : null;
@@ -228,7 +244,7 @@ export function ChangeScorecardPanel() {
                             <td className="text-left px-2 py-0.5 whitespace-nowrap">
                               <span className="text-muted">{shortDate(r.changeDate)}</span>
                               <span className="text-faint"> · {ACTION_LABEL[r.actionGroup] ?? r.action.toLowerCase()}</span>
-                              <span className={r.source === 'MANUAL' ? 'text-violet-400' : 'text-faint'} title={r.source === 'MANUAL' ? 'you made this change by hand' : 'the coach suggested it'}> · {r.source.toLowerCase()}</span>
+                              <span className={sourceMeta(r.source).cls} title={sourceMeta(r.source).title}> · {r.source.toLowerCase()}</span>
                               {r.supersededInWindow && (
                                 <span className="text-amber-400" title={`${r.nLaterChanges ?? 0} later change${r.nLaterChanges === 1 ? '' : 's'} landed on this entity inside the grading window — the result is contaminated, read it as a hint not a verdict`}> · ⚠ superseded</span>
                               )}
