@@ -32,9 +32,18 @@ THE COPIES (doctored rows are chosen deterministically in the latest partition, 
     NC_M2_SENTENCE_SAYS_RAMP    a non-RAMPED moved cap's row saying "tonight the one-third ramp decided
                                 it": M2 1 (0 when no such cap).
     NC_M3_SEAT_DROPPED          one seated row removed: M3 1.
-    NC_M3_QUEUE_DROPPED         the plan's control — one queued non-PAUSE row removed: M3 1 when that
-                                row's queue spend is above $0.001 a day, else 0 (the copy is then
-                                vacuous and NC_M3_QUEUE_UNCOUNTED carries the case).
+    HC_M3_QUEUE_COUNTED         follow-up F9 (2026-10-03): the lowest-numbered queued non-PAUSE row
+                                (queue_rn) INJECTED with $3.00 a day more window spend, and its family's
+                                published figures restated to count it — expected_after_upload_per_day
+                                + $3.00 x (planned bid / current bid, 1 with no planned bid), share_closed
+                                recomputed from it (NULL stays NULL: no gap), and both printed figures
+                                replaced in every row's sentence of that plan-B family: M3 0.
+    NC_M3_QUEUE_DROPPED         the plan's control — that queued row removed from HC_M3_QUEUE_COUNTED:
+                                M3 1. Until F9 it removed the row as published, and every queued row
+                                the copy picked on 2026-10-02 and 2026-10-03 had bought nothing in the
+                                window ($0.00 queue spend), so it read 0 and expected 0. With no queued
+                                row, or a queued row the injection adds no money to: NOT EXERCISED, and
+                                the script exits 1 (both copies).
     NC_M3_QUEUE_UNCOUNTED       that queued row given $3.00 a day more window spend than the published
                                 expected figure counted: M3 1.
     NC_M3_SHARE_OFF             a family with a gap given share_closed + 0.10 on every live row: M3 >= 1
@@ -104,6 +113,27 @@ def drop(pick_col):
     return f"SELECT * EXCEPT (rn) FROM hbase WHERE rn != COALESCE((SELECT {pick_col} FROM pick), -1)"
 
 
+# follow-up F9: the plan-B rows of the injected queued row's family in the latest partition
+QFAM = "as_of = (SELECT mx FROM pick) AND plan = 'B' AND family = (SELECT queue_fam FROM pick)"
+EXP_FMT = "'Expected after the upload: $%.2f a day'"
+SHARE_FMT = "'%.0f%% of the gap to the allowance target closes'"
+
+
+def queue_counted():
+    """the queued row queue_rn given $3.00 a day more window spend, and its family's expected figure,
+    share_closed and sentences restated to count it (the injected values are in qinj); the REPLACE
+    expressions read the row's published values, so each sentence swaps the old figures for the new.
+    rn is kept: build_script materializes this as hq, and NC_M3_QUEUE_DROPPED drops queue_rn from it"""
+    return ("SELECT * REPLACE ("
+            "IF(rn = (SELECT queue_rn FROM pick), w_sp + 3.0 * window_days, w_sp) AS w_sp, "
+            f"IF({QFAM}, (SELECT ex_new FROM qinj), expected_after_upload_per_day) AS expected_after_upload_per_day, "
+            f"IF({QFAM}, (SELECT sh_new FROM qinj), share_closed) AS share_closed, "
+            f"IF({QFAM}, REPLACE(IF(share_closed IS NULL, sentence, REPLACE(sentence, "
+            f"FORMAT({SHARE_FMT}, 100 * share_closed), FORMAT({SHARE_FMT}, 100 * (SELECT sh_new FROM qinj)))), "
+            f"FORMAT({EXP_FMT}, expected_after_upload_per_day), FORMAT({EXP_FMT}, (SELECT ex_new FROM qinj))), "
+            "sentence) AS sentence) FROM hbase")
+
+
 COPIES = {
     "LIVE": (LIVE, None),
     "NC_EMPTY": (f"{LIVE} WHERE FALSE",
@@ -128,7 +158,12 @@ COPIES = {
     "NC_M2_SENTENCE_SAYS_RAMP": (at("other_moved_rn", sentence="CONCAT(sentence, ' — tonight the one-third ramp decided it')"),
                                  ("M2", "1_IF_OTHER_MOVED")),
     "NC_M3_SEAT_DROPPED": (drop("seat_rn"), ("M3", 1)),
-    "NC_M3_QUEUE_DROPPED": (drop("queue_rn"), ("M3", "1_IF_QUEUE_SPEND")),
+    # follow-up F9: the queued row is injected with money before it is dropped. The injected copy is
+    # materialized once (hq): inlined, its scalar subqueries are re-read wherever the file reads the
+    # plan table, and the first run failed on BigQuery's stage limit at that copy
+    "HC_M3_QUEUE_COUNTED": ("SELECT * EXCEPT (rn) FROM hq", ("M3", "0_IF_QUEUE_INJECTED")),
+    "NC_M3_QUEUE_DROPPED": ("SELECT * EXCEPT (rn) FROM hq WHERE rn != COALESCE((SELECT queue_rn FROM pick), -1)",
+                            ("M3", "1_IF_QUEUE_INJECTED")),
     "NC_M3_QUEUE_UNCOUNTED": (at("queue_rn", w_sp="w_sp + 3.0 * window_days"), ("M3", 1)),
     "NC_M3_SHARE_OFF": (fam("gap_fam", share_closed="share_closed + 0.10"), ("M3", "GE1_IF_GAP")),
     "NC_M3_SENTENCE_SILENT": (at("first_rn", sentence="REPLACE(sentence, 'Expected after the upload: $', 'Expected: $')"),
@@ -159,7 +194,8 @@ def build_script(judge_source):
         "SAFE_DIVIDE(SUM(IF(side = 'GOOD' AND COALESCE(holdout, FALSE), w_sp, 0)), MAX(window_days)) hold_good, "
         "SAFE_DIVIDE(SUM(IF(side = 'GOOD' AND NOT COALESCE(holdout, FALSE), w_sp, 0)), MAX(window_days)) good_out, "
         "SAFE_DIVIDE(SUM(IF(side = 'NOT_GOOD' AND COALESCE(holdout, FALSE), w_sp, 0)), MAX(window_days)) hold_ng, "
-        "MAX(allowance_target_per_day) tgt, MAX(notgood_today_per_day) ng, MAX(share_closed) sh "
+        "MAX(allowance_target_per_day) tgt, MAX(notgood_today_per_day) ng, MAX(share_closed) sh, "
+        "MAX(expected_after_upload_per_day) ex "
         "FROM b0 GROUP BY 1;",
         "CREATE TEMP TABLE pick AS SELECT "
         f"{latest} AS mx, "
@@ -179,11 +215,22 @@ def build_script(judge_source):
         "(SELECT MIN(rn) FROM b0 WHERE is_candidate AND seat_no IS NULL AND move != 'PAUSE') AS queue_rn, "
         "(SELECT COALESCE(SAFE_DIVIDE(w_sp, window_days), 0) * COALESCE(SAFE_DIVIDE(planned_bid, NULLIF(current_bid, 0)), 1) "
         "   FROM b0 WHERE rn = (SELECT MIN(rn) FROM b0 WHERE is_candidate AND seat_no IS NULL AND move != 'PAUSE')) AS queue_rn_spend, "
+        # follow-up F9: the queued row's family, and what $3.00 a day more window spend adds to its
+        # expected figure (M3's recount: window spend per day x planned / current bid, 1 with none)
+        "(SELECT family FROM b0 WHERE rn = (SELECT MIN(rn) FROM b0 WHERE is_candidate AND seat_no IS NULL AND move != 'PAUSE')) AS queue_fam, "
+        "(SELECT 3.0 * COALESCE(SAFE_DIVIDE(planned_bid, NULLIF(current_bid, 0)), 1) "
+        "   FROM b0 WHERE rn = (SELECT MIN(rn) FROM b0 WHERE is_candidate AND seat_no IS NULL AND move != 'PAUSE')) AS queue_add, "
         "(SELECT MIN(rn) FROM b0) AS first_rn, "
         "(SELECT MIN(rn) FROM b0 WHERE plan_uploads_landed = 0) AS no_upload_rn, "
         "(SELECT COUNTIF(STARTS_WITH(basis, 'NO_MOVE_HOLDOUT') AND need > cur + 0.005) FROM capb) AS holdout_caps_under_need;",
+        # follow-up F9: the injected family's figures, published and restated (share as M3 states it:
+        # recomputed only where the gap is above $0.005 a day, NULL otherwise)
+        "CREATE TEMP TABLE qinj AS SELECT f.ex AS ex_old, f.ex + p.queue_add AS ex_new, f.sh AS sh_old, "
+        "IF(f.ng - f.tgt > 0.005, (f.ng - (f.ex + p.queue_add)) / (f.ng - f.tgt), NULL) AS sh_new "
+        "FROM famb f JOIN pick p ON f.family = p.queue_fam;",
+        f"CREATE TEMP TABLE hq AS {queue_counted()};",
         # flat columns, not a JSON string: the row parser below reads objects with no nested braces
-        "SELECT 'PICK' AS copy, * FROM pick;",
+        "SELECT 'PICK' AS copy, p.*, q.* FROM pick p LEFT JOIN qinj q ON TRUE;",
     ]
     for name, (hsql, _) in COPIES.items():
         q = acc.replace("__HH__", f"({hsql})")
@@ -213,7 +260,7 @@ def main():
     if not pick:
         print("the PICK row did not parse")
         return 2
-    for k in ("queue_rn_spend",):
+    for k in ("queue_rn_spend", "queue_add"):
         pick[k] = float(pick[k]) if pick.get(k) is not None else None
     print("doctored rows:", pick)
     got = {}
@@ -236,8 +283,9 @@ def main():
                 want = 1 if pick.get("floored_cid") else 0
             if want == "1_IF_OTHER_MOVED":
                 want = 1 if pick.get("other_moved_rn") else 0
-            if want == "1_IF_QUEUE_SPEND":
-                want = 1 if (pick.get("queue_rn_spend") or 0) > 0.001 else 0
+            # follow-up F9: a queued row the injection could not give money to is a control that did not run
+            if want in ("0_IF_QUEUE_INJECTED", "1_IF_QUEUE_INJECTED"):
+                want = int(want[0]) if (pick.get("queue_add") or 0) > 0.001 else "NOT EXERCISED"
             if want == "GE1_IF_GAP":
                 want = "GE1" if pick.get("gap_fam") else 0
             ok = (v is not None and v >= 1) if want == "GE1" else (v == want)

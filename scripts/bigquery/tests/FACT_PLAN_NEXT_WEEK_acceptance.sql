@@ -255,6 +255,29 @@
 --   NC_T1_SHRANK_OLD_WORDS (the justified eviction in v27.164's sentence): C23 0, T1 1.
 --   The v27.164 form of this file on the same three copies (job
 --   bqjob_r3e728f553dd863_000001a1017a55a5_1, 1,357.7 slot-seconds): T1 1, 0, 0.
+--
+-- Follow-up F9 (2026-10-03): NO CHECK CHANGED; M3's control NC_M3_QUEUE_DROPPED (the plan's control) is
+-- no longer vacuous. It removed the lowest-numbered queued non-PAUSE row as published; on the 2026-10-02
+-- and 2026-10-03 partitions that row had bought nothing in the window ($0.00 queue spend), so it read M3
+-- 0 against an expected 0 (the Task 10 proof). check_plan_money_controls.py now injects the money
+-- first: HC_M3_QUEUE_COUNTED gives that row $3.00 a day more window spend and restates its plan-B
+-- family's expected_after_upload_per_day (+ $3.00 x planned / current bid, 1 with no planned bid),
+-- share_closed and both printed figures in every sentence of the family to count it;
+-- NC_M3_QUEUE_DROPPED removes the row from that copy. No queued row, or one the injection adds no money
+-- to, reads NOT EXERCISED on both (exit 1).
+-- RUN on the 2026-10-03 partition (built 08:58:26 UTC by v27.164), judgement snapshot OI._tmp_f8_judge,
+-- the script's own text submitted with --nosync (scratchpad wrapper: the script waits synchronously)
+-- plus the pre-F9 copy as OLD_..., job bqjob_r25bd2d6619db3273_000001a1019bf35c_1 (11:52:44 - 11:59:20
+-- UTC), 120,513.8 slot-seconds (HC_C16_UPLOADS_LANDED alone 50,072.9), 77,265,570 bytes: exit 0, LIVE 37 checks 0, every
+-- copy as expected. Injected row: LolliME 207390974307873 (rn 1081, a probe, w_sp $0.00, no planned
+-- bid); expected after upload $163.0685 -> $166.0685, share_closed 0.2915 -> 0.2019.
+-- HC_M3_QUEUE_COUNTED M3 0 (384.9 slot-seconds; C15 1, C20 1, T5 35 moved, printed: the row's spend
+-- moved and nothing else); NC_M3_QUEUE_DROPPED M3 1 (409.4; C13 1, T5 8); the pre-F9 copy on the same
+-- job M3 0. M3 alone on copies with the injection moved to the Lollibox queued row (rn 1260, a family
+-- with no gap, share_closed NULL): HC 0, NC 1. The guard, controlled: the job's rows re-read with the
+-- PICK row's queue_add nulled read both copies NOT EXERCISED and exited 1. The first submission
+-- (bqjob_r64c26b87ea73f966_000001a10196bb35_1) inlined the injected copy and failed at it on BigQuery's
+-- stage limit; the copy is now materialized once (temp table hq, 1.9 slot-seconds).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`

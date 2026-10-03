@@ -276,6 +276,22 @@
 -- The NULL term, run as C22's CTE alone on a copy of OI._tmp_f3_judge_new with the lowest-keyed GRACE
 -- row's sentence set to NULL: restated C22 1; the v27.156 form 0 (its NOT (...) went NULL and the
 -- COUNTIF dropped the row).
+--
+-- Follow-up F9 (2026-10-03): NO CHECK CHANGED; G4's control NC_G4_CLEARED_HONOURED is no longer vacuous
+-- on a night the judge clears no memory. It doctored only a row cleared TONIGHT; on 2026-10-03 (New
+-- York) the judge cleared none, so it doctored nothing and read G4 0 against an expected 0 (the Task 10
+-- proof). check_judge_memory_controls.py now injects the cleared row when tonight has none (its temp
+-- table clr): the lowest key the judge cleared on the latest earlier night whose row tonight honours no
+-- memory, that key's history from that night on removed (so G4 reads the history the judge cleared it
+-- on), its row made to honour a spent grace. HC_G4_CLEARED_NOT_HONOURED is the same history with the row
+-- left alone. Neither tonight nor the history holding a cleared memory reads NOT EXERCISED (exit 1).
+-- RUN on the deployed v27.165 view and the live history, job bqjob_r64ef671776c3de73_000001a10196e178_1
+-- (11:47:12 - 11:50:49 UTC, 13,847.4 slot-seconds; the script plus the pre-F9 copy as OLD_...): exit 0,
+-- LIVE 30 checks 0, all 42 doctored copies as expected. The injected key 130115986205897|126642648801972
+-- (LolliME, cleared 2026-10-02, GOOD tonight): NC_G4_CLEARED_HONOURED G4 1 (201.3 slot-seconds,
+-- 72,195,505 bytes, FACT_AMAZON_ADS read through G4); HC_G4_CLEARED_NOT_HONOURED G4 0 (198.1); the
+-- pre-F9 copy on the same job G4 0; clr 0.3 slot-seconds. The guard, controlled: the same job
+-- re-collected with the PICK row's clr_key nulled read both copies NOT EXERCISED and exited 1.
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),

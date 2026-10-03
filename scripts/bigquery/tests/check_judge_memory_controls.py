@@ -32,8 +32,18 @@ THE COPIES (one script, one scan of the view; each copy is one run of the accept
                              08-29..09-27 gap: its 08-27 row made GRACE and its judgement row made
                              to honour a spent grace (prior_grace TRUE): G4 1.
     HC_G4_NOT_HONOURED       the same history, the judgement row left alone: G4 0.
-    NC_G4_CLEARED_HONOURED   a row the judge cleared tonight (memory_cleared_by_gap GRACE) made to
-                             honour its grace anyway: G4 1 (vacuous when the judge cleared none).
+    NC_G4_CLEARED_HONOURED   a row the judge cleared (memory_cleared_by_gap GRACE or GRACE_AND_HOLD)
+                             made to honour its grace anyway: G4 1. Follow-up F9 (2026-10-03): until
+                             then it doctored only a row cleared TONIGHT, and on a night that cleared
+                             none (2026-10-03) it doctored nothing and read 0 against an expected 0.
+                             Now, when tonight cleared none, the row is INJECTED from the latest
+                             earlier night that cleared one (table clr): the lowest key cleared that
+                             night whose row tonight honours no memory (no spent grace, no grace or
+                             hold run from before tonight), its history from that night on removed,
+                             so G4 reads the history the judge cleared it on. No clearing in the
+                             history either: NOT EXERCISED, and the script exits 1.
+    HC_G4_CLEARED_NOT_HONOURED  the same history as NC_G4_CLEARED_HONOURED, the judgement row left
+                             alone: G4 0 (the history's doctoring alone does not trip G4).
     NC_C12_RUN_OVER          a GRACE row whose grace_ends_on is yesterday: C12 1.
     NC_C22_NO_END_DATE       a GRACE row whose sentence lost its "through <date>": C22 1.
   v27.157 (piece-1 plan Task 3, P-19 / P-20 / P-25). The judge's deployed definition is swapped too:
@@ -153,6 +163,11 @@ def j_at(pick_col, **repl):
     return f"SELECT * EXCEPT (rn) REPLACE ({sets}) FROM jbase"
 
 
+# follow-up F9: the history NC_G4_CLEARED_HONOURED reads — the clr key's rows from its clearing night on
+# removed (a no-op on the rows hist reads when the judge cleared the key tonight: hist ends before tonight)
+H_CLR = ("SELECT * FROM hbase WHERE NOT (CONCAT(campaign_id, '|', keyword_id) = COALESCE((SELECT k FROM clr), '') "
+         "AND as_of >= (SELECT night FROM clr))")
+
 V_LIVE = "SELECT * FROM vbase"
 # v27.161: the sources C02 reads besides the judgement, each live unless a copy doctors it
 EXTRA_LIVE = {"__EC__": f"SELECT experiment_id, campaign_id FROM {EXPC}", "__KS__": f"SELECT * FROM {KSTATE}"}
@@ -192,10 +207,12 @@ COPIES = {
         J_LIVE,
         "SELECT * REPLACE (IF(CONCAT(campaign_id, '|', keyword_id) = (SELECT k FROM g4key) AND as_of = DATE '2026-08-27', 'GRACE', verdict) AS verdict) FROM hbase",
         ("G4", 0)),
+    # follow-up F9: the cleared row is tonight's, or injected from the latest earlier clearing (clr)
     "NC_G4_CLEARED_HONOURED": (
-        "SELECT * EXCEPT (rn) REPLACE (IF(rn = (SELECT cleared_rn FROM pick), TRUE, prior_grace) AS prior_grace, "
-        "IF(rn = (SELECT cleared_rn FROM pick), CAST(NULL AS STRING), memory_cleared_by_gap) AS memory_cleared_by_gap) FROM jbase",
-        H_LIVE, ("G4", "1_IF_CLEARED")),
+        "SELECT * EXCEPT (rn) REPLACE (IF(CONCAT(campaign_id, '|', keyword_id) = (SELECT k FROM clr), TRUE, prior_grace) AS prior_grace, "
+        "IF(CONCAT(campaign_id, '|', keyword_id) = (SELECT k FROM clr), CAST(NULL AS STRING), memory_cleared_by_gap) AS memory_cleared_by_gap) FROM jbase",
+        H_CLR, ("G4", "1_IF_CLR")),
+    "HC_G4_CLEARED_NOT_HONOURED": (J_LIVE, H_CLR, ("G4", "0_IF_CLR")),
     "NC_C12_RUN_OVER": (
         "SELECT * EXCEPT (rn) REPLACE (IF(rn = (SELECT grace_rn FROM pick), DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY), grace_ends_on) AS grace_ends_on) FROM jbase",
         H_LIVE, ("C12", "1_IF_GRACE")),
@@ -268,7 +285,6 @@ def build_script(judge_source):
         "(SELECT MIN(rn) FROM jbase WHERE verdict = 'GRACE') AS grace_rn, "
         # v27.165 (F3): a GRACE row whose run length is not tonight's window length
         "(SELECT MIN(rn) FROM jbase WHERE verdict = 'GRACE' AND grace_window_days != window_days) AS grace7_rn, "
-        "(SELECT MIN(rn) FROM jbase WHERE memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD')) AS cleared_rn, "
         # v27.157: the rows Task 3's controls doctor
         "(SELECT MIN(rn) FROM jbase WHERE side_b = 'NOT_GOOD' AND NOT is_probe AND COALESCE(ret_corrected, 0) < family_bar "
         "   AND planned_bid IS NOT NULL AND w_sp > 0 AND planned_bid_basis = 'P6_REPAIR') AS p1_rn, "
@@ -310,13 +326,32 @@ def build_script(judge_source):
         "   AND CAST(f.keyword_id AS STRING) = c.keyword_id AND f.date BETWEEN DATE_SUB(d, INTERVAL 2 DAY) AND d "
         "  GROUP BY 1, 2, 3, 4) "
         "SELECT MIN(CONCAT(campaign_id, '|', keyword_id)) AS k FROM w WHERE o >= 2 AND r >= family_bar;",
+        # follow-up F9: the memory NC_G4_CLEARED_HONOURED makes a row honour. Tonight's lowest-numbered
+        # row the judge cleared (a GRACE memory), if any (night = tonight, injected FALSE); otherwise
+        # the lowest key the judge cleared on the latest earlier live night whose row tonight honours
+        # no memory (injected TRUE; H_CLR removes its history from that night on)
+        "CREATE TEMP TABLE clr AS "
+        "SELECT CONCAT(cid, '|', kid) AS k, night, injected FROM ("
+        "  SELECT campaign_id AS cid, keyword_id AS kid, CURRENT_DATE('America/New_York') AS night, "
+        "         FALSE AS injected, 0 AS pri "
+        "  FROM jbase WHERE memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD') "
+        "  UNION ALL "
+        "  SELECT h.campaign_id, h.keyword_id, h.as_of, TRUE, 1 "
+        "  FROM hbase h JOIN jbase j ON j.campaign_id = h.campaign_id AND j.keyword_id = h.keyword_id "
+        "  WHERE h.is_live_plan AND h.as_of < CURRENT_DATE('America/New_York') "
+        "    AND h.memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD') "
+        "    AND NOT COALESCE(j.prior_grace, FALSE) "
+        "    AND NOT COALESCE(j.verdict = 'GRACE' AND j.grace_since < CURRENT_DATE('America/New_York'), FALSE) "
+        "    AND NOT COALESCE(j.hold_since < CURRENT_DATE('America/New_York'), FALSE)) "
+        "ORDER BY pri, night DESC, cid, kid LIMIT 1;",
         # v27.161: every copy INSERTs into res and the LAST statement reads it, so the parent job's
         # result is the whole run (bq head -j) and the job can be submitted asynchronously
         "CREATE TEMP TABLE res (copy STRING, check_name STRING, violations INT64, detail STRING);",
         "INSERT INTO res SELECT 'PICK', 'PICK', 0, TO_JSON_STRING(STRUCT("
         "(SELECT held_rn FROM pick) AS held_rn, (SELECT grace_rn FROM pick) AS grace_rn, "
         "(SELECT grace7_rn FROM pick) AS grace7_rn, "
-        "(SELECT cleared_rn FROM pick) AS cleared_rn, (SELECT k FROM g4key) AS g4key, "
+        "(SELECT k FROM clr) AS clr_key, (SELECT night FROM clr) AS clr_night, "
+        "(SELECT injected FROM clr) AS clr_injected, (SELECT k FROM g4key) AS g4key, "
         "(SELECT p1_rn FROM pick) AS p1_rn, (SELECT p1_bar_rn FROM pick) AS p1_bar_rn, "
         "(SELECT p19c_rn FROM pick) AS p19c_rn, (SELECT p3_rn FROM pick) AS p3_rn, "
         "(SELECT c08_rn FROM pick) AS c08_rn, (SELECT sub_rn FROM pick) AS sub_rn, "
@@ -411,8 +446,9 @@ def collect(job):
             targets = [targets]
         for chk, want in targets:
             v = got.get((name, chk))
-            if want == "1_IF_CLEARED":
-                want = 1 if pick.get("cleared_rn") else 0
+            # follow-up F9: no cleared memory tonight or in the history is a control that did not run
+            if want in ("1_IF_CLR", "0_IF_CLR"):
+                want = int(want[0]) if pick.get("clr_key") else "NOT EXERCISED"
             if want == "1_IF_GRACE":
                 want = 1 if pick.get("grace_rn") else 0
             # v27.165 (F3): with no GRACE row, C22's emptiness term reads 1 on every copy

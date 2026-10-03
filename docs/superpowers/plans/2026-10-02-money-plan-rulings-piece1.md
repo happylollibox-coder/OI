@@ -519,7 +519,7 @@ each with its own check and negative control.
 - [x] **F8 R2 shrink order.** When tonight's allowance cannot carry every incumbent, incumbents leave
   latest-seated first until the rest fit — no fit-test skipping, which let an earlier, costlier incumbent
   leave while a later, cheaper one stayed.
-- [ ] **F9 controls vacuous today.** `NC_G4_CLEARED_HONOURED` (no memory cleared tonight) and
+- [x] **F9 controls vacuous today.** `NC_G4_CLEARED_HONOURED` (no memory cleared tonight) and
   `NC_M3_QUEUE_DROPPED` (the dropped queued row has $0 spend) must inject a row that exercises them.
 
 Out of these fixes, recorded for Ori: the holdout trial's contamination (R9 as built censors 61 of 69

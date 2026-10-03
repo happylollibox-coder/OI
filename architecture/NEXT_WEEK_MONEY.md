@@ -2357,6 +2357,46 @@ Measured 2026-10-03 (11:00–11:22 UTC, Los Angeles and New York both 10-03).
   11:00 UTC judgement snapshot the v27.167 partition equals v27.164's on every column but `built_at`,
   so the next orchestrator pass is the first v27.167 write.
 
+### Two controls that tested nothing on a quiet night (piece-1 follow-up F9)
+
+**The defect.** Two negative controls only had something to doctor on some nights, and on the others
+they read 0 against an expected 0. `NC_G4_CLEARED_HONOURED` (`check_judge_memory_controls.py`) made a
+row the judge cleared **tonight** honour its grace; on 2026-10-03 the judge cleared none. The plan's own
+control for M3, `NC_M3_QUEUE_DROPPED` (`check_plan_money_controls.py`), removed the lowest-numbered
+queued row; on the 2026-10-02 and 2026-10-03 partitions that row had bought nothing, so removing it
+changed no money.
+
+**The fix: inject a row that exercises them.** No check, view or procedure changed; nothing deployed.
+
+- **G4.** When tonight cleared nothing, the harness takes the lowest key the judge cleared on the latest
+  earlier night (`memory_cleared_by_gap` GRACE / GRACE_AND_HOLD in the live history) whose row tonight
+  honours no memory. It removes that key's history from that night on, so G4 reads the history the
+  judge cleared it on, and makes its row honour a spent grace. `HC_G4_CLEARED_NOT_HONOURED` is the same
+  history with the row left alone.
+- **M3.** `HC_M3_QUEUE_COUNTED` gives the queued row $3.00 a day more window spend and restates its
+  plan-B family's expected figure, `share_closed` and both printed figures in every sentence to count
+  it. `NC_M3_QUEUE_DROPPED` removes the row from that copy. The copy is materialized once: inlined, it
+  failed on BigQuery's stage limit.
+- Either harness exits 1 with **NOT EXERCISED** when it has nothing to inject (no cleared memory
+  anywhere; no queued row the injection adds money to).
+
+Measured 2026-10-03, each with the pre-F9 copy added on the same job:
+
+- **Judge.** Job `bqjob_r64ef671776c3de73_000001a10196e178_1`, 13,847.4 slot-seconds, deployed v27.165
+  view. Exit 0, LIVE 30 checks 0. The injected key is LolliME `130115986205897|126642648801972`
+  (cleared 10-02). G4 read 1 on the new control, 0 on its healthy twin and 0 on the old form.
+- **Money.** Job `bqjob_r25bd2d6619db3273_000001a1019bf35c_1`, 10-03 partition, snapshot
+  `OI._tmp_f8_judge`. Exit 0, LIVE 37 checks 0. The injected row is LolliME probe `207390974307873`;
+  expected after upload went $163.07 → $166.07. M3 read 0 on the healthy copy, 1 on the new control and
+  0 on the old form. On a no-gap family (Lollibox, M3 alone) it read 0 and 1.
+- **Guard.** Each job re-read with the injection's pick nulled printed NOT EXERCISED and exited 1.
+
+The values and costs are in the two acceptance files' headers.
+
+`check_plan_money_controls.py` still waits for its job synchronously. That job cost 120,513.8
+slot-seconds and ran 396.3 s (11:52:44–11:59:20 UTC), so the run above submitted the same script text
+with `--nosync` through a scratchpad wrapper and polled it with `bq wait`.
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
