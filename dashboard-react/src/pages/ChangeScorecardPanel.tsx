@@ -68,9 +68,8 @@ const REMEDY_LABEL: Record<string, string> = {
 // Who made the change — copy + colour for the view's `source`. Colour marks a change a person made
 // (MANUAL logged on the DO page, OBSERVED seen on Amazon only); OI-built rows (the coach, the weekly
 // book's tiers, tagged '<TIER>:<book source>') stay faint. Labels only — the view does the split.
-// OBSERVED rows do not reach this panel today: cube/schema/ChangeScorecard.js reads the view with
-// source != 'OBSERVED', as the morning brief does, until Ori decides graded hand changes belong
-// here (architecture/PPC_CLOSE_THE_LOOP.md §Observed changes). The OBSERVED label is for that day.
+// OBSERVED rows reach this panel since 2026-10-03 (Ori's ruling of 2026-10-02: hand changes are
+// evidence, labelled as his); this chip is that label (architecture/PPC_CLOSE_THE_LOOP.md §Observed changes).
 const BOOK_TIER_TITLE: Record<string, string> = {
   CATALOG: "the weekly book's Catalog tier decided it — whether this is worth having (pause, negate, park)",
   BRAIN: "the weekly book's Brain tier decided it — where the money goes (budgets, seat moves)",

@@ -10,7 +10,8 @@
 --          V_DAILY_BRIEF / V_ENGINE_HEALTH (read the scorecard without them); V_THRESHOLD_TUNER reads them,
 --          labelled as Ori's, since his ruling of 2026-10-02.
 -- The fourth reader of the scorecard, Cube ChangeScorecard (cube/schema/ChangeScorecard.js, the
--- Weekly Run panel), is a JavaScript file no query can read; its filter is checked by
+-- Weekly Run panel), is a JavaScript file no query can read. Since 2026-10-03 it reads every row,
+-- hand changes included (Ori's ruling of 2026-10-02); that it drops none is checked by
 -- scripts/bigquery/tests/check_change_scorecard_cube.py, not here.
 -- SOP: architecture/PPC_CLOSE_THE_LOOP.md §Observed changes.
 --
@@ -104,6 +105,12 @@
 --   the unfiltered copy 1,973 rows, 145 OBSERVED), 1,304 and 2,823 slot-seconds; FAIL on each of
 --   three doctored temp copies (no filter, a COACH-only filter, an empty result), as its own run
 --   log records.
+--
+-- NOTE 2026-10-03 (no run). Cube ChangeScorecard's filter above was lifted under Ori's ruling of
+--   2026-10-02: the Weekly Run panel shows graded hand changes, labelled OBSERVED.
+--   check_change_scorecard_cube.py now asserts the cube drops no row (its run log has the runs).
+--   No BigQuery object changed and this file's executable lines did not change, so it was not
+--   re-run for this note.
 -- =============================================================================================
 
 -- ---- inputs, each read ONCE -------------------------------------------------------------------

@@ -131,8 +131,8 @@ DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
                           └─> V_CHANGE_SCORECARD   grades them with the same logic; split by `source`
                                 ├─X V_DAILY_BRIEF / V_ENGINE_HEALTH  (source != 'OBSERVED')
                                 ├─> V_THRESHOLD_TUNER   counts them, labelled `hand H/N` per cell (Ori, 2026-10-02)
-                                └─X Cube ChangeScorecard  (source != 'OBSERVED' in its sql; live, 15-min cache)
-                                      └─> Weekly Run panel "How did last week's changes do?"
+                                └─> Cube ChangeScorecard  every row, no source filter (Ori, 2026-10-02); live, 15-min cache
+                                      └─> Weekly Run panel "How did last week's changes do?"  (OBSERVED chip)
 ```
 
 - **Ledger scope**: effective_from after 2026-08-20 (declared in the view's `in_ledger_scope`).
@@ -153,20 +153,22 @@ DIM_KEYWORD / DIM_CAMPAIGN / DIM_AD_GROUP   (SCD2, Refresh Tasks 2 / 2.1 / 2.2)
 - **Why the engines do not read them (yet)**: a hand cut to the floor would start the keyword
   state machine's probation clock, a hand change would count as the keyword's last change for the
   coach's cooldown, the seat register's last applied bid would move. That may be right, but it is Ori's decision, not a side effect of recording.
-  Same for the morning brief (restores of hand changes), the board's reversed share, the
-  threshold tuner and the Weekly Run scorecard panel (Cube `ChangeScorecard`; on 2026-10-01,
-  before its filter, it showed 60 graded hand changes as REVERSED, 52 of them with a value to
-  put back). To turn any of them on, drop its `source != 'OBSERVED'` filter (or, for the engines,
-  the `OBSERVED_ON_AMAZON` exclusion in `V_PPC_CHANGE_LOG_APPLIED`). Dropping the cube's filter
-  also puts restores of hand changes in the panel's REVERSED "restore" column.
+  Same for the morning brief (restores of hand changes) and the board's reversed share. To turn
+  either on, drop its `source != 'OBSERVED'` filter (or, for the engines, the `OBSERVED_ON_AMAZON`
+  exclusion in `V_PPC_CHANGE_LOG_APPLIED`). Ori ruled on 2026-10-02 that hand changes are
+  evidence, labelled as his, for two readers: the threshold tuner (since that day, `hand H/N` per
+  cell) and the Weekly Run scorecard panel (since 2026-10-03, Cube `ChangeScorecard` has no source
+  filter; each hand change carries the OBSERVED chip, and a REVERSED one shows its pre-change
+  value to put back like any other row).
 - **Grain caveat**: observed KEYWORD_PAUSE / KEYWORD_ENABLE / CAMPAIGN_PAUSE land in the
   scorecard's `OTHER` group (campaign grain, not decision-grade), as the logged pauses always have.
 - **Acceptance**: `scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql` — completeness and
   idempotence, no first version, every row a real DIM version pair, the 2026-08-26 ME-SP/AUTO
   close-match raise, APPLIED unchanged, LANDED counts each change once, the downstream filters —
-  each with a negative control. The cube is a JavaScript file no query can read, so its filter
-  has its own check: `scripts/bigquery/tests/check_change_scorecard_cube.py` (evaluates the file
-  in node, runs its SQL, and runs an unfiltered copy as the negative control).
+  each with a negative control. The cube is a JavaScript file no query can read, so what it
+  returns has its own check: `scripts/bigquery/tests/check_change_scorecard_cube.py` (evaluates
+  the file in node, runs its SQL next to the bare view, and fails if the cube drops any row —
+  hand changes included).
 
 ## V_PPC_ACTION_OUTCOMES
 
@@ -446,7 +448,7 @@ The settled half needed its own surface, on the page where the changes are actua
 
 | piece | where |
 |---|---|
-| cube | `cube/schema/ChangeScorecard.js` over `V_CHANGE_SCORECARD` (live read, 15-min TTL — the `KeywordLift` / `OobBudget` / `PausedHistory` convention). Since 2026-10-01 it reads `WHERE source != 'OBSERVED'` (§Observed changes) |
+| cube | `cube/schema/ChangeScorecard.js` over `V_CHANGE_SCORECARD` (live read, 15-min TTL — the `KeywordLift` / `OobBudget` / `PausedHistory` convention). Every row of the view, hand changes included: the `WHERE source != 'OBSERVED'` it carried from 2026-10-01 was lifted on 2026-10-03 under Ori's ruling of 2026-10-02 (§Observed changes) |
 | panel | `dashboard-react/src/pages/ChangeScorecardPanel.tsx`, mounted as its own top-level section on **Weekly Run**, above the total-budget panel — the retrospective frames the run |
 
 The panel is titled **"How did last week's changes do?"**, collapsed by default with the verdict
@@ -464,10 +466,9 @@ window result (`win_clicks` · `win_spend` · `win_gp_roas` · `win_net_profit` 
 OI — usually a console edit. Rows OI built stay faint: COACH, and the weekly book's `BRAIN:*` /
 `CATALOG:*` / `PACING:*` rows, whose tooltip names the tier and what it decides. Any other value
 shows itself raw instead of being credited to the coach. The chip is a label only; the split is
-the view's `source`. OBSERVED rows do not reach the panel yet: the cube still holds them out
-(`WHERE source != 'OBSERVED'`, §Observed changes). Ori's 2026-10-02 ruling puts them in the panel,
-labelled as his — that is the open task 'Label observed hand changes in the scorecard panel', and
-lifting the filter also puts restores of hand changes in the REVERSED "restore" column.
+the view's `source`. OBSERVED rows reach the panel since 2026-10-03 (Ori's ruling of 2026-10-02:
+hand changes are evidence, labelled as his), so a REVERSED hand change shows its pre-change value
+to put back like any other row; the chip is what says the change was his.
 
 **REVERSED rows show the restore explicitly** — `remedy` + `remedy_value` (which is the
 pre-change `old_value`), rendered as "put it back → $X". Per the measurement note, REVERSED lands
@@ -504,6 +505,7 @@ so Weekly Run always renders.
 | 2026-10-01 | **Weekly Run panel holds hand changes out too** (Task B follow-up): Cube `ChangeScorecard` reads `V_CHANGE_SCORECARD` with `WHERE source != 'OBSERVED'`, the brief's decision, so the panel no longer lists hand changes under "restore". Not live until the cube is restarted / redeployed. File check `scripts/bigquery/tests/check_change_scorecard_cube.py`. |
 | 2026-10-02 | **Ori ruled: hand changes are evidence, labelled as his** — for the threshold tuner and the Weekly Run panel (the brief, the board and the engines' clocks were not part of the ruling and still leave them out). `V_THRESHOLD_TUNER` drops its `source != 'OBSERVED'` filter; every cell's `era_split` ends `hand H/N` and the proposal sentence names H. With them, era 2 has graded changes for the first time since 2026-08-24. `OBSERVED_CHANGES_acceptance` C09 now holds the tuner to the twin WITH the observed rows and checks the printed hand count; C09n turned round. The panel side is the separate task 'Label observed hand changes in the scorecard panel'. |
 | 2026-10-02 | **Scorecard panel names who made each change** (`ae6adc4`): the `source` chip no longer tells every non-MANUAL row "the coach suggested it". OBSERVED gets its own colour and tooltip, MANUAL says it was logged in OI, the book tiers name their tier, an unknown value shows itself raw. Display only. OBSERVED rows still do not reach the panel: the cube filter stands until the open task above lifts it. See §Cube + Dashboard. |
+| 2026-10-03 | **Weekly Run panel shows hand changes, labelled as Ori's** (the panel side of the 2026-10-02 ruling): Cube `ChangeScorecard` drops its `WHERE source != 'OBSERVED'`, so the panel lists every graded row of `V_CHANGE_SCORECARD`; hand changes carry the OBSERVED chip, and a REVERSED one shows its value to put back. The brief, the board and the engines' clocks still leave them out. `check_change_scorecard_cube.py` now fails if the cube drops any row of the view. Not live until the cube is restarted / redeployed. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |
 
 

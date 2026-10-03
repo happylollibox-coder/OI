@@ -1,36 +1,40 @@
 #!/usr/bin/env python3
-"""The Weekly Run scorecard panel reads the scorecard WITHOUT hand changes seen only on Amazon.
+"""The Weekly Run scorecard panel reads EVERY row of the scorecard, hand changes included.
 
 WHY THIS EXISTS
     Since 2026-10-01 (learning-system Task B) V_CHANGE_SCORECARD also grades
     source = 'OBSERVED': changes the DIM SCD2 trail shows on Amazon that OI never
-    logged, which are mostly Ori's own edits in the console. The morning brief,
-    the board and the tuner read the scorecard without them until Ori decides
-    otherwise; scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql (C09)
-    checks those three, because they are views.
+    logged, which are mostly Ori's own edits in the console. The morning brief and
+    the board read the scorecard without them; the tuner reads them since Ori's
+    ruling of 2026-10-02. scripts/bigquery/tests/OBSERVED_CHANGES_acceptance.sql
+    (C09) checks those three, because they are views.
 
     The fourth reader is Cube ChangeScorecard (cube/schema/ChangeScorecard.js),
     which feeds the Weekly Run panel "How did last week's changes do?"
     (dashboard-react/src/pages/ChangeScorecardPanel.tsx). It is a JavaScript
-    file, so no query can read its filter. Without the filter the panel lists
-    hand changes as REVERSED with a value to restore (60 and 52 on 2026-10-01).
+    file, so no query can read what it returns. From 2026-10-01 to 2026-10-03 it
+    held hand changes out (WHERE source != 'OBSERVED') and this check asserted
+    that. Ori's ruling of 2026-10-02 puts them in the panel, labelled as his (the
+    OBSERVED chip), so since 2026-10-03 it asserts the opposite: the cube drops
+    no row of the view, of any source.
 
 HOW IT READS THE CUBE
     By EVALUATING it, as scripts/bigquery/tests/check_seat_surface_labels.py
     does: the file is run in node with `cube` stubbed, so the SQL checked here is
-    exactly the SQL Cube would send. That SQL runs in BigQuery next to an
-    UNFILTERED copy: the same SQL cut off right after the view's name, so the
-    cube's own select list over the whole view, with whatever filter the cube
-    carries removed. Both run in ONE statement, so both see the same CURRENT_DATE.
+    exactly the SQL Cube would send. That SQL runs in BigQuery next to a BARE
+    copy: the same SQL cut off right after the view's name, so the cube's own
+    select list over the whole view, with any filter the cube carries removed.
+    Both run in ONE statement, so both see the same CURRENT_DATE.
 
 CHECKS (violation counts, 0 = PASS)
-    K01   OBSERVED rows the cube's SQL returns, +1 if it returns no rows at all
-    K01n  NEGATIVE CONTROL: the unfiltered copy returns >= 1 OBSERVED row (else
-          K01 passes over an input that has none, which proves nothing)
-    K02   |rows the cube returns - the unfiltered copy's rows with
-          source != 'OBSERVED'|: the filter drops nothing but hand changes
-    K02n  NEGATIVE CONTROL: a COACH-only filter would return a different count
-          from the non-OBSERVED rows (else K02 cannot tell a too-broad filter)
+    K01   |OBSERVED rows in the bare copy - OBSERVED rows the cube returns|:
+          every graded hand change reaches the panel
+    K01n  NEGATIVE CONTROL: the bare copy returns >= 1 OBSERVED row (else K01
+          passes over an input that has none, which proves nothing)
+    K02   |rows in the bare copy - rows the cube returns|: the cube drops
+          nothing, of any source
+    K02n  NEGATIVE CONTROL: the bare copy returns >= 1 row that is not OBSERVED
+          (else K02 cannot see a filter that hides logged changes)
 
 COST
     Two reads of V_CHANGE_SCORECARD in one job; its slot-seconds are printed.
@@ -46,6 +50,8 @@ USAGE
     CHANGE_SCORECARD_CUBE_FILE=/path/to/doctored_copy.js python3 ...   (negative controls only)
 
 RUN LOG — dated; re-run rather than trusting a figure here.
+    2026-10-01 entries ran the checks as they then stood, which ASSERTED the filter
+    (K01 = OBSERVED rows the cube returns; K02 = cube rows vs non-OBSERVED rows).
     2026-10-01 17:36 and 17:41 LA (2026-10-02 00:36 / 00:41 UTC), on the fixed cube file
       (same SQL both times; the second run is on the file as committed, after comment edits):
       K01 0 / K01n 0 / K02 0 / K02n 0, exit 0, both runs. Cube 1,828 rows, 0 OBSERVED;
@@ -57,6 +63,15 @@ RUN LOG — dated; re-run rather than trusting a figure here.
       the file as it stood before the fix (no filter) ... K01 145, K02 145
       the filter widened to WHERE source = 'COACH' ...... K01 0, K02 150
       the filter plus AND FALSE (the panel empty) ....... K01 1 (the emptiness term), K02 1828
+    2026-10-03 08:53-08:55 LA (15:53-15:55 UTC), the filter lifted (Ori's ruling of 2026-10-02),
+      checks inverted as above. On the cube file as committed: K01 0 / K01n 0 / K02 0 / K02n 0,
+      exit 0. Cube 1,973 rows, 145 OBSERVED; bare view 1,973 rows, 145 OBSERVED, 1,828 not.
+      2,905 slot-seconds, 13 s.
+    Whole-file negative controls, same session, doctored temp copies in the session scratchpad
+    run through CHANGE_SCORECARD_CUBE_FILE; each exited 1, K01n and K02n 0 in each:
+      the 2026-10-01 filter put back, WHERE source != 'OBSERVED' ... K01 145, K02 145
+      a filter that drops the coach, WHERE source != 'COACH' ..... K01 0, K02 1678
+      3,368 and 2,110 slot-seconds.
 """
 
 import json
@@ -114,24 +129,24 @@ def main():
     if sql.count(VIEW) != 1:
         die("the cube's SQL names %s %d times, expected once — repoint this check rather "
             "than delete it; it reads:\n%s" % (VIEW, sql.count(VIEW), sql))
-    unfiltered = sql[:sql.index(VIEW) + len(VIEW)]
+    bare = sql[:sql.index(VIEW) + len(VIEW)]
 
     q = """
 WITH
 cube_rows AS (
 %s
 ),
-unfiltered AS (
+bare_view AS (
 %s
 ),
 a AS (SELECT COUNT(*) AS n, COUNTIF(source = 'OBSERVED') AS obs FROM cube_rows),
 b AS (SELECT COUNT(*) AS n, COUNTIF(source = 'OBSERVED') AS obs,
-             COUNTIF(source != 'OBSERVED') AS kept, COUNTIF(source = 'COACH') AS coach_only
-      FROM unfiltered)
-SELECT a.n AS cube_n, a.obs AS cube_obs, b.n AS unfiltered_n, b.obs AS unfiltered_obs,
-       b.kept AS unfiltered_kept, b.coach_only AS unfiltered_coach_only
+             COUNTIF(source != 'OBSERVED') AS logged
+      FROM bare_view)
+SELECT a.n AS cube_n, a.obs AS cube_obs, b.n AS bare_n, b.obs AS bare_obs,
+       b.logged AS bare_logged
 FROM a CROSS JOIN b
-""" % (sql, unfiltered)
+""" % (sql, bare)
 
     job_id = "check_change_scorecard_cube_%d" % int(time.time() * 1000)
     r = subprocess.run(
@@ -159,23 +174,23 @@ FROM a CROSS JOIN b
               % (job_id, s.stderr.strip() or s.stdout.strip()))
 
     checks = [
-        # THE WEEKLY RUN PANEL SHOWS HAND CHANGES: Ori's own console edits are listed as
-        # REVERSED with a value to restore before he has ruled on them; or the panel is empty
-        # and this check proves nothing.
-        ("K01 the cube's SQL returns no OBSERVED row, and returns rows",
-         m["cube_obs"] + (1 if m["cube_n"] == 0 else 0)),
-        # K01 CANNOT FIRE: the view holds no graded hand change today, so a cube without its
-        # filter would pass K01 too.
-        ("K01n NEGATIVE CONTROL K01 FIRES: the unfiltered copy returns >= 1 OBSERVED row",
-         0 if m["unfiltered_obs"] >= 1 else 1),
-        # THE FILTER HIDES MORE THAN HAND CHANGES: logged changes (the coach's or Ori's) vanish
-        # from the panel and their settled results are never read.
-        ("K02 the cube returns every non-OBSERVED row of the view",
-         abs(m["cube_n"] - m["unfiltered_kept"])),
-        # K02 CANNOT FIRE: no row today is outside COACH and OBSERVED, so a filter keeping the
-        # coach's rows only would pass K02 too.
-        ("K02n NEGATIVE CONTROL K02 FIRES: a COACH-only filter would return a different count",
-         0 if m["unfiltered_coach_only"] != m["unfiltered_kept"] else 1),
+        # A HAND CHANGE IS MISSING FROM THE WEEKLY RUN PANEL: Ori ruled on 2026-10-02 that his
+        # console edits are evidence, shown labelled as his; a source filter in the cube hides
+        # their settled results, REVERSED restores included.
+        ("K01 the cube returns every OBSERVED row of the view",
+         abs(m["bare_obs"] - m["cube_obs"])),
+        # K01 CANNOT FIRE: the view holds no graded hand change today, so a cube that filters
+        # them out would pass K01 too.
+        ("K01n NEGATIVE CONTROL K01 FIRES: the bare view returns >= 1 OBSERVED row",
+         0 if m["bare_obs"] >= 1 else 1),
+        # THE CUBE HIDES ROWS: changes (the coach's, the books', Ori's) vanish from the panel and
+        # their settled results are never read.
+        ("K02 the cube returns every row of the view",
+         abs(m["bare_n"] - m["cube_n"])),
+        # K02 CANNOT FIRE ON LOGGED ROWS: every graded row today is OBSERVED, so a filter that
+        # drops the logged changes would pass K02 too.
+        ("K02n NEGATIVE CONTROL K02 FIRES: the bare view returns >= 1 row that is not OBSERVED",
+         0 if m["bare_logged"] >= 1 else 1),
     ]
     width = max(len(c[0]) for c in checks)
     failed = 0
