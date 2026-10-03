@@ -4,6 +4,12 @@
 **Ori:** *"the main goal of ads is to make more total of dollars that we would do without the changes."*
 **Ori, 2026-08-18:** *"start the holdout."*
 
+> **Status, 2026-10-03:** trial 1 (`HOLDOUT-2026Q4-CAMPAIGN`, §0–§8 as written below) is
+> **contaminated and restarts** (Ori, 2026-10-03, option (c)). Its rows are kept unchanged and are
+> archived from 2026-10-05. Trial 2 (`HOLDOUT-2026Q4-CAMPAIGN-T2`) starts its window on 2026-10-06 once
+> Ori approves its list of control campaigns. See §6 "Rulings 2026-10-03" and §9. The plan is
+> `docs/superpowers/plans/2026-10-03-holdout-restart.md`.
+
 ---
 
 ## 0. The one-paragraph version
@@ -320,6 +326,56 @@ changes what "treatment" *means*. Either freeze coacher logic for the 16 weeks, 
 the readout that **the treatment is a moving policy** and the result is "the engine as it evolved
 over 16 weeks", not a fixed policy. This is a decision Ori must make; the trial does not make it.
 
+### Rulings 2026-10-03 — the trial restarts (Ori; answers to the piece-1 follow-up questions)
+
+1. **The holdout trial restarts (option (c)).**
+   - The window restarts on **2026-10-06** with a **fresh draw by the same method** (§5).
+   - Trial 1 stays on record, archived, with its contamination stated below. Its 69 rows in
+     `DE_HOLDOUT_ASSIGNMENT` are never updated or deleted (#1 above). A trial is archived by appending a
+     row to a registry, never by editing its rows.
+   - The safeguard for trial 2 is `V_ENGINE_HEALTH` `holdout_unit_changed`, which must turn the brief RED
+     the night a control campaign is touched. **As built (v27.162) it does not.** Read on 2026-10-03, it
+     was **AMBER, measured 0**, while its own detail listed 8 of 14 controls changed inside the window,
+     among them Ori's two 09-27 pauses.
+   - The reason: it turns RED only when `V_HOLDOUT_READOUT` *fails* to censor a change, and the readout
+     censors from the same ledger on the same read. The restart adds a touch term: RED for 7 days after
+     any change on a control, then AMBER. It also adds a feed-liveness term. Plan §2.7.
+2. **A seated keyword that later becomes a probe keeps the question it was seated with.**
+   - This is a money-plan ruling, recorded here because it came in the same reply.
+   - It confirms piece-1 follow-up G1 (builder v27.168): the incumbent is costed by its kept
+     `request_basis`, and tonight's `is_probe` still decides the move.
+   - Spec P-30, beside P-16 and P-25 in `docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md`.
+3. **Ori believes he made no change on Amazon since 2026-09-27, and the observed-change feed shows none.**
+   The record and Ori agree, and the feed is alive, not stalled. Read on 2026-10-03 at about 16:00 UTC
+   (queries in the plan, Appendix A):
+   - the ledger's latest `OBSERVED` row is 2026-09-28 04:11 UTC, the 09-27 Los Angeles evening batch
+     with the two pauses and the FRESH-VIDEO/ BROAD SB sync;
+   - the latest logged change is 2026-08-25;
+   - the keyword mirror `V_SRC_AmazonAds_keyword` synced at 2026-10-03 11:09 UTC, and all 34,037
+     keywords in it carry the bid and state of their current `DIM_KEYWORD` version;
+   - since 09-27, `SP_LOAD_DIM_KEYWORD` and `SP_LOAD_DIM_CAMPAIGN` each logged 21 OK runs, and
+     `SP_RECORD_OBSERVED_CHANGES` ran OK on every pass from 10-02;
+   - `DIM_KEYWORD`'s newest version stays at 09-28 only because SCD2 writes a version on a change.
+
+**Trial 1, archived: the record.** These numbers are measured above in this section ("Contamination"),
+and no estimate was ever read.
+- The arms were frozen on 2026-08-19 and bound from 2026-09-01. They are archived from 2026-10-05.
+- **10 of the 14 HOLDOUT campaigns changed on Amazon after the assignment**: 7 before the window
+  (25 ledger rows) and 8 inside it (25 observed rows, none logged), 5 of them in both.
+- Under R9 as built, the readout censors **61 of 69 units** (13 of 14 HOLDOUT, 48 of 55 TREATED).
+- 4 of the 14 controls are paused today: the 08-21 pauses of 135553284530895 and 39989090923480, and
+  Ori's 09-27 pauses of 75834491759416 and 76054744633802.
+- The 69 rows' fingerprint on 2026-10-03 was `7298956708089075507`, over every column ordered by
+  `unit_id`. Restart check K2 holds it. The pre-window ruling question (a)/(b) above is moot for trial 1.
+
+**What the restart fixes beyond the alarm (found 2026-10-03):**
+- Every reader that keeps the engine off a control reads `DE_HOLDOUT_ASSIGNMENT` directly and takes the
+  **union of all trials' HOLDOUT rows**: `SP_ENGINE_PREFLIGHT`, `V_PLAN_WINDOW_JUDGMENT`,
+  `V_FAMILY_SEAT_REGISTER`, `V_ENGINE_HEALTH` c18 and the three bulksheet generators. All but the
+  preflight apply **no end date** at all.
+- Appended as-is, trial 2's rows would leave all 14 trial-1 controls frozen beside trial 2's 12.
+- They all switch to one view of the arm that binds today (plan §1, §2.1).
+
 ---
 
 ## 7. THE HONEST LIMITS — read these before any number
@@ -419,3 +475,84 @@ The account's 14-day net has moved from **+$3,439 to −$2,470** over the last f
 engine ran, and Ori's own scorecard measured account **raises at −$752** against **cuts at +$3,051**.
 *"The engine is doing large harm"* is a live and plausible hypothesis — and it is the one hypothesis
 this trial can actually settle within a quarter.
+
+---
+
+## 9. Trial 2 — `HOLDOUT-2026Q4-CAMPAIGN-T2` (proposed 2026-10-03, waiting for Ori's OK on the list)
+
+**Nothing below is deployed.** The plan is `docs/superpowers/plans/2026-10-03-holdout-restart.md`: the
+design, the tasks, checks K1–K11, the deploy timing and the full 59-row draw.
+
+**Dates** (trial 1's horizon rule: 16 weeks, then the 14-day settle; interim look 8 weeks + settle):
+
+| | date |
+|---|---|
+| assignment, and the export gate opens | 2026-10-05 |
+| window start (`eligible_from`) | 2026-10-06 |
+| last day (`trial_end`) | 2027-01-26 |
+| interim safety look | 2026-12-15 |
+| first readout | 2027-02-09 |
+
+The gate opens a day before the window because of how the passes fall:
+- The orchestrator's first pass of a New York day runs at about 05:30 UTC, which is the previous day in
+  Los Angeles. Every gate reader compares a Los Angeles date.
+- So the pass that builds the book uploaded on 10-06 judges under LA 10-05.
+- A change on a control on 10-05 itself is published as `PRE_WINDOW_CHANGE` and not censored. This is
+  pre-declared, consistent with R9 (a).
+
+**Population.** These are §4's rules re-applied on 2026-10-03, giving 59 campaigns, $30,114 per 28 days
+and five families.
+- The stock literal was re-graded on the design date. LolliBall is CRITICAL (21.6 days) and stays out.
+- Bunny is OK (159.4 days, 6,000 units arriving 10-07), so it is in.
+- Keeping trial 1's literal would give 54 campaigns.
+
+**Draw.** §5's method:
+- seed `OI-HOLDOUT-v2|<index>`;
+- A1 exactly ROUND(N/5) = 12 controls, A2 control dollar share in [0.18, 0.22], A3 all five families;
+- the first passing index is **5**;
+- the acceptance region is 18,190 of 390,625 offset vectors.
+
+The founding cohort is written once from the literal list Ori approves (fingerprint
+`4171456845817687166`), not re-drawn live. `SP_ASSIGN_HOLDOUT` then assigns late arrivals only.
+
+**The 12 controls** (28-day spend to 2026-10-02 ÷ 28):
+
+| family | campaign | campaign_id | $/day |
+|---|---|---|---|
+| Bottle | BOTTLE-VIDEO/EXACT (social-game, Truth) | 71317833591283 | 0.67 |
+| Bottle | BOTTLE-SP/PHRASE (tween-girl-birthday-gift, Truth) | 53343800376430 | 0.02 |
+| Bunny | BUNNY-SP/AUTO (Birthday) | 273898143987321 | 5.62 |
+| Fresh | FRESH -SP/AUTO (Purple) | 271009556929636 | 3.69 |
+| LolliME | ME-SBS/BROAD (Discovery, Journal) | 537046793426450 | 49.32 |
+| LolliME | ME-COMPETE (Nollh Mint) | 365568042533669 | 44.76 |
+| LolliME | ME-SP/AUTO (Mint) | 527422818407259 | 34.34 |
+| LolliME | MINT-SP/BROAD (Back to School) | 51727823265377 | 23.08 |
+| LolliME | ME-SP/EXACT (tween-girl-journal-diary, Purple) | 130115986205897 | 12.78 |
+| LolliME | ME-SP/PT (Competitors, Mint, D2) | 230219410635024 | 1.64 |
+| LolliME | ME-SP/PT (Competitors, Mint, C2) | 222497123677300 | 0.57 |
+| Lollibox | BOX-VIDEO/PT (Competitors, Purple, A1) | 27660342907703 | 49.47 |
+
+**Balance**, controls vs treated:
+
+| | controls | treated |
+|---|---|---|
+| campaigns | 12 | 47 |
+| 28-day ad dollars | $6,327 (21.0%) | $23,787 |
+| net per ad dollar | −0.141 | −0.120 (about $68 per 14 days) |
+| SB | 3 of 12 | 15 of 47 |
+| capped | 5 of 12 | 15 of 47 |
+| launch | 8 of 12 | 34 of 47 |
+| families | 5 of 5 | 5 of 5 |
+
+The ex-ante MDE is $2,089 per 14 days. That is trial 1's $2,261 rescaled to 12/47 on the same noise
+floor, and it is a floor.
+
+**Two things to know before saying OK** (plan §3.3):
+1. **LolliME carries 74% of the control dollars**, and its stock forecast reads CRITICAL. If LolliME
+   enters ACTUAL CRITICAL, §6's censoring rule leaves 5 controls.
+2. **None of trial 1's 10 still-eligible controls was drawn as a control again.** All 10 are TREATED, so
+   the engine resumes on them from 10-05. A sensitivity row without them is pre-registered.
+
+The plan keeps the first passing seed, because the rule was declared before the draw ran.
+
+**Ori's OK:** _pending_.
