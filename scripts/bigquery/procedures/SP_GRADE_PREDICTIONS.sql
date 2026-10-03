@@ -1,7 +1,9 @@
 -- =============================================================================================
--- SP_GRADE_PREDICTIONS(regrade_from DATE, reason STRING) — v27.174 (2026-10-04, learning-contract
--- piece 2, Task 5 follow-up: the applied scenario is read on the prediction's own clock, built_at ..
--- the end of horizon_to, ruled 2026-10-04; v27.173, 2026-10-03, Task 5, read Los Angeles dates
+-- SP_GRADE_PREDICTIONS(regrade_from DATE, reason STRING) — v27.175 (2026-10-04, learning-contract
+-- piece 2, Task 5 follow-up 2: a logged change is read at its landing, its earliest observed twin,
+-- not at its log stamp, and the SB extra day covers only observed-only changes; v27.174, Task 5
+-- follow-up: the applied scenario is read on the prediction's own clock, built_at .. the end of
+-- horizon_to, ruled 2026-10-04; v27.173, 2026-10-03, Task 5, read Los Angeles dates
 -- as_of .. as_of + MATCH_WINDOW_DAYS): grade every prediction of V_PREDICTION_LEDGER whose horizon
 -- has settled, append the grades to FACT_PREDICTION_GRADE, and rebuild the report card
 -- T_PREDICTION_SCORECARD.
@@ -33,7 +35,17 @@
 --     the baseline the plan was built on, never an action on it. The keyword's changes (keyword_id)
 --     and its campaign's state and budget changes (keyword_id NULL, the same campaign_id, a
 --     *BUDGET* or CAMPAIGN_* action) applied in [built_at, the Los Angeles midnight that ends
---     horizon_to) are read; an SB keyword's own changes until the midnight one day later (below).
+--     horizon_to) are read; an SB keyword's own SEEN_ON_AMAZON_* changes until the midnight one day
+--     later (below).
+--     THE INSTANT a change is applied at is its landing on Amazon (Task-5 review 2, 2026-10-04): a
+--     SEEN_ON_AMAZON_* row's own applied_at (the observation); a LOGGED_AND_SEEN_ON_AMAZON row's
+--     earliest observed twin, MIN(FACT_PPC_CHANGE_LOG.applied_at) over SPLIT(paired_change_id, ','),
+--     never its log stamp — the view keeps the log row and drops the twin, a book row is stamped
+--     when the book is built (tools/build_reprice_bulksheet.py) and --mark-uploaded changes only its
+--     upload_status, and the recorder pairs a landing from a day before the stamp to three days
+--     after it (SP_RECORD_OBSERVED_CHANGES). Asserted: every LOGGED_AND_SEEN_ON_AMAZON row has an
+--     observed twin. Measured 2026-10-04 on the 60 such rows (70 twins): landing minus stamp -1 to
+--     +1,079 minutes (architecture/LEARNING.md §4).
 --     The plan row's expected components: bid when |planned_bid - current_bid| >= MATCH_BID_TOL,
 --     state when the move is PAUSE, budget when |campaign_planned_budget - campaign_current_budget|
 --     >= MATCH_BUDGET_TOL (the ledger's act_is_noop test). A change applied in [built_at, the Los
@@ -47,13 +59,15 @@
 --     nothing, with nothing done after the build, is DO_NOTHING); OTHER_ACTION otherwise, a partial
 --     match included.
 --     SB LAG: an SB keyword's observed instant is the Fivetran sync that first saw the change, up to
---     a day after it (V_AMAZON_OBSERVED_CHANGES); campaigns and SP keywords carry Amazon's own
---     last-updated time. So an SB keyword's own changes are read until the Los Angeles midnight
---     that ends horizon_to + 1: a change made on the last horizon day and seen the next day still
---     counts, and one made on horizon_to + 1 is read too and makes the row OTHER_ACTION — the
---     scan leaves a row out of APPLIED rather than call a disturbed horizon undisturbed. At the
---     start, an SB keyword change made before built_at and first seen after it is read as made
---     after the build.
+--     a day after it; for campaigns and SP keywords it is Amazon's own last-updated time
+--     (V_AMAZON_OBSERVED_CHANGES). So an SB keyword's own SEEN_ON_AMAZON_* changes are read until
+--     the Los Angeles midnight that ends horizon_to + 1: a hand change made on the last horizon day
+--     and seen the next day still counts, and one made on horizon_to + 1 is read too and makes the
+--     row OTHER_ACTION — the scan leaves a row out of APPLIED rather than call a disturbed horizon
+--     undisturbed. A LOGGED_AND_SEEN_ON_AMAZON change is OI's own upload and is not read the extra
+--     day: under nightly uploads the book uploaded on horizon_to + 1 would make every row it touches
+--     OTHER_ACTION. At the start, a change made before built_at and first seen after it is read as
+--     made after the build.
 --     placement_changed: the keyword's
 --     FACT_KEYWORD_STATE_HISTORY.m_effective on its latest snapshot on or before as_of
 --     (placement_m_from) differs, beyond float noise (1e-6), from the one on or before horizon_to
@@ -82,16 +96,16 @@
 --
 -- IDEMPOTENT: a second run inserts nothing (NOT EXISTS on the grade key); outcomes keep restating,
 -- and a grade moves only under an explicit regrade_from call.
--- Reads V_PREDICTION_LEDGER, FACT_PREDICTION_GRADE, DE_COACH_THRESHOLDS, FACT_AMAZON_ADS,
+-- Reads V_PREDICTION_LEDGER, FACT_PREDICTION_GRADE, DE_COACH_THRESHOLDS, FACT_AMAZON_ADS, FACT_PPC_CHANGE_LOG,
 -- DIM_KEYWORD, DIM_CAMPAIGN, V_PPC_CHANGE_LOG_LANDED, FACT_KEYWORD_STATE_HISTORY. No catalog table.
 -- Spec: docs/superpowers/specs/2026-10-01-learning-contract-design.md §7, §11, §14.
 -- Plan: docs/superpowers/plans/2026-10-03-learning-piece2-ledger-grader.md Task 5.
 -- SOP:  architecture/LEARNING.md §4, §5, §10 "Task 5".
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_GRADE_PREDICTIONS`(regrade_from DATE, reason STRING)
-OPTIONS (description = "v27.174 (2026-10-04, learning-contract piece 2 Task 5 follow-up; v27.173 2026-10-03): grades every prediction of V_PREDICTION_LEDGER whose horizon_to + SETTLE_HORIZON_DAYS is at or before the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) and that has no grade, appending one FACT_PREDICTION_GRADE row per ledger row (both scenarios), then rebuilds T_PREDICTION_SCORECARD. Realised numbers from FACT_AMAZON_ADS over horizon_from..horizon_to (no row = 0); UNGRADABLE only for a keyword or campaign archived (any case) within the horizon; the applied scenario from V_PPC_CHANGE_LOG_LANDED on the prediction's own clock, reading only changes applied at or after built_at and before the end of horizon_to (an SB keyword's own changes one day more, for the sync lag): ACT when every expected bid / state / budget component matched, within MATCH_BID_TOL / MATCH_BUDGET_TOL, by a change made before the start of horizon_from + MATCH_WINDOW_DAYS (never past horizon_to), and nothing else changed; DO_NOTHING when nothing changed on the keyword or its campaign's state or budget; else OTHER_ACTION; realised side = the judge's test (orders >= min_orders and gross profit per ad dollar >= family_bar); the minimum-investment line per predictor x family x calendar_state = the smallest click floor whose cumulative spend-weighted side accuracy over every current grade (tonight's included) is >= MIN_INVEST_SIDE_ACCURACY with >= MIN_INVEST_MIN_ROWS rows; labels UNGRADABLE, else INCONCLUSIVE (0 clicks, below the line or no line), else RIGHT / WRONG; the line stored as min_clicks_at_grade. Settings from DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL), asserted. Idempotent: a second run inserts nothing. regrade_from (with a reason) appends a re-grade, regrade_seq + 1, of every current grade of the nights as_of >= regrade_from. CALL with (NULL, NULL) nightly. SOP: architecture/LEARNING.md 4-5.")
+OPTIONS (description = "v27.175 (2026-10-04, learning-contract piece 2 Task 5 follow-up 2; v27.174 follow-up, v27.173 2026-10-03): grades every prediction of V_PREDICTION_LEDGER whose horizon_to + SETTLE_HORIZON_DAYS is at or before the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) and that has no grade, appending one FACT_PREDICTION_GRADE row per ledger row (both scenarios), then rebuilds T_PREDICTION_SCORECARD. Realised numbers from FACT_AMAZON_ADS over horizon_from..horizon_to (no row = 0); UNGRADABLE only for a keyword or campaign archived (any case) within the horizon; the applied scenario from V_PPC_CHANGE_LOG_LANDED on the prediction's own clock, reading only changes applied at or after built_at and before the end of horizon_to, each at its landing on Amazon (a logged change at its earliest observed twin, never its log stamp; an SB keyword's own observed-only changes one day more, for the sync lag): ACT when every expected bid / state / budget component matched, within MATCH_BID_TOL / MATCH_BUDGET_TOL, by a change made before the start of horizon_from + MATCH_WINDOW_DAYS (never past horizon_to), and nothing else changed; DO_NOTHING when nothing changed on the keyword or its campaign's state or budget; else OTHER_ACTION; realised side = the judge's test (orders >= min_orders and gross profit per ad dollar >= family_bar); the minimum-investment line per predictor x family x calendar_state = the smallest click floor whose cumulative spend-weighted side accuracy over every current grade (tonight's included) is >= MIN_INVEST_SIDE_ACCURACY with >= MIN_INVEST_MIN_ROWS rows; labels UNGRADABLE, else INCONCLUSIVE (0 clicks, below the line or no line), else RIGHT / WRONG; the line stored as min_clicks_at_grade. Settings from DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL), asserted. Idempotent: a second run inserts nothing. regrade_from (with a reason) appends a re-grade, regrade_seq + 1, of every current grade of the nights as_of >= regrade_from. CALL with (NULL, NULL) nightly. SOP: architecture/LEARNING.md 4-5.")
 BEGIN
-  DECLARE grader_version_d STRING DEFAULT 'v27.174';
+  DECLARE grader_version_d STRING DEFAULT 'v27.175';
   DECLARE graded_at_d TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
   DECLARE settle_days_d INT64;
   DECLARE match_days_d INT64;
@@ -217,13 +231,38 @@ BEGIN
               AND ca.horizon_from = k.horizon_from AND ca.horizon_to = k.horizon_to;
 
   -- ── 4. which scenario applied ─────────────────────────────────────────────────────────────────
-  -- every change that can bear on a due row: applied at or after the earliest built_at, before the
-  -- Los Angeles midnight that ends the latest horizon_to + 1 (the SB keyword scan's end)
+  -- every landed change (landed_evidence other than LOGGED_ONLY) at the instant it landed on Amazon:
+  -- a LOGGED_AND_SEEN_ON_AMAZON row at its earliest observed twin (paired_change_id names the twins,
+  -- which the view drops), never at its log stamp; a SEEN_ON_AMAZON_* row at its own applied_at.
+  -- seen_only marks the SEEN_ON_AMAZON_* rows, the only ones an SB keyword's scan reads a day longer.
+  CREATE TEMP TABLE _chg0 AS
+  WITH lv AS (
+    SELECT change_id, action, keyword_id, campaign_id, new_bid, new_budget, applied_at, landed_evidence, paired_change_id
+    FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+    WHERE landed_evidence <> 'LOGGED_ONLY'
+  ),
+  twin AS (
+    SELECT lv.change_id, MIN(f.applied_at) AS landed_at
+    FROM lv
+    CROSS JOIN UNNEST(SPLIT(lv.paired_change_id, ',')) AS pid
+    JOIN `onyga-482313.OI.FACT_PPC_CHANGE_LOG` f ON f.change_id = pid
+    WHERE lv.landed_evidence = 'LOGGED_AND_SEEN_ON_AMAZON'
+    GROUP BY lv.change_id
+  )
+  SELECT lv.change_id, lv.action, lv.keyword_id, lv.campaign_id, lv.new_bid, lv.new_budget,
+         IF(lv.landed_evidence = 'LOGGED_AND_SEEN_ON_AMAZON', t.landed_at, lv.applied_at) AS applied_at,
+         STARTS_WITH(lv.landed_evidence, 'SEEN_ON_AMAZON_')                                AS seen_only
+  FROM lv
+  LEFT JOIN twin t ON t.change_id = lv.change_id;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM _chg0 WHERE applied_at IS NULL)
+    AS 'SP_GRADE_PREDICTIONS: a landed change has no instant (a LOGGED_AND_SEEN_ON_AMAZON row whose paired_change_id names no FACT_PPC_CHANGE_LOG row, or a NULL applied_at in V_PPC_CHANGE_LOG_LANDED); every scan would drop it unread.';
+
+  -- the ones that can bear on a due row: landed at or after the earliest built_at, before the Los
+  -- Angeles midnight that ends the latest horizon_to + 1 (the SB keyword scan's end)
   CREATE TEMP TABLE _chg AS
-  SELECT change_id, action, keyword_id, campaign_id, new_bid, new_budget, applied_at
-  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
-  WHERE landed_evidence <> 'LOGGED_ONLY'
-    AND applied_at >= (SELECT MIN(built_at) FROM _prow)
+  SELECT * FROM _chg0
+  WHERE applied_at >= (SELECT MIN(built_at) FROM _prow)
     AND applied_at <  TIMESTAMP(DATE_ADD((SELECT MAX(horizon_to) FROM _prow), INTERVAL 2 DAY), 'America/Los_Angeles');
 
   CREATE TEMP TABLE _app AS
@@ -232,9 +271,10 @@ BEGIN
            COALESCE(ABS(p.planned_bid - p.current_bid) >= bid_tol_d, FALSE)                          AS has_bid,
            COALESCE(p.move = 'PAUSE', FALSE)                                                          AS has_state,
            COALESCE(ABS(p.campaign_planned_budget - p.campaign_current_budget) >= budget_tol_d, FALSE) AS has_budget,
-           -- the prediction's clock: a change applied in [built_at, match_end) can match a component;
-           -- every change applied in [built_at, scan_end) is read (kw_scan_end for the keyword's own:
-           -- one day more on an SB keyword, whose observed instant is the sync that first saw it)
+           -- the prediction's clock: a change landed in [built_at, match_end) can match a component;
+           -- every change landed in [built_at, scan_end) is read (kw_scan_end for the keyword's own
+           -- SEEN_ON_AMAZON_* changes: one day more on an SB keyword, whose observed instant is the
+           -- sync that first saw it)
            LEAST(TIMESTAMP(DATE_ADD(p.horizon_from, INTERVAL match_days_d DAY), 'America/Los_Angeles'),
                  TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles'))                 AS match_end,
            TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles')                          AS scan_end,
@@ -253,7 +293,7 @@ BEGIN
     FROM comp c
     JOIN _chg x
       ON x.keyword_id = c.keyword_id
-     AND x.applied_at >= c.built_at AND x.applied_at < c.kw_scan_end
+     AND x.applied_at >= c.built_at AND x.applied_at < IF(x.seen_only, c.kw_scan_end, c.scan_end)
     UNION ALL
     -- its campaign's state and budget changes
     SELECT c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id, x.change_id,

@@ -218,7 +218,11 @@ that has no grade yet, it:
    component when applied before the Los Angeles midnight that starts `horizon_from +
    MATCH_WINDOW_DAYS` (never past `horizon_to`); "nothing else changed" and `DO_NOTHING` read every
    change from `built_at` to the end of `horizon_to` (an SB keyword's own changes one day longer, for
-   the sync lag). `architecture/LEARNING.md` §4 step 4;*
+   the sync lag). `architecture/LEARNING.md` §4 step 4;* *Corrected again 2026-10-04 (Task-5 review 2,
+   `SP_GRADE_PREDICTIONS` v27.175): every change is read at its landing on Amazon — a logged change
+   that an observed row confirms at its earliest observed twin, never at its log stamp (a book row's
+   is set when the book is built) — and the extra SB day covers only an SB keyword's observed-only
+   (`SEEN_ON_AMAZON_*`) changes; no stored grade moved;*
 3. buckets the keyword-week by realised clicks: `0, 1–5, 6–10, 11–20, 21–40, 41–80, 81+`.
    *Corrected 2026-10-03 (§14 D4): the `0` bucket is new — more than half the August plan rows
    realised no click (§14 E6); a row there is always `INCONCLUSIVE` and is counted as "predicted
@@ -473,7 +477,10 @@ left four days of a 7-day horizon unread. Recommended, and built under Ori's "al
 and before the Los Angeles midnight that starts `horizon_from + MATCH_WINDOW_DAYS`; the other-change
 scan reads from `built_at` to the end of `horizon_to`, an SB keyword's own changes one day longer. The
 August grades were re-graded under it (`regrade_seq` 1): 64 rows per plan moved from `OTHER_ACTION` to
-`DO_NOTHING` (`architecture/LEARNING.md` §4, §10 "Task 5 follow-up").
+`DO_NOTHING` (`architecture/LEARNING.md` §4, §10 "Task 5 follow-up"). *Corrected 2026-10-04 (Task-5
+review 2, v27.175): the instant of a logged change is its landing (its earliest observed twin), not
+its log stamp, and the extra SB day covers only observed-only changes; no stored grade moved
+(`architecture/LEARNING.md` §4, §10 "Task 5 follow-up 2").*
 
 The brief's corrections that are not a ruling, made in place above: `UNGRADABLE` means an archived
 keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG` are defined (§7);

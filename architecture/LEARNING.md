@@ -349,8 +349,28 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
    - the changes read: the keyword's own (`keyword_id`), and its campaign's state and budget changes
      (`keyword_id` NULL, the same `campaign_id`, a `*BUDGET*` or `CAMPAIGN_*` action), **applied at
      or after `built_at`** and before the Los Angeles midnight that ends `horizon_to` (an SB
-     keyword's own changes: the midnight one day later, below). A change made before the plan existed
-     is the state the plan was built on, never an action on it. Ad-group changes are not read (§9);
+     keyword's own `SEEN_ON_AMAZON_*` changes: the midnight one day later, below). A change made
+     before the plan existed is the state the plan was built on, never an action on it. Ad-group
+     changes are not read (§9);
+   - **the instant a change is read at is its landing on Amazon** (Task-5 review 2, 2026-10-04): a
+     `SEEN_ON_AMAZON_*` row at its own `applied_at`, the observation; a `LOGGED_AND_SEEN_ON_AMAZON`
+     row — a log row an observed row confirms, which the view keeps while dropping the observed twin
+     — at the earliest `applied_at` in `FACT_PPC_CHANGE_LOG` of the observed rows its
+     `paired_change_id` names, never at its own log stamp. A book row is stamped
+     `CURRENT_TIMESTAMP()` when the book is built (`tools/build_reprice_bulksheet.py`),
+     `--mark-uploaded` changes only its `upload_status`, and the recorder pairs a landing from one
+     day before the stamp to three days after it (`SP_RECORD_OBSERVED_CHANGES`). Read at the stamp, a
+     plan book built after `built_at` but uploaded after the match window would still match and read
+     `ACT`, and a hand book built before `built_at` but uploaded after it would be dropped as baseline
+     and leave the row `DO_NOTHING`. Every instant read is therefore an observation: for campaigns and
+     SP keywords Amazon's own last-updated time, for SB keywords the Fivetran sync that first saw the
+     change (`V_AMAZON_OBSERVED_CHANGES`). Measured 2026-10-04 on the 60 `LOGGED_AND_SEEN_ON_AMAZON`
+     rows (70 observed twins, each found once in `FACT_PPC_CHANGE_LOG`): landing minus stamp
+     −1 to +1,079 minutes — the SP keywords of `reprice_book_20260823_1527` +26 (15 rows), SP keyword
+     pauses of `seat_moves_20260823_1045` +249 (9), SB keywords +678 to +1,079 (29 rows, 39 twins),
+     campaign pauses −1 (7); none on another Los Angeles date than its stamp, and none on the other
+     side of a `built_at`, match-window end or scan end of a current grade that reads it, so no
+     stored grade moves (§10 "Task 5 follow-up 2");
    - the plan's **expected components**: a bid component when |`planned_bid` − `current_bid`| ≥
      `MATCH_BID_TOL`; a state component for PAUSE; a budget component when |planned − current
      budget| ≥ `MATCH_BUDGET_TOL`. `act_is_noop` = none of the three;
@@ -386,14 +406,22 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
    The re-grade's numbers are in §10 "Task 5 follow-up".
 
    **The SB sync lag.** An SB keyword's observed instant is the Fivetran sync that first saw the
-   change, up to a day after it (`V_AMAZON_OBSERVED_CHANGES`); campaigns and SP keywords carry
+   change, up to a day after it (`V_AMAZON_OBSERVED_CHANGES`); for campaigns and SP keywords it is
    Amazon's own last-updated time. At the end of the horizon the grader therefore reads an SB
-   keyword's own changes one Los Angeles day longer, through `horizon_to + 1`: a change made on the
-   last horizon day and seen the next day still counts, and a change made on `horizon_to + 1` itself
-   is read too and makes the row `OTHER_ACTION` — the scan leaves a row out of `APPLIED` rather than
-   call a disturbed horizon undisturbed. The match window is not lengthened: an SB hand change made
-   inside it but first seen after it is an other change. At the start, an SB keyword change made
-   before `built_at` and first seen after it is read as made after the build.
+   keyword's own **`SEEN_ON_AMAZON_*`** changes — the ones OI's log does not account for as applied —
+   one Los Angeles day longer, through `horizon_to + 1`: a hand change made on the last horizon day
+   and seen the next day still counts, and a change made on `horizon_to + 1` itself is read too and
+   makes the row `OTHER_ACTION` — the scan leaves a row out of `APPLIED` rather than call a disturbed
+   horizon undisturbed. A `LOGGED_AND_SEEN_ON_AMAZON` change on an SB keyword is not read the extra
+   day (Task-5 review 2): it is OI's own upload, and under nightly uploads the book uploaded on
+   `horizon_to + 1` would make every row it touches `OTHER_ACTION` for a change made after the
+   horizon. The cost, stated: a logged SB change uploaded on `horizon_to` and first seen after
+   Los Angeles midnight is not read (of the 60 logged changes seen so far, none was seen on another
+   Los Angeles date than its stamp). The match window is not lengthened: a change made inside it but
+   first seen after it is an other change, and so is a logged change whose book was built inside it
+   but which landed after it. At the start, a change made before `built_at` and first seen after it
+   is read as made after the build — an SB keyword's sync lag, or a book built before the plan and
+   uploaded after it.
 5. **The realised side.** GOOD when realised orders ≥ `min_orders` AND realised gross profit ÷ spend
    ≥ `family_bar` — the judge's own test (`V_PLAN_WINDOW_JUDGMENT`, `sided` CTE). A row with no spend
    has no return and is not GOOD, as in the judge (`COALESCE(ret, −1) >= family_bar`).
@@ -1461,4 +1489,272 @@ SELECT row_type, predictor, scenario, n_rows, ROUND(real_spend, 2) AS real_spend
 FROM `onyga-482313.OI.T_PREDICTION_SCORECARD`
 WHERE family = 'ALL' AND level = 'SINCE_START' AND row_type IN ('ACCURACY', 'MONEY', 'HONESTY')
 ORDER BY row_type, predictor, scenario
+```
+
+### Task 5 follow-up 2 — a logged change is read at its landing, not its log stamp (2026-10-04)
+
+**The finding** (Task-5 review 2): `_chg` read every landed change at its own `applied_at`. For a
+`LOGGED_AND_SEEN_ON_AMAZON` row that is the log stamp — `V_PPC_CHANGE_LOG_LANDED` keeps the log row
+and drops the observed twin — and a book row is stamped when the book is built, not when it is
+uploaded (§4 step 4, "the instant a change is read at"). Two consequences: a plan book built after
+`built_at` but uploaded after the match window would still match and read `ACT`; a hand book built
+before `built_at` but uploaded after it would be dropped as baseline and leave the row `DO_NOTHING`.
+The extra SB day also read `LOGGED_AND_SEEN_ON_AMAZON` SB rows, so under nightly uploads the book
+uploaded on `horizon_to + 1` would make the rows it touches `OTHER_ACTION`. The comment that
+"campaigns and SP keywords carry Amazon's own last-updated time" was false for this class.
+
+**Fixed** (`SP_GRADE_PREDICTIONS` v27.175): `_chg0` reads every landed change at its landing — a
+`LOGGED_AND_SEEN_ON_AMAZON` row at `MIN(FACT_PPC_CHANGE_LOG.applied_at)` over
+`SPLIT(paired_change_id, ',')`, any other row at its own `applied_at` — and an ASSERT refuses a run
+in which a landed change has no instant; `seen_only` marks the `SEEN_ON_AMAZON_*` rows, and only
+those get the extra SB day (`hits`: `applied_at < IF(seen_only, kw_scan_end, scan_end)`). The
+procedure's step-4 comment and description, §4, the spec (§7 step 2, §14.1), the plan (Task 5
+Step 4) and `config.yaml` (description; `FACT_PPC_CHANGE_LOG` added to the dependencies) say the
+same.
+
+**Measured before the fix** (queries 1–2 below): 60 `LOGGED_AND_SEEN_ON_AMAZON` rows, 70 observed
+twins, each found once; landing minus stamp −1 to +1,079 minutes (by batch: campaign pauses of
+`stop_nonconverting_20260821` −1, 7 rows; SP keyword pauses of `seat_moves_20260823_1045` +249, 9;
+its SB keyword pauses +1,078 / +1,079, 8; SP keywords of `reprice_book_20260823_1527` +26, 15; its
+SB keywords +797, 10; SB unpauses of `seasonal_unpause_20260824_1728` +678, 11 rows with 21 twins);
+none on another Los Angeles date than its stamp. Against the current grades, 420 (grade row, change)
+pairs read the same keyword or campaign; for 0 of them do the stamp and the landing fall on two sides
+of `built_at`, the match-window end, the scan end or the SB scan end. So no stored grade moves and
+the August band is not re-graded.
+
+**Deployed** `scripts/bigquery/procedures/SP_GRADE_PREDICTIONS.sql` v27.175 (comment lines stripped)
+at 22:21:31 UTC 2026-10-03 (job `t5r2_deploy_sp_1791066089`; before it the deployed body equalled
+HEAD 5e0b061's, 42,973 characters): `INFORMATION_SCHEMA.ROUTINES.routine_definition` equals the file's
+`BEGIN … END`, 44,081 characters, SHA-256 prefix `5b0f34ecf655`; the DDL carries the file's
+description (2,050 characters) and the arguments `(regrade_from DATE, reason STRING)`. A `(NULL,
+NULL)` call after it (`t5r2_call_null_1791066114`, 230.7 slot-seconds): 0 due, 0 inserted, the card
+rebuilt at 357 rows; `FACT_PREDICTION_GRADE` still 17,888 rows (seq 0 v27.173 8,944; seq 1 v27.174
+8,944).
+
+**Proved on copies of the grader** (the stripped file and, for v27.174, HEAD 5e0b061's, with the
+procedure, `FACT_PREDICTION_GRADE`, `T_PREDICTION_SCORECARD`, `V_PREDICTION_LEDGER`,
+`V_PPC_CHANGE_LOG_LANDED` and — v27.175 only, v27.174 does not read it — `FACT_PPC_CHANGE_LOG`
+names swapped). Inputs (query 3, `t5r2_fixtures_1791065621`, 170.6 slot-seconds): `OI._tmp_t5g_log`
+= the change log's 2,700 rows + 5 injected twins; `OI._tmp_t5g_chg` = the view's 2,016 rows + 6
+injected rows; `OI._tmp_t5g_led` = the ledger's 17,588 rows with two plan keys doctored (8 rows).
+Each copy graded from empty (`t5r2_runnew_1791065675`, 118.4 slot-seconds: applied ACT 0,
+DO_NOTHING 4,268, OTHER_ACTION 204; `t5r2_runold_1791065675`, 93.6: ACT 4, DO_NOTHING 4,264,
+OTHER_ACTION 204), 8,944 rows each. Per plan row, both plans alike (query 4, `t5r2_compare_1791065813`):
+
+| fixture | night, keyword | injected | v27.175 | v27.174 |
+|---|---|---|---|---|
+| G1 book built before the plan, landed after | 08-23 (built 05:34:19 UTC 08-24), SP 11084263298679 | bid 0.62, stamped 03:34:19, landed 06:34:19 UTC 08-24 | OTHER_ACTION | DO_NOTHING |
+| G5 stamped after the build, landed before it | 08-23, SP 112492877088507 | bid 1.37, stamped 06:04:19, landed 05:04:19 UTC 08-24 | DO_NOTHING | OTHER_ACTION |
+| G2 plan book stamped in the match window, landed after it | 08-28 (built 05:30:11 UTC 08-29), SP 108301382467865, stretched to 08-29 … 09-04, plan bid 0.62 as its one component | bid 0.62, stamped 10:00 LA 08-31, landed noon LA 09-02 | OTHER_ACTION | ACT |
+| G2B the same, landed after the horizon | 08-28, SP 11084263298679 (08-29 … 08-31), plan bid 0.62 as its one component | bid 0.62, stamped 10:00 LA 08-31, landed 10:00 LA 09-01 | DO_NOTHING | ACT |
+| G3 logged SB change on `horizon_to + 1` | 08-28, SB 164293084382000 | bid 1.32, stamped 08:00, landed 20:00 LA 09-01 | DO_NOTHING | OTHER_ACTION |
+| G4 SB hand change on `horizon_to + 1` | 08-28, SB 145785644018633 | bid 0.62, seen 10:00 LA 09-01 | OTHER_ACTION | OTHER_ACTION |
+
+Every other plan row of each copy (2,230 per plan: 2,131 `DO_NOTHING`, 99 `OTHER_ACTION`) equals the
+live current grade on the applied scenario, both id lists, the label and `is_applied`, under v27.175
+and under v27.174 alike: 0 moved. The acceptance suite as written, names swapped the same way, on
+v27.175's grades: every asserted row PASS (`t5r2_acc_fx_new_1791066382`, 151.8 slot-seconds); on
+v27.174's: V9 LIVE FAIL 20 = the five fixtures the two rules label differently × 2 plans × 2
+scenarios, every V9 PC copy 20 (LIVE's, nothing added), every NC fired
+(`t5r2_acc_fx_old_1791066382`, 139.8 slot-seconds). Scratch tables `OI._tmp_t5g_log`, `_tmp_t5g_chg`, `_tmp_t5g_led`,
+`_tmp_t5g_grade_new`, `_tmp_t5g_grade_old`, `_tmp_t5g_sc_new`, `_tmp_t5g_sc_old` expire 2026-10-11;
+the two procedure copies were dropped.
+
+**Checked.** `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql`'s V9 reads each change at its
+landing (`chg`: the twin's earliest `applied_at` for a `LOGGED_AND_SEEN_ON_AMAZON` row) and gives the
+extra SB day to `SEEN_ON_AMAZON_*` rows only. A control injects a logged change as a log row and its
+twin, and V9 resolves it like a live row. Four new pairs (the file's header names the picks' rules):
+PC_V9_BOOK_PRE / NC_V9_BOOK_PRE (a book stamped two hours before `built_at`, landed one hour after:
+`OTHER_ACTION`; left `DO_NOTHING`, V9 fires), PC_V9_BOOK_LATE / NC_V9_BOOK_LATE (the DAY5 pick
+stretched to 7 days with one bid component; a book to that bid stamped noon day 2, landed noon day 5:
+`OTHER_ACTION`; labelled `ACT`, V9 fires), PC_V9_SB_LOGGED / NC_V9_SB_LOGGED (a logged SB change
+stamped 08:00 and landed 20:00 Los Angeles on `horizon_to + 1`: stays `DO_NOTHING`; labelled
+`OTHER_ACTION`, V9 fires) and PC_V9_SB_SEEN / NC_V9_SB_SEEN (an SB hand change seen 10:00 on
+`horizon_to + 1`: `OTHER_ACTION`; left `DO_NOTHING`, V9 fires). Live, as written, after the deploy
+(`t5r2_acc_live_1791066278`, 247.1 slot-seconds, 224,174,176 bytes): 42 rows, every asserted row
+PASS — LIVE V1–V9 0, V2g REPORT 0; NC_EMPTY V1 8,944 and V2–V9 1 each; NC_V7_MISSED_ARCHIVE 24;
+every other V1–V8 control 1; every V9 NC 4, every V9 PC 0. Picks (`t5r2_picks2_1791066278`):
+PREBUILD and BOOKPRE 08-23 SP 108301382467865 (built 05:34:19 UTC 08-24); DAY5 08-25 SP
+236377827196202 (built 05:58:01 UTC 08-26, day 5 = 08-30); SBNEXT 08-28 SB 145785644018633
+(`horizon_to + 1` = 09-01). **Do the new pairs tell the rules apart?** The same file with V9's
+instant put back to the row's own `applied_at` and the extra SB day given to every SB change (the
+v27.174 reading; `t5r2_acc_mut3_1791066278`): V9 LIVE 0 (no live pair straddles), PC_V9_BOOK_PRE 4
+and NC_V9_BOOK_PRE 0, PC_V9_BOOK_LATE 8, PC_V9_SB_LOGGED 4 and NC_V9_SB_LOGGED 0 — five FAILs —
+while PREBUILD, DAY5 and SB_SEEN still PASS. NC_V9_BOOK_LATE reads 4 there, not 0: the day-2 stamp
+lies in the 08-24 night's span (built 06:04:16 UTC 08-25, horizon 08-25 … 08-27), so that night's 4
+rows read it under the stamp; the pick's own rows agree with the v27.174 reading, and PC_V9_BOOK_LATE
+fails. The DAY5 pick cannot also keep its day-2 stamp out of other nights: with that condition no
+plan key qualified (`t5r2_picks_1791066215`).
+
+**Limit, stated.** A logged SB change uploaded on `horizon_to` and first seen after Los Angeles
+midnight is no longer read (§4 "The SB sync lag"); of the 60 logged changes seen so far, none was
+seen on another Los Angeles date than its stamp.
+
+```sql
+-- 1. the LOGGED_AND_SEEN_ON_AMAZON rows by batch: stamp, landing (earliest twin), minutes between
+WITH lv AS (
+  SELECT change_id, action, keyword_id, campaign_type, batch_id, applied_at AS logged_at, paired_change_id, source
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED` WHERE landed_evidence = 'LOGGED_AND_SEEN_ON_AMAZON'
+),
+p AS (
+  SELECT lv.change_id, ANY_VALUE(lv.action) action, ANY_VALUE(lv.campaign_type) ct, ANY_VALUE(lv.batch_id) batch,
+         ANY_VALUE(lv.keyword_id IS NOT NULL) is_kw, ANY_VALUE(lv.logged_at) logged_at, MIN(f.applied_at) obs_at, COUNT(*) npid,
+         COUNT(f.change_id) n_found
+  FROM lv, UNNEST(SPLIT(lv.paired_change_id, ',')) pid
+  LEFT JOIN `onyga-482313.OI.FACT_PPC_CHANGE_LOG` f ON f.change_id = pid
+  GROUP BY lv.change_id
+)
+SELECT batch, ct, is_kw, action, COUNT(*) n, SUM(npid) twins, SUM(n_found) found,
+       MIN(TIMESTAMP_DIFF(obs_at, logged_at, MINUTE)) dmin, MAX(TIMESTAMP_DIFF(obs_at, logged_at, MINUTE)) dmax,
+       COUNTIF(DATE(obs_at, 'America/Los_Angeles') <> DATE(logged_at, 'America/Los_Angeles')) la_date_differs
+FROM p GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4
+```
+
+```sql
+-- 2. the (current grade row, logged change) pairs whose stamp and landing fall on two sides of a boundary
+WITH lv AS (
+  SELECT v.change_id, v.keyword_id, v.campaign_id, v.applied_at AS logged_at,
+         (SELECT MIN(f.applied_at) FROM UNNEST(SPLIT(v.paired_change_id, ',')) pid
+          JOIN `onyga-482313.OI.FACT_PPC_CHANGE_LOG` f ON f.change_id = pid) AS seen_at
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED` v
+  WHERE v.landed_evidence = 'LOGGED_AND_SEEN_ON_AMAZON'
+),
+cur AS (
+  SELECT * FROM `onyga-482313.OI.FACT_PREDICTION_GRADE` WHERE scenario = 'DO_NOTHING'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY predictor, variant, as_of, campaign_id, keyword_id, scenario ORDER BY regrade_seq DESC) = 1
+),
+b AS (
+  SELECT c.channel, x.logged_at, x.seen_at, c.built_at,
+         LEAST(TIMESTAMP(DATE_ADD(c.horizon_from, INTERVAL 3 DAY), 'America/Los_Angeles'),
+               TIMESTAMP(DATE_ADD(c.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles')) AS match_end,
+         TIMESTAMP(DATE_ADD(c.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles') AS scan_end,
+         TIMESTAMP(DATE_ADD(c.horizon_to, INTERVAL 2 DAY), 'America/Los_Angeles') AS scan_end_p1
+  FROM cur c JOIN lv x ON x.keyword_id = c.keyword_id OR (x.keyword_id IS NULL AND x.campaign_id = c.campaign_id)
+)
+SELECT COUNT(*) AS pairs,
+       COUNTIF((logged_at < built_at) <> (seen_at < built_at)) AS straddle_built,
+       COUNTIF((logged_at < match_end) <> (seen_at < match_end)) AS straddle_match_end,
+       COUNTIF((logged_at < scan_end) <> (seen_at < scan_end)) AS straddle_scan_end,
+       COUNTIF(channel = 'SB' AND (logged_at < scan_end_p1) <> (seen_at < scan_end_p1)) AS straddle_sb_scan_end
+FROM b
+```
+
+```sql
+-- 3. the fixture inputs: the change log, the landed view and the ledger, copied, with six changes injected
+-- G1 BOOK_PRE      night 08-23 (built 2026-08-24 05:34:19 UTC), SP 11084263298679: a book row stamped 2 h before the build, landed 1 h after it
+-- G5 LANDED_BEFORE night 08-23, SP 112492877088507: a book row stamped 30 min after the build, landed 30 min before it
+-- G2 BOOK_LATE     night 08-28 (built 2026-08-29 05:30:11 UTC), SP 108301382467865, stretched to 7 days (08-29 .. 09-04) and given one
+--                  bid component (planned 0.62, the planned budget = the current one): a book row to 0.62 stamped 10:00 LA 08-31
+--                  (inside the match window), landed noon LA 09-02 (after it, inside the horizon)
+-- G2B BOOK_AFTER   night 08-28, SP 11084263298679, the same bid component on its 3-day horizon (08-29 .. 08-31): a book row to 0.62
+--                  stamped 10:00 LA 08-31, landed 10:00 LA 09-01 (after the horizon)
+-- G3 SB_LOGGED     night 08-28, SB 164293084382000: a book row stamped 08:00 LA 09-01 (horizon_to + 1), landed 20:00 LA 09-01
+-- G4 SB_SEEN       night 08-28, SB 145785644018633: a hand change seen 10:00 LA 09-01 (horizon_to + 1)
+CREATE TEMP TABLE inj AS
+SELECT * FROM UNNEST([
+  STRUCT('G1' AS g, '11084263298679' AS keyword_id, '531456687555062' AS campaign_id, 0.62 AS new_bid,
+         TIMESTAMP '2026-08-24 03:34:19 UTC' AS logged_at, TIMESTAMP '2026-08-24 06:34:19 UTC' AS seen_at),
+  ('G5', '112492877088507', '43890791772293', 1.37, TIMESTAMP '2026-08-24 06:04:19 UTC', TIMESTAMP '2026-08-24 05:04:19 UTC'),
+  ('G2', '108301382467865', '531456687555062', 0.62, TIMESTAMP('2026-08-31 10:00:00', 'America/Los_Angeles'), TIMESTAMP('2026-09-02 12:00:00', 'America/Los_Angeles')),
+  ('G2B', '11084263298679', '531456687555062', 0.62, TIMESTAMP('2026-08-31 10:00:00', 'America/Los_Angeles'), TIMESTAMP('2026-09-01 10:00:00', 'America/Los_Angeles')),
+  ('G3', '164293084382000', '435692261851957', 1.32, TIMESTAMP('2026-09-01 08:00:00', 'America/Los_Angeles'), TIMESTAMP('2026-09-01 20:00:00', 'America/Los_Angeles')),
+  ('G4', '145785644018633', '446868628489343', 0.62, TIMESTAMP('2026-09-01 10:00:00', 'America/Los_Angeles'), CAST(NULL AS TIMESTAMP))
+]);
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5g_log`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC') AS
+WITH tpl AS (
+  SELECT * FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE source = 'OBSERVED' AND upload_status = 'OBSERVED_ON_AMAZON' AND keyword_id IS NOT NULL AND new_bid IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (ORDER BY change_id) = 1
+)
+SELECT * FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+UNION ALL
+SELECT t.* REPLACE ('fx2|' || i.g || '|seen' AS change_id, i.keyword_id AS keyword_id, i.campaign_id AS campaign_id,
+                    i.new_bid AS new_bid, i.seen_at AS applied_at, 'REDUCE_BID' AS action,
+                    CAST(NULL AS FLOAT64) AS new_budget, CAST(NULL AS FLOAT64) AS old_budget,
+                    'CONFIRMS fx2|' || i.g || '|log Task 5 follow-up 2 fixture' AS upload_note)
+FROM tpl t CROSS JOIN inj i
+WHERE i.seen_at IS NOT NULL;
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5g_chg`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC') AS
+WITH tpl AS (
+  SELECT * FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+  WHERE landed_evidence = 'SEEN_ON_AMAZON_NOT_LOGGED' AND keyword_id IS NOT NULL AND new_bid IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (ORDER BY change_id) = 1
+)
+SELECT * FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+UNION ALL
+SELECT t.* REPLACE (IF(i.seen_at IS NULL, 'fx2|' || i.g || '|seen', 'fx2|' || i.g || '|log') AS change_id,
+                    i.keyword_id AS keyword_id, i.campaign_id AS campaign_id, i.new_bid AS new_bid,
+                    i.logged_at AS applied_at, 'REDUCE_BID' AS action,
+                    CAST(NULL AS FLOAT64) AS new_budget, CAST(NULL AS FLOAT64) AS old_budget,
+                    IF(i.seen_at IS NULL, 'OBSERVED', 'MANUAL') AS source,
+                    IF(i.seen_at IS NULL, 'OBSERVED_ON_AMAZON', CAST(NULL AS STRING)) AS upload_status,
+                    'Task 5 follow-up 2 fixture' AS upload_note,
+                    IF(i.seen_at IS NULL, 'SEEN_ON_AMAZON_NOT_LOGGED', 'LOGGED_AND_SEEN_ON_AMAZON') AS landed_evidence,
+                    IF(i.seen_at IS NULL, CAST(NULL AS STRING), 'fx2|' || i.g || '|seen') AS paired_change_id)
+FROM tpl t CROSS JOIN inj i;
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5g_led`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC') AS
+SELECT l.* REPLACE (
+  IF(l.as_of = '2026-08-28' AND l.keyword_id = '108301382467865', DATE_ADD(l.horizon_from, INTERVAL 6 DAY), l.horizon_to) AS horizon_to,
+  IF(l.as_of = '2026-08-28' AND l.keyword_id = '108301382467865', 7, l.window_days) AS window_days,
+  IF(l.as_of = '2026-08-28' AND l.keyword_id IN ('108301382467865', '11084263298679'), 0.62, l.planned_bid) AS planned_bid,
+  IF(l.as_of = '2026-08-28' AND l.keyword_id IN ('108301382467865', '11084263298679'), l.campaign_current_budget,
+     l.campaign_planned_budget) AS campaign_planned_budget)
+FROM `onyga-482313.OI.V_PREDICTION_LEDGER` l;
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5g_grade_new`
+LIKE `onyga-482313.OI.FACT_PREDICTION_GRADE`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC');
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5g_grade_old`
+LIKE `onyga-482313.OI.FACT_PREDICTION_GRADE`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC');
+
+SELECT 'log' AS t, COUNT(*) AS n, COUNTIF(STARTS_WITH(change_id, 'fx2|')) AS fx FROM `onyga-482313.OI._tmp_t5g_log`
+UNION ALL
+SELECT 'chg', COUNT(*), COUNTIF(STARTS_WITH(change_id, 'fx2|')) FROM `onyga-482313.OI._tmp_t5g_chg`
+UNION ALL
+SELECT 'led', COUNT(*), COUNTIF(as_of = '2026-08-28' AND keyword_id IN ('108301382467865', '11084263298679')) FROM `onyga-482313.OI._tmp_t5g_led`
+UNION ALL
+SELECT 'grade_new', COUNT(*), 0 FROM `onyga-482313.OI._tmp_t5g_grade_new`
+UNION ALL
+SELECT 'grade_old', COUNT(*), 0 FROM `onyga-482313.OI._tmp_t5g_grade_old`;
+```
+
+```sql
+-- 3. v27.175 against v27.174 on the copy, per plan row (the DO_NOTHING scenario row): the six fixture keys, then every other
+--    plan row of each copy against the live current grade (applied scenario, both id lists, label)
+CREATE TEMP TABLE fx AS
+SELECT * FROM UNNEST([
+  STRUCT('G1' AS g, DATE '2026-08-23' AS as_of, '11084263298679' AS keyword_id), ('G5', DATE '2026-08-23', '112492877088507'),
+  ('G2', DATE '2026-08-28', '108301382467865'), ('G2B', DATE '2026-08-28', '11084263298679'),
+  ('G3', DATE '2026-08-28', '164293084382000'), ('G4', DATE '2026-08-28', '145785644018633')]);
+CREATE TEMP TABLE n AS SELECT * FROM `onyga-482313.OI._tmp_t5g_grade_new` WHERE scenario = 'DO_NOTHING';
+CREATE TEMP TABLE o AS SELECT * FROM `onyga-482313.OI._tmp_t5g_grade_old` WHERE scenario = 'DO_NOTHING';
+CREATE TEMP TABLE live AS
+SELECT * FROM `onyga-482313.OI.FACT_PREDICTION_GRADE` WHERE scenario = 'DO_NOTHING'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY predictor, variant, as_of, campaign_id, keyword_id ORDER BY regrade_seq DESC) = 1;
+SELECT 'FIXTURE' AS part, fx.g, n.as_of, n.keyword_id, n.predictor, n.channel, n.horizon_to,
+       n.applied_scenario AS v175, o.applied_scenario AS v174,
+       ARRAY_TO_STRING(n.matched_change_ids, ',') AS m175, ARRAY_TO_STRING(n.other_change_ids, ',') AS o175,
+       ARRAY_TO_STRING(o.matched_change_ids, ',') AS m174, ARRAY_TO_STRING(o.other_change_ids, ',') AS o174,
+       CAST(NULL AS INT64) AS n_rows, CAST(NULL AS INT64) AS ids_or_label_moved
+FROM n JOIN o USING (predictor, variant, as_of, campaign_id, keyword_id)
+JOIN fx ON fx.as_of = n.as_of AND fx.keyword_id = n.keyword_id
+UNION ALL
+SELECT 'REST_' || cp, NULL, NULL, NULL, x.predictor, NULL, NULL, x.applied_scenario, l.applied_scenario,
+       NULL, NULL, NULL, NULL, COUNT(*),
+       COUNTIF(ARRAY_TO_STRING(x.matched_change_ids, ',') <> ARRAY_TO_STRING(l.matched_change_ids, ',')
+               OR ARRAY_TO_STRING(x.other_change_ids, ',') <> ARRAY_TO_STRING(l.other_change_ids, ',')
+               OR x.grade <> l.grade OR x.is_applied <> l.is_applied)
+FROM (SELECT 'v175_vs_live' AS cp, * FROM n UNION ALL SELECT 'v174_vs_live', * FROM o) x
+JOIN live l USING (predictor, variant, as_of, campaign_id, keyword_id)
+WHERE NOT EXISTS (SELECT 1 FROM fx WHERE fx.as_of = x.as_of AND fx.keyword_id = x.keyword_id)
+GROUP BY cp, x.predictor, x.applied_scenario, l.applied_scenario
+ORDER BY part, g, predictor, v175, v174;
 ```

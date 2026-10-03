@@ -232,6 +232,11 @@ pred_net    = pred_gp - pred_spend
   Los Angeles midnight that starts `horizon_from + MATCH_WINDOW_DAYS`; the other-change scan to the end
   of `horizon_to` (an SB keyword's own changes one day longer). `SP_GRADE_PREDICTIONS` v27.174; the
   August band re-graded (spec §7, §14.1; `architecture/LEARNING.md` §4, §10 "Task 5 follow-up").*
+  *Corrected 2026-10-04 (Task-5 review 2): a change is read at its landing on Amazon — a
+  `LOGGED_AND_SEEN_ON_AMAZON` row at the earliest `applied_at` of the observed rows its
+  `paired_change_id` names, never its log stamp — and the extra SB day covers only `SEEN_ON_AMAZON_*`
+  changes. `SP_GRADE_PREDICTIONS` v27.175; no stored grade moved, so no re-grade
+  (`architecture/LEARNING.md` §4, §10 "Task 5 follow-up 2").*
 - [ ] **Step 5: the grade** — realised side = GOOD when `orders >= min_orders AND GP / spend >=
   family_bar` (the judge's own test). Buckets `0, 1–5, 6–10, 11–20, 21–40, 41–80, 81+` by realised clicks.
   Inside one run, in this order: errors; then per predictor × family × calendar_state the cumulative,
