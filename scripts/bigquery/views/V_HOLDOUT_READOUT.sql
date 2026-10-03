@@ -25,8 +25,10 @@
 -- at -$752 against cuts at +$3,051.
 --
 -- ── WHY THE VIEW PRINTS NOTHING UNTIL 2027-01-05 ─────────────────────────────────────────────
--- Before the first readout date this view returns exactly ONE row, state NOT_YET, every numeric
--- column NULL. That is deliberate and it is not paternalism:
+-- Before the first readout date this view returns exactly ONE estimate row, state NOT_YET, every
+-- numeric column NULL (v27.162: beside it, one CENSORED row per censored unit, which carries dates
+-- and a reason and no number — see "CONTAMINATION AND CENSORING" below). That is deliberate and it
+-- is not paternalism:
 --   · Ads spend settles ~D+3 and sales accrue to D+7/D+14 (fact_oi_ads_restatement_settle). The
 --     TREATED arm has more recent changes than the holdout arm by construction, so reading early
 --     systematically UNDERSTATES the treated arm's sales. The readout date already contains the
@@ -82,6 +84,46 @@
 -- SUBGROUP CAVEAT: the ALL row is the trial. The per-action-class rows are EXPLORATORY — the trial
 -- is powered for the total and for nothing else, and every split multiplies the MDE. Read them as
 -- directions to investigate, never as findings.
+--
+-- ── CONTAMINATION AND CENSORING (v27.162, 2026-10-03; piece-1 plan Task 8, ruling R9 = spec P-23) ─
+-- HOLDOUT.md §6 #2: one instruction reaching a HOLDOUT campaign, from the engine or from a person,
+-- contaminates that unit permanently. Ori ruled on 2026-10-02 (R9, option (a)) that a contaminated
+-- unit AND its stratum-mates, in BOTH arms, are censored from the day of the contamination, so the
+-- comparison inside the stratum stays fair (never pull only the holdout campaign).
+--   contaminated_on  per HOLDOUT unit: the Los Angeles day of the first change on it inside
+--                    [eligible_from, trial_end] that the change log records as applied
+--                    (V_PPC_CHANGE_LOG_APPLIED) or the observed-change ledger records as seen on
+--                    Amazon (FACT_PPC_CHANGE_LOG source OBSERVED: the DIM SCD2 trail, hand changes in
+--                    the console included). A logged change and its observed landing are both read;
+--                    the first of the two days counts. Day = DATE(applied_at, Los Angeles), the day
+--                    every reader of the log uses. LIMIT: an SB keyword's observed instant is the
+--                    Fivetran sync that first saw it, up to a day after the real change
+--                    (V_AMAZON_OBSERVED_CHANGES header), so an SB keyword contamination can be dated
+--                    one day late. PENDING_UPLOAD rows are not changes (a pending row that lands is
+--                    observed); a book row naming a HOLDOUT campaign is seat_holdout_row_on_sheet's.
+--   censored_from    per unit, both arms: the earliest contaminated_on of any HOLDOUT unit in the
+--                    unit's stratum. From that day on the unit's dollars and proposals leave the
+--                    estimate; it is rated on its own days before it (a unit with none drops out).
+-- The view publishes one CENSORED row per censored unit — dates and the reason, never a dollar — so
+-- the CENSORED rows exist before 2027-01-05 and leak nothing of the estimate. V_ENGINE_HEALTH
+-- holdout_unit_changed READS them and turns RED when a change on a HOLDOUT unit has no censoring
+-- here (HOLDOUT_INTEGRITY_acceptance.sql proves both on doctored copies).
+-- MEASURED BEFORE DEPLOY (2026-10-03 ~08:00 UTC, this body run as a query, CENSORED rows listed):
+-- R9 named two units, Ori's pauses of 2026-09-27 (BOX-SP/PHRASE (teen-girl-birthday-gift, White)
+-- 75834491759416 and BOX-VIDEO/COMPETE (Copycat, Blue) 76054744633802, confirmed by Ori 2026-10-02).
+-- The ledger holds changes on 8 of the 14 HOLDOUT units inside the window (25 rows, every one an
+-- OBSERVED row with no log row behind it, first days 2026-09-10 .. 2026-09-27), so the rule censors
+-- 6 of the 7 strata that hold a HOLDOUT unit: 61 of 69 units (13 of 14 HOLDOUT, 48 of 55 TREATED).
+-- Untouched: stratum SB|CAP|LNC (1 HOLDOUT, 5 TREATED) and SB|CAP|GRD (no HOLDOUT, 2 TREATED). A
+-- censored unit keeps 9 observed days (censored from 09-10: 09-01..09-09) to 26 (from 09-27). Ori
+-- confirmed the two pauses; the other six units' changes are unconfirmed (HOLDOUT.md §6,
+-- "Contamination"). No dollar was read: the estimate path was run only for unit counts and days.
+-- COST (2026-10-03, each read twice): the CENSORED rows alone 6.5 / 20.2 slot-s (no FACT_AMAZON_ADS: the
+-- estimate branch is gated off before 2027-01-05, and filtering state = 'CENSORED' prunes it after —
+-- dry run with the gate date set to 2027-02-01: 403,245 bytes filtered, 47,636,110 unfiltered). The
+-- estimate path, gate date set to 2027-02-01, counts only: v27.83 16.0 / 56.3 slot-s, this body
+-- 252.0 / 153.8 slot-s, 27,053,628 bytes (FACT_AMAZON_ADS read once, joined to the 69-row cut).
+-- Reproduce: HOLDOUT_INTEGRITY_acceptance.sql, temp tables `led` and `ro`.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_HOLDOUT_READOUT` AS
 WITH
@@ -99,10 +141,51 @@ anchor AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
            FROM `onyga-482313.OI.FACT_AMAZON_ADS`),
 -- the frozen arms. Nothing here recomputes an arm; it only reads one.
 asg AS (
-  SELECT a.unit_id, a.arm, a.stratum, a.channel, a.family,
-         a.net_28d_at_assign
+  SELECT a.unit_id, a.unit_name, a.arm, a.stratum, a.channel, a.family,
+         a.net_28d_at_assign, a.eligible_from, a.trial_end
   FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` a, k
   WHERE a.trial_id = k.trial_id AND a.unit_type = 'CAMPAIGN'
+),
+-- R9: every change that reached Amazon on a HOLDOUT unit inside its trial window (header,
+-- "CONTAMINATION AND CENSORING").
+touch AS (
+  SELECT a.unit_id, a.stratum, DATE(l.applied_at, 'America/Los_Angeles') AS change_day,
+         l.change_id, l.action, l.landed_evidence
+  FROM asg a
+  JOIN (SELECT campaign_id, applied_at, change_id, action, 'LOGGED, applied' AS landed_evidence
+        FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
+        UNION ALL
+        SELECT campaign_id, applied_at, change_id, action,
+               IF(STARTS_WITH(COALESCE(upload_note, ''), 'CONFIRMS '),
+                  'OBSERVED on Amazon, confirming a logged row', 'OBSERVED on Amazon, not logged')
+        FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+        WHERE source = 'OBSERVED') l
+    ON l.campaign_id = a.unit_id
+  WHERE a.arm = 'HOLDOUT'
+    AND DATE(l.applied_at, 'America/Los_Angeles') BETWEEN a.eligible_from AND a.trial_end
+),
+-- per contaminated HOLDOUT unit: its first day, and the first change on it
+contam AS (
+  SELECT unit_id, stratum, MIN(change_day) AS contaminated_on, COUNT(*) AS n_changes,
+         ARRAY_AGG(CONCAT(action, ', ', landed_evidence) ORDER BY change_day, change_id LIMIT 1)[OFFSET(0)] AS first_change
+  FROM touch GROUP BY 1, 2
+),
+-- per stratum: censored from the earliest contamination of any HOLDOUT unit in it, and that unit
+strat AS (
+  SELECT c.stratum, MIN(c.contaminated_on) AS censored_from,
+         ARRAY_AGG(FORMAT('%s (%s) changed on Amazon on %t: %s', a.unit_name, c.unit_id,
+                          c.contaminated_on, c.first_change)
+                   ORDER BY c.contaminated_on, c.unit_id LIMIT 1)[OFFSET(0)] AS censored_by
+  FROM contam c JOIN asg a USING (unit_id)
+  GROUP BY 1
+),
+-- per unit, both arms: the censoring the estimate applies and the CENSORED rows publish
+ucens AS (
+  SELECT a.unit_id, a.unit_name, a.arm, a.stratum,
+         c.contaminated_on, c.n_changes, c.first_change, s.censored_from, s.censored_by
+  FROM asg a
+  LEFT JOIN contam c USING (unit_id)
+  LEFT JOIN strat s ON s.stratum = a.stratum
 ),
 -- observed days so far inside the window: the normaliser. LEAST(win_end, anchor) means a partial
 -- window is rated, never silently summed as if it were complete.
@@ -114,11 +197,15 @@ win AS (
 ),
 -- outcome at the randomization unit's grain. One paired source: cost and GROSS_PROFIT off the same
 -- FACT rows, so the subtraction can never straddle two differently-complete feeds.
+-- v27.162 (R9): a censored unit's days from censored_from on are left out.
 out AS (
   SELECT CAST(f.campaign_id AS STRING) AS unit_id,
          SUM(f.GROSS_PROFIT) - SUM(f.Ads_cost) AS dollars_window
-  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f, win
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS` f
+  CROSS JOIN win
+  LEFT JOIN ucens u ON u.unit_id = CAST(f.campaign_id AS STRING)
   WHERE f.date BETWEEN win.s AND win.e
+    AND (u.censored_from IS NULL OR f.date < u.censored_from)
   GROUP BY 1
 ),
 -- THE COUNTERFACTUAL RECORD. FACT_ENGINE_PROPOSALS keeps the engine's intended action for HOLDOUT
@@ -145,8 +232,11 @@ prop AS (
               'BID_UP', 'BID_DOWN')
     END AS action_class,
     COUNT(*) AS n_prop
-  FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` p, win
+  FROM `onyga-482313.OI.FACT_ENGINE_PROPOSALS` p
+  CROSS JOIN win
+  LEFT JOIN ucens u ON u.unit_id = CAST(p.campaign_id AS STRING)
   WHERE p.snapshot_date BETWEEN win.s AND win.e
+    AND (u.censored_from IS NULL OR p.snapshot_date < u.censored_from)   -- R9, as in `out`
   GROUP BY 1, 2
 ),
 -- one class per unit: what the engine MOST wanted to do to this campaign over the window. A
@@ -157,17 +247,30 @@ intent AS (
   FROM prop
   QUALIFY ROW_NUMBER() OVER (PARTITION BY unit_id ORDER BY n_prop DESC, action_class) = 1
 ),
-unit AS (
-  SELECT a.unit_id, a.arm, a.stratum, a.channel, a.family,
-         COALESCE(i.action_class, 'NO_PROPOSAL') AS action_class,
-         COALESCE(o.dollars_window, 0) * 14.0 / w.n_days   AS d14,
-         a.net_28d_at_assign / 2.0                          AS pre14,
-         COALESCE(o.dollars_window, 0) * 14.0 / w.n_days
-           - a.net_28d_at_assign / 2.0                      AS chg14
+-- v27.162 (R9): each unit is rated on its own observed days — the window, cut the day before its
+-- censored_from — and a unit censored from the window's first day has none and drops out.
+unit_days AS (
+  SELECT a.*, o.dollars_window, i.action_class AS intent_class,
+         DATE_DIFF(LEAST(w.e, COALESCE(DATE_SUB(u.censored_from, INTERVAL 1 DAY), w.e)), w.s, DAY) + 1 AS n_obs_days
   FROM asg a
   LEFT JOIN out o ON o.unit_id = a.unit_id
   LEFT JOIN intent i ON i.unit_id = a.unit_id
+  LEFT JOIN ucens u ON u.unit_id = a.unit_id
   CROSS JOIN win w
+),
+unit AS (
+  SELECT unit_id, arm, stratum, channel, family,
+         COALESCE(intent_class, 'NO_PROPOSAL') AS action_class,
+         COALESCE(dollars_window, 0) * 14.0 / n_obs_days   AS d14,
+         net_28d_at_assign / 2.0                          AS pre14,
+         COALESCE(dollars_window, 0) * 14.0 / n_obs_days
+           - net_28d_at_assign / 2.0                      AS chg14
+  FROM unit_days
+  WHERE n_obs_days >= 1
+),
+-- how many units the censoring touches, for the ALL row's sentence
+ncens AS (
+  SELECT COUNTIF(censored_from IS NOT NULL) AS n_cens, COUNT(*) AS n_all FROM ucens
 ),
 -- per (class, arm) moments. The ALL row is the trial; the class rows are exploratory.
 cell AS (
@@ -222,7 +325,14 @@ SELECT
   CAST(NULL AS FLOAT64) AS diff_adjusted_14d,
   CAST(NULL AS FLOAT64) AS band_95_14d,
   CAST(NULL AS FLOAT64) AS mde_ex_ante_14d,
-  FORMAT('not enough data yet — first readout %s', CAST(k.first_readout AS STRING)) AS verdict
+  FORMAT('not enough data yet — first readout %s', CAST(k.first_readout AS STRING)) AS verdict,
+  -- v27.162: the unit columns, filled on CENSORED rows only
+  CAST(NULL AS STRING)  AS unit_id,
+  CAST(NULL AS STRING)  AS unit_name,
+  CAST(NULL AS STRING)  AS arm,
+  CAST(NULL AS STRING)  AS stratum,
+  CAST(NULL AS DATE)    AS contaminated_on,
+  CAST(NULL AS DATE)    AS censored_from
 FROM k
 WHERE CURRENT_DATE('America/Los_Angeles') < k.first_readout
 
@@ -238,8 +348,8 @@ SELECT
   ROUND(e.diff_raw_14d, 2), ROUND(e.diff_adjusted_14d, 2),
   ROUND(e.band_95_14d, 2), e.mde_ex_ante_14d,
   -- THE PLAIN SENTENCE. It always names the band before the estimate, because on this trial the
-  -- band is the finding.
-  CASE
+  -- band is the finding. v27.162: the ALL row also says how many units R9's censoring cut.
+  CONCAT(CASE
     WHEN e.action_class <> 'ALL' THEN
       FORMAT('exploratory split, not a finding — the trial is powered for the total only. %s: engine arm %s vs holdout arm %s per 14 days across %d and %d campaigns.',
              e.action_class,
@@ -260,7 +370,36 @@ SELECT
              CAST(e.win_start AS STRING), CAST(e.win_end AS STRING),
              e.treated_n, FORMAT('$%.0f', e.diff_raw_14d), e.holdout_n,
              FORMAT('$%.0f', e.band_95_14d), FORMAT('$%.0f', e.diff_adjusted_14d))
-  END AS verdict
+  END,
+  IF(e.action_class = 'ALL' AND nc.n_cens > 0,
+     FORMAT(' CENSORED (R9, HOLDOUT.md §6): %d of %d campaigns, both arms, each rated only on its days before the first change on a HOLDOUT campaign of its stratum; the CENSORED rows of this view name them.',
+            nc.n_cens, nc.n_all),
+     '')) AS verdict,
+  CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING),
+  CAST(NULL AS DATE), CAST(NULL AS DATE)
 FROM est e
+CROSS JOIN ncens nc
 WHERE CURRENT_DATE('America/Los_Angeles') >= e.first_readout
+
+UNION ALL
+
+-- ── v27.162 (R9): one CENSORED row per censored unit, both arms. Dates and the reason, never a
+-- dollar, so these rows stand before 2027-01-05 too. V_ENGINE_HEALTH holdout_unit_changed reads them.
+SELECT
+  3 AS row_rank,
+  'CENSORED' AS state,
+  CAST(NULL AS STRING) AS action_class,
+  CAST(NULL AS INT64), CAST(NULL AS INT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CONCAT(FORMAT('CENSORED from %t, %s arm, stratum %s: ', u.censored_from, u.arm, u.stratum),
+         IF(u.contaminated_on IS NOT NULL,
+            FORMAT('this HOLDOUT campaign changed on Amazon on %t (%d change(s) inside the trial window, the first %s); ',
+                   u.contaminated_on, u.n_changes, u.first_change),
+            ''),
+         'the stratum is censored from the first change on any of its HOLDOUT campaigns — ', u.censored_by,
+         '. Both arms of the stratum leave the estimate from that day (R9, Ori 2026-10-02; HOLDOUT.md §6).') AS verdict,
+  u.unit_id, u.unit_name, u.arm, u.stratum, u.contaminated_on, u.censored_from
+FROM ucens u
+WHERE u.censored_from IS NOT NULL
 ;

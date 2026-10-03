@@ -93,7 +93,8 @@ between its keywords instead of being fooled by it.
 | `DE_HOLDOUT_ASSIGNMENT` | **The arms.** One row per unit, written once, never updated. |
 | `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. |
 | `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. |
-| `V_HOLDOUT_READOUT` | The answer. Silent until 2027-01-05. |
+| `V_HOLDOUT_READOUT` | The answer. Silent until 2027-01-05. From v27.162 it also publishes one `CENSORED` row per censored unit (dates and the reason, never a dollar) — §6 "Contamination". |
+| `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day — §6 "Contamination". |
 
 ### The eligible population — 69 campaigns, $26,377 / 28d
 
@@ -200,6 +201,58 @@ forecast-THROTTLE and could grade to CRITICAL during Q4.
 
 Never pull only the holdout campaign. Never pull only the treated one.
 
+### Contamination — the rule as built (R9, ruled 2026-10-02, built v27.162 on 2026-10-03)
+
+**Ori, 2026-10-02 (R9, option (a); spec P-23):** he paused BOX-SP/PHRASE (teen-girl-birthday-gift,
+White) `75834491759416` and BOX-VIDEO/COMPETE (Copycat, Blue) `76054744633802` himself on
+2026-09-27 — both HOLDOUT, both Lollibox, in the same console batch as three campaigns outside the
+trial's HOLDOUT arm. Neither pause has a change-log row; the observed-change ledger
+(`FACT_PPC_CHANGE_LOG` source `OBSERVED`, from the DIM SCD2 trail) records both. Rule #2 above makes
+both units contaminated permanently, and the ruling is to censor them **and their stratum-mates, in
+both arms, from the day of the contamination**, so the comparison inside each stratum stays fair.
+
+**The rule `V_HOLDOUT_READOUT` applies (and publishes):**
+
+- `contaminated_on` (per HOLDOUT unit) = the Los Angeles day of the first change on it inside
+  `[eligible_from, trial_end]` that the change log records as applied (`V_PPC_CHANGE_LOG_APPLIED`) or
+  the observed-change ledger records as seen on Amazon. A logged change and its observed landing are
+  both read; the earlier day counts. An SB keyword's observed instant is the sync that first saw it,
+  up to a day late, so an SB keyword contamination can be dated one day late.
+- `censored_from` (per unit, both arms) = the earliest `contaminated_on` in the unit's stratum. From
+  that day the unit's dollars and proposals leave the estimate; it is rated on its own days before
+  it.
+- One `CENSORED` row per censored unit names the unit, its arm and stratum, both dates and the change
+  that triggered the stratum. The ALL row's sentence (from 2027-01-05) says how many units were cut.
+- `V_ENGINE_HEALTH` `holdout_unit_changed` reads those rows (never re-derives them) and is RED when a
+  change on a HOLDOUT unit, or on a stratum-mate's HOLDOUT unit, is not censored from its day; RED
+  as well when no HOLDOUT unit or no observed-change row is read. `SP_RECORD_OBSERVED_CHANGES` (Refresh
+  Task 2.2a) records a console change the night it reaches the DIM tables, and the readout censors it
+  on that read; the check holds the readout to it. Acceptance with negative controls:
+  `scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql` (H1 the censoring, H2 the check, H3 the
+  readout's gate).
+
+**What the ledger shows — more than the two pauses (measured 2026-10-03; the query is the
+acceptance's `led` statement).** The ledger holds 25 changes on **8 of the 14 HOLDOUT units** inside
+the window, every one an observed change with no log row behind it:
+
+| HOLDOUT campaign | stratum | first change (LA day) | changes |
+|---|---|---|---|
+| BOX-SP/BROAD (Hunter, Gift for Girl) `200171414843593` | SP\|CAP\|GRD | 2026-09-10 | 3 bid |
+| BOX-SP/AUTO (White) `488973733209950` | SP\|UNC\|GRD | 2026-09-10 | 3 bid, 1 keyword pause, 2 budget (30 → 80 → 50 on 09-16) |
+| ME-SP/BROAD (Mint, journaling kit for g) `190387447939462` | SP\|CAP\|LNC | 2026-09-11 | 1 bid |
+| BOX-SP/BROAD- gifts for girls 10-12 `350259814389755` | SP\|CAP\|LNC | 2026-09-11 | 2 bid |
+| BOTTLE-SP/AUTO `279837860088128` | SP\|UNC\|LNC | 2026-09-11 | 3 bid |
+| FRESH-VIDEO/ BROAD `446868628489343` | SB\|UNC\|GRD | 2026-09-27 | 8 bid (one SB sync) |
+| BOX-SP/PHRASE (teen-girl-birthday-gift, White) `75834491759416` | SP\|UNC\|LNC | 2026-09-27 | campaign pause (Ori, confirmed) |
+| BOX-VIDEO/COMPETE (Copycat, Blue) `76054744633802` | SB\|UNC\|LNC | 2026-09-27 | campaign pause (Ori, confirmed) |
+
+So the rule censors 6 of the 7 strata that hold a HOLDOUT unit: **61 of 69 units — 13 of 14 HOLDOUT,
+48 of 55 TREATED** — each keeping 9 observed days (censored from 09-10) to 26 (from 09-27). Only
+SB|CAP|LNC (1 HOLDOUT, 5 TREATED) and SB|CAP|GRD (no HOLDOUT, 2 TREATED) are untouched. **Ori has
+confirmed the two pauses only; the other six units' changes are unconfirmed, and what the trial is
+worth with this censoring is a decision for Ori, not for the readout.** No dollar of the estimate
+was read to measure this: the estimate path was run for unit counts and observed days only.
+
 ### If the BASE/GROWTH reorg has not landed by Sep 1
 
 Doctrine puts the reorg at **Sep 15–30** with a **+$70.64/day** shift, and the $20.01–31.99 budget
@@ -272,8 +325,10 @@ materially — the largest eligible campaign is 11.2% of the money on its own.
 
 ## 8. Reading it out
 
-- **First readout: 2027-01-05.** `V_HOLDOUT_READOUT` returns exactly one row before that date —
-  state `NOT_YET`, all numerics `NULL`, verdict `not enough data yet — first readout 2027-01-05`.
+- **First readout: 2027-01-05.** `V_HOLDOUT_READOUT` returns exactly one estimate row before that
+  date — state `NOT_YET`, all numerics `NULL`, verdict `not enough data yet — first readout
+  2027-01-05` — and, from v27.162, one `CENSORED` row per censored unit, which carries dates and a
+  reason and no number (§6 "Contamination"; acceptance H3 holds the gate).
 - **READOUT LAG IS NOT OPTIONAL.** Ads spend settles ~D+3 and sales accrue to D+7/D+14. Reading the
   final window before 2027-01-05 systematically **understates the treated arm's sales**, because
   the treated arm has more recent changes by construction. The readout date already contains the

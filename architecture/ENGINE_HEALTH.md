@@ -63,6 +63,19 @@ error and the length of the streak — the check that would have named the plan 
 and that needs no new check for the next outage). Acceptance, with the negative controls as standing
 checks: `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql`.
 
+**The holdout's integrity (v27.162, 2026-10-03; ruling R9 = spec P-23, audit fix #27; spec
+`HOLDOUT.md` §6 "Contamination").** holdout_unit_changed: RED when a HOLDOUT campaign changed inside
+its trial window — a change-log row applied, or a change the observed-change ledger saw on Amazon
+(hand changes in the console included) — and `V_HOLDOUT_READOUT` does not censor it and its
+stratum-mates, both arms, from that day; RED as well when no HOLDOUT unit or no observed-change row
+is read. It READS the readout's `CENSORED` rows and never re-derives the censoring; the detail lists
+the HOLDOUT campaigns that changed (first day) and how many trial campaigns the readout censors, or,
+when RED, names each campaign not censored. seat_holdout_row_on_sheet joins only the seat books' log
+rows, which is why the two console pauses of 2026-09-27 were on no surface. Sources: the assignment
+table, the change log and the readout's `CENSORED` branch — no `FACT_AMAZON_ADS` (filtering the board
+on this check alone: 63.6 slot-s, measured 2026-10-03). Acceptance with negative controls on doctored
+copies, running the board's own text: `scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql`.
+
 First board 2026-08-16: RED contradiction_rate 31.8 (57/179 — the gate WORKS; the signal is that
 the engines structurally overlap a third of their instructions, mostly LAUNCH proposing on
 LOW_STOCK-owned keys — a future refinement is to stop GENERATING those, not just silencing them)
