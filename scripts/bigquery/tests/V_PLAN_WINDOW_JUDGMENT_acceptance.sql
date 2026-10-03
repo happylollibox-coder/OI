@@ -33,8 +33,34 @@
 -- run expected 1 and read 9; the expectation now reads the campaign's row count); HC_C02_OTHER_STRATEGY
 -- (a PRODUCT_DEFENSE experiment) 0; NC_C02_NO_POPULATION (an empty ladder snapshot) 1;
 -- NC_EMPTY_JUDGEMENT C02 2 (both emptiness terms).
--- EVERY ROW MUST READ PASS.
---   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
+-- EVERY ROW MUST READ PASS. RUN IT THROUGH THE CONTROLS SCRIPT, NOT DIRECTLY (piece-1 follow-up F7,
+-- 2026-10-03; until then this line ran the file with bq query):
+--   python3 scripts/bigquery/tests/check_judge_memory_controls.py --submit      # prints JOB=...
+--   bq wait <JOB> 60                                                           # repeat until DONE
+--   python3 scripts/bigquery/tests/check_judge_memory_controls.py --collect <JOB>
+-- The script's LIVE copy is this file's text, comment lines dropped, on the judgement and the live
+-- plan as they are: every check must read 0 there (= PASS). Exit 0 also needs every doctored copy at
+-- its expected value; exit 1 prints each mismatch, LIVE first.
+-- WHY. Run directly, the file did not finish: the Task 10 proof's run (job
+-- t10_acc_v_plan_window_judgment_1791012391, 2026-10-03 07:26:38 UTC, the file before F3's C22
+-- restatement) was cancelled after 995.9 s (16.6 min) at 1,786,614.5 slot-seconds, 2,573 stages in its
+-- plan (447 still RUNNING). The file reads j in 31 places; in that plan T_LIFT_PROBES, which the view
+-- reads once (its probes CTE, joined once), was read by 32 stages and FACT_AMAZON_ADS by 224. BigQuery
+-- does not materialise a view or a non-recursive WITH clause: each reference is evaluated again (its
+-- documentation). The script reads the view ONCE (CREATE TEMP TABLE jbase AS SELECT ... FROM the view)
+-- and runs this file's text on that copy: the proof's run of it, job
+-- bqjob_r4ff38afd8a4ee55e_000001a100b7884b_1, started 07:43:14 UTC, finished in 207.6 s at 9,315.5
+-- slot-seconds, exit 0, LIVE 30 checks 0, 40 copies as expected.
+-- F7 RUN, these three lines on the deployed v27.165 view, 2026-10-03: job
+-- bqjob_r147f2d7b2d5a0b7c_000001a1015acda9_1, 10:41:35 - 10:45:41 UTC (246.2 s), 14,818.3 slot-seconds,
+-- exit 0, LIVE 30 checks 0, all 40 doctored copies as expected; its one read of the view (child job
+-- script_job_ea89df46eb356acecdcc4e01c5171ba7_0, CREATE TEMP TABLE jbase) 1,083.7 slot-seconds, 11.1 s.
+-- F7 CHANGED NO CHECK. Its check (scratchpad check_f7_runline.py): A = the text
+-- check_judge_memory_controls.acceptance_query() builds from this file differs from the one it builds
+-- from the file at 9685799 (+1), or is empty / lacks the final SELECT (+1, emptiness); B = executable
+-- "bq query ... grep -v" lines in the header (+1 each), plus 1 each for a missing "--submit" / "--collect"
+-- Run line. This file: A 0, B 0. Controls: the file at 9685799 (the direct Run line) A 0, B 3; a copy
+-- with the "bq wait" line's comment marker removed A 1, B 1; an empty copy A 2, B 2.
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
 --       and the §9 guarantees that apply at the JUDGEMENT layer (potting, seating and queueing
 --       are Task 2 and are asserted by FACT_PLAN_NEXT_WEEK_acceptance.sql, not here).

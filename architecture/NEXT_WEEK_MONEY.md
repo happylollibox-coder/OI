@@ -1155,10 +1155,24 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep 
 # v27.156 reads FACT_PLAN_NEXT_WEEK.memory_cleared_by_gap: the column migration goes first
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/migrations/2026-10-02_plan_judge_memory_columns.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
-bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/V_PLAN_WINDOW_JUDGMENT_acceptance.sql)"
-# the negative controls: the acceptance's own text on doctored copies (exit 0 = every control as expected)
-python3 scripts/bigquery/tests/check_judge_memory_controls.py
+# the acceptance AND its negative controls, never the file directly (follow-up F7, see below): the
+# script's LIVE copy is the acceptance on the live judgement (every check 0 = PASS); exit 0 = LIVE all 0
+# and every doctored copy as expected
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --submit      # prints JOB=...
+bq wait <JOB> 60                                                           # repeat until DONE
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --collect <JOB>
 ```
+
+**The Run line is the controls script (follow-up F7, 2026-10-03).** The acceptance file's header
+gave a direct `bq query` Run line, and this block ran it. Run that way in the Task 10 proof (job
+`t10_acc_v_plan_window_judgment_1791012391`, the file before F3), it was cancelled after 995.9 s at
+1,786,614.5 slot-seconds with 2,573 stages in its plan: the file reads `j` in 31 places, and
+`T_LIFT_PROBES`, which the view reads once, was read by 32 of those stages (`FACT_AMAZON_ADS` by 224).
+BigQuery's documentation: a view or a non-recursive WITH clause is evaluated again at each reference.
+The controls script
+reads the view once into a temp table and runs the file's text on it (the proof's run: 207.6 s, 9,315.5
+slot-seconds, exit 0). The header and this block now give the script's three commands; the header
+records why, F7's run and its controls.
 
 **v27.157: 30 checks** — C08 restated (a price under the floor only where P-19 held a current bid
 already under it), C18 restated (the seat promise matched on "competes for a seat"), and P1 (P-19:
