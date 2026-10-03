@@ -2619,6 +2619,42 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 23 (2026-10-03, v27.163, money-plan piece-1 Task 9): THE BOARD'S MEMORY.
+  -- Appends every row of V_ENGINE_HEALTH, stamped with the call's start time, to
+  -- FACT_ENGINE_HEALTH_HISTORY, so V_DAILY_BRIEF's SYSTEM line can tell a NEW RED from a standing
+  -- one. LAST STEP OF THE PASS, after Task 21 (SP_REFRESH_CUBE_TABLES): the board reads tables
+  -- this pass rebuilt (T_ENGINE_PREFLIGHT, T_FAMILY_SEAT_REGISTER, FACT_PLAN_NEXT_WEEK), so one
+  -- read of the board here is the pass's finished state. The board carries one V_CHANGE_SCORECARD
+  -- arm, which reads FACT_AMAZON_ADS: its slot-seconds per call are measured in the procedure's
+  -- SOP (architecture/ENGINE_HEALTH.md). It decides nothing and moves no bid, budget or pause;
+  -- a failure logs FAIL and the summary follows.
+  -- ============================================
+
+  SET procedure_name = 'SP_SNAPSHOT_ENGINE_HEALTH';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_SNAPSHOT_ENGINE_HEALTH`();
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Final Summary
   -- ============================================
   SELECT FORMAT(

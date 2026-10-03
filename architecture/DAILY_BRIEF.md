@@ -12,6 +12,7 @@ purpose is to make it better. meaning if after a change it became worse this is 
 | `SP_SNAPSHOT_ENGINE_PROPOSALS` | Writes today's partition (delete-today-then-insert, idempotent). One single-view scan per INSERT — planner-ceiling doctrine. Orchestrator Task 20.6. |
 | `V_DAILY_BRIEF` | The one-query answer. Seven sections, uniform row shape. |
 | `V_ENGINE_HEALTH` | The engine's standing self-check. The SYSTEM section reads it LIVE (never an image) and folds its RED rows into one line. Spec: `architecture/ENGINE_HEALTH.md`. |
+| `FACT_ENGINE_HEALTH_HISTORY` | The board's memory (v27.163): one row per check per orchestrator pass, written by `SP_SNAPSHOT_ENGINE_HEALTH` (Refresh Task 23). The SYSTEM section reads its statuses to tell a NEW RED from a standing one. |
 | `T_FAMILY_SEAT_REGISTER` | The family seat register's once-per-pass image, built by `SP_REFRESH_CUBE_TABLES` step 0c. The SEATS section reads it — not the live view — so the brief, the Weekly Run front page and the `SeatRegister` cube all quote one image. Spec: `architecture/FAMILY_SEAT_REGISTER.md`. |
 | `SP_ENGINE_PREFLIGHT` | Not a brief object, but the brief now reads its verdict. Nothing reaches PLANNED that the gate refused. Spec: `architecture/ENGINE_PREFLIGHT.md`. |
 
@@ -96,6 +97,33 @@ ORDER BY section_rank, campaign_name;
   broke"; on an empty board it says the board is empty rather than that nothing is wrong.
   Asserted, with its negative controls as standing checks, by
   `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (C04, C05, C07).
+
+  **What is NEW (v27.163, 2026-10-03, money-plan piece-1 Task 9).** The v27.152 line named each RED
+  with no date, so it could not say which one was new — the board carried the same three REDs on
+  2026-10-01 and in its first snapshot on 2026-10-03, and a fourth would have read like them. The
+  line now reads the
+  board's memory, `FACT_ENGINE_HEALTH_HISTORY` (one row per check per orchestrator pass, written by
+  `SP_SNAPSHOT_ENGINE_HEALTH` as the pass's last step; `ENGINE_HEALTH.md`). For each RED check,
+  `red_since` is the earliest snapshot of the current unbroken RED run; a snapshot on which the
+  check was GREEN, AMBER, INFO or absent breaks the run. The RED part of the line is then:
+
+  - `NEW since <time> New York: <check>` for each RED whose run started inside the last 24 hours
+    (the brief is read once a day) on a snapshot after the memory's first, or
+    `NEW since the last snapshot (<time>): <check>` for a RED that was not RED on the latest
+    snapshot; `nothing NEW in the last 24 hours` when there is none;
+  - then `standing: <check> since <date>, …`. A run that reaches back to the memory's first
+    snapshot may have begun before it and reads `since <date> or earlier` — so on the first
+    morning of the memory the REDs older than it read as standing, not new.
+
+  The three alarms — `pipeline_step_failing`, `plan_partition_fresh` and (v27.163)
+  `plan_pass_failed` — are quoted with the board's detail wherever they appear; `plan_pass_failed`'s
+  first clause (the latest plan run) joins the healthy line. The action says **A PLAN PASS FAILED**
+  when it is RED and neither night alarm is. With an empty memory the line lists the REDs as before
+  and says the memory is empty rather than calling everything new. Every line, green or red, ends
+  with the memory's size and span (`the board's memory: N snapshots, <first> to <last> New York`), so
+  a reader can see the snapshots stop. The board is still read once; the memory is a small table.
+  Asserted by `PLAN_HEALTH_acceptance.sql` A1f, A2a–A2f and C04f (the twin's live rendering equals
+  the deployed row).
 
 ## One keyword, one price (v27.102, 2026-08-21)
 

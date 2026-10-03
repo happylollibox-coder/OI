@@ -87,6 +87,48 @@ deploy: AMBER, measured 0; the board filtered to this check 99.5 / 143.6 slot-s 
 `FACT_AMAZON_ADS`). `V_DAILY_BRIEF`'s SYSTEM line counts RED rows only, so this AMBER shows on the
 board and not in the brief. Acceptance: 31 rows PASS (`HOLDOUT_INTEGRITY_acceptance.sql` header).
 
+**A refused pass, and the board's memory (v27.163, 2026-10-03; money-plan piece-1 Task 9).**
+*Why:* the piece-0 proof found `SP_BUILD_NEXT_WEEK_PLAN` refused 3 of 9 passes from 2026-09-29 to
+2026-10-01 (the seat-number continuity ASSERT). `LOG_PIPELINE_RUNS` holds at most two of its FAILs
+in a row from 09-29 on, and `FACT_PLAN_NEXT_WEEK` a partition for every night 09-28 → 10-03 (both
+read 2026-10-03), so neither plan_partition_fresh nor pipeline_step_failing could name one; and the
+brief named each RED with no date, while the board carried the same three REDs on 2026-10-01 and on
+2026-10-03, so a new RED would have read like them.
+
+- **plan_pass_failed** (ALARM): RED when the latest run of the plan step in `LOG_PIPELINE_RUNS`
+  (last 30 days) logged FAIL, or any run in the last 24 hours did; RED as well when the step logged
+  no run in the last 24 hours (an empty log is not a healthy one — the pass runs three times a day,
+  starting about 01:00, 03:35 and 12:00 New York, and reaches the step every time). The detail leads with the failure's New York
+  time and the first 160 characters of its error, then the latest plan run, how many of the last
+  24 hours' runs failed and the last failure in 30 days. Reads `LOG_PIPELINE_RUNS` only.
+- **The board's memory.** `FACT_ENGINE_HEALTH_HISTORY` holds every row of the board as it read at
+  the end of each orchestrator pass: `SP_SNAPSHOT_ENGINE_HEALTH`, Refresh Task 23, the pass's last
+  step (after `SP_REFRESH_CUBE_TABLES`, so it reads the tables the pass rebuilt). One read of the
+  board per call, into a temp table; the snapshot is refused (the step logs FAIL) on an empty board,
+  a check name twice, or a row with no name or status. Append-only; nothing decides from it. The
+  board's `V_CHANGE_SCORECARD` arm scans `FACT_AMAZON_ADS`: the first call (a hand CALL at deploy,
+  2026-10-03 06:29 UTC, job `bqjob_r7bb161f1c65cac22_000001a10073cf32_1`) took 4,535.4 slot-seconds
+  (4,530.3 of them the board read), 186,883,740 bytes, 32 s; a second hand CALL at 06:56 UTC
+  (job `bqjob_r6d08822f1efc9463_000001a1008d244b_1`) 3,197.7 slot-seconds, 30 s. Three passes a
+  day call it from then on.
+- **What reads it.** `V_DAILY_BRIEF`'s SYSTEM line: for each RED check, `red_since` = the earliest
+  snapshot of the current unbroken RED run (a snapshot on which the check was GREEN, AMBER, INFO or
+  absent breaks it). NEW REDs first, standing ones after with the date each run began; see
+  `DAILY_BRIEF.md`.
+
+Acceptance, with negative controls on doctored copies: `PLAN_HEALTH_acceptance.sql` A1 (the check),
+A2 (red_since and the line), A3 (the table: nothing twice, one row per check, one snapshot per pass).
+
+Read the memory — every status each check has held, with the first and last snapshot it held it on
+(a status held in two separate runs shows once, spanning both; the brief's `red_since` is the
+run-aware reading):
+
+```sql
+SELECT check_name, status, MIN(snapshot_at) AS first_seen, MAX(snapshot_at) AS last_seen, COUNT(*) AS snapshots
+FROM `onyga-482313.OI.FACT_ENGINE_HEALTH_HISTORY`
+GROUP BY 1, 2 ORDER BY check_name, first_seen;
+```
+
 First board 2026-08-16: RED contradiction_rate 31.8 (57/179 — the gate WORKS; the signal is that
 the engines structurally overlap a third of their instructions, mostly LAUNCH proposing on
 LOW_STOCK-owned keys — a future refinement is to stop GENERATING those, not just silencing them)

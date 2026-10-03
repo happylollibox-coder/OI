@@ -32,7 +32,9 @@
 --   SYSTEM       — ONE line, always present: how many of V_ENGINE_HEALTH's checks are RED, which
 --                  ones, and — for the two that mean a night was not saved — the board's own
 --                  detail (the last plan date and nights missing; the failing step and its error).
---                  v27.152, below.
+--                  v27.152, below. v27.163: the NEW REDs first, then the standing ones with the
+--                  date each run began, read from the board's memory; plan_pass_failed's detail
+--                  quoted beside the two alarms.
 --
 -- PLANNER NOTE: V_CHANGE_SCORECARD is a ceiling view; FACT_ENGINE_PROPOSALS and the change log
 -- are cheap. The scorecard subtree appears in two UNION arms — kept lean (no further joins on
@@ -169,6 +171,28 @@
 -- COST: this view now carries V_ENGINE_HEALTH, which carries one V_CHANGE_SCORECARD arm beside
 -- the brief's own two; measured at deploy (the numbers are in the task report, not here).
 -- Acceptance: scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql (C04, C05).
+--
+-- ##################################################################################
+-- # v27.163 — SYSTEM says what is NEW. (2026-10-03, money-plan piece-1 Task 9.)    #
+-- ##################################################################################
+-- The v27.152 line named each RED with no date, so it could not say which one was new: the board
+-- carried the same three REDs on 2026-10-01 (PLAN_HEALTH_acceptance.sql header) and in its first
+-- snapshot on 2026-10-03, and a fourth would have read like them. The board now has a memory: FACT_ENGINE_HEALTH_HISTORY, one row per check per
+-- orchestrator pass, written by SP_SNAPSHOT_ENGINE_HEALTH as the pass's last step (Refresh Task 23).
+-- For each RED check, red_since = the earliest snapshot of the current unbroken RED run (a snapshot
+-- on which the check was GREEN, AMBER, INFO or absent breaks it). The line lists the NEW REDs first
+-- ('NEW since <time>: …') and the standing ones after ('standing: contradiction_rate since <date>,
+-- …'). A RED is NEW when it was not RED on the latest snapshot, or when its run started inside the
+-- last 24 hours (declared: the brief is read once a day) on a snapshot after the memory's first one;
+-- a run that reaches back to the memory's first snapshot may have begun before it, so it reads
+-- "since <date> or earlier" and is never NEW: the first morning of the memory calls no RED older
+-- than the memory new. An empty memory is said in words and the REDs are listed as v27.152 listed them. plan_pass_failed (V_ENGINE_HEALTH
+-- c34) joins the two alarms whose detail is quoted, and its first clause (the latest plan run) joins
+-- the healthy line; when it is RED and no alarm is, the action says A PLAN PASS FAILED. Every line
+-- ends with the memory's size and span, so a reader can see the snapshots stop. The board is still
+-- read once; the hs_* CTEs read only the history table. Only hs, hs_meta, hs_run, health and
+-- system_health changed. Acceptance: PLAN_HEALTH_acceptance.sql A1f, A2a–A2f, C04f (the twin's live
+-- rendering equals this row); measured results in its header.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_DAILY_BRIEF` AS
 WITH latest AS (
@@ -563,6 +587,34 @@ seats AS (
   FROM seat_family s
 ),
 
+-- v27.163 THE BOARD'S MEMORY (piece-1 plan Task 9, Step 3). FACT_ENGINE_HEALTH_HISTORY holds every
+-- check of the board as it read at the end of each orchestrator pass (SP_SNAPSHOT_ENGINE_HEALTH,
+-- Refresh Task 23). hs_* read only that small table, never the board, so V_ENGINE_HEALTH is still
+-- read once, in `health`. PLAN_HEALTH_acceptance.sql carries the twin of hs_meta, hs_run, health and
+-- system_health (A2, C04f). THEY MUST CHANGE TOGETHER.
+hs AS (
+  SELECT snapshot_at, check_name, status FROM `onyga-482313.OI.FACT_ENGINE_HEALTH_HISTORY`
+),
+hs_meta AS (  -- how much memory there is; an aggregate over an empty history is still one row
+  SELECT COUNT(DISTINCT snapshot_at) AS n_snaps, MIN(snapshot_at) AS first_at, MAX(snapshot_at) AS last_at
+  FROM hs
+),
+-- red_since, per check: the earliest snapshot of the unbroken RED run that ends at the latest
+-- snapshot. A snapshot breaks the run when the check was not RED on it (GREEN, AMBER, INFO) or was
+-- not on it at all; last_break is the latest such snapshot, and the run is every snapshot after it.
+-- When the check was not RED on the latest snapshot there is no snapshot after the break, and
+-- red_since is NULL.
+hs_run AS (
+  SELECT check_name,
+         MIN(IF(snapshot_at > COALESCE(last_break, TIMESTAMP '1900-01-01'), snapshot_at, NULL)) AS red_since
+  FROM (SELECT s.snapshot_at, c.check_name,
+               MAX(IF(r.check_name IS NULL, s.snapshot_at, NULL)) OVER (PARTITION BY c.check_name) AS last_break
+        FROM (SELECT DISTINCT snapshot_at FROM hs) s
+        CROSS JOIN (SELECT DISTINCT check_name FROM hs) c
+        LEFT JOIN (SELECT DISTINCT snapshot_at, check_name FROM hs WHERE status = 'RED') r
+          ON r.snapshot_at = s.snapshot_at AND r.check_name = c.check_name)
+  GROUP BY 1
+),
 -- v27.152 SYSTEM. The board, read live and ONCE: one aggregate over V_ENGINE_HEALTH, because a
 -- CTE referenced three times is inlined three times and each copy carries a ceiling-view arm.
 -- pri puts the two alarms first: they are the ones whose detail the line quotes, because they
@@ -570,27 +622,63 @@ seats AS (
 -- plan 2026-10-01, 0 night(s) missing', 'no step has failed its last three runs' — is carried on
 -- EVERY morning, so the healthy line still says what it checked and the plan's date is readable
 -- without opening the board.
+-- v27.163: plan_pass_failed is third (its detail is quoted too, and its first clause — the latest
+-- plan run — joins the healthy line). A RED check is NEW when the history is not empty and either it
+-- was not RED on the latest snapshot (red_since NULL: it turned RED since that snapshot) or its run
+-- started inside the last 24 hours (the brief is read once a day) on a snapshot after the first one.
+-- A run that reaches back to the memory's first snapshot may have begun before it, so it is
+-- standing, "since <that date> or earlier", never new: on the first morning after the memory
+-- starts, the REDs older than the memory are not called new.
 health AS (
   SELECT COUNT(*) AS n_checks,
          COUNTIF(status = 'RED') AS n_red,
          COUNTIF(status = 'RED' AND pri <= 2) AS n_alarm,
-         -- STRING_AGG skips NULLs, so only the RED rows join the list; the ORDER BY still ranks them
-         STRING_AGG(IF(status = 'RED',
-                       IF(pri <= 2, CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name),
-                       NULL), '; ' ORDER BY pri, check_name) AS red_list,
+         COUNTIF(status = 'RED' AND pri = 3) AS n_pass_failed,
+         COUNTIF(status = 'RED' AND is_new) AS n_new,
+         -- STRING_AGG skips NULLs, so only the RED rows join a list; the ORDER BY still ranks them
+         STRING_AGG(IF(status = 'RED', said, NULL), '; ' ORDER BY pri, check_name) AS red_list,
+         STRING_AGG(IF(status = 'RED' AND is_new,
+                       CONCAT('NEW since ',
+                              IF(red_since IS NULL,
+                                 CONCAT('the last snapshot (', FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', last_at, 'America/New_York'), ' New York)'),
+                                 CONCAT(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', red_since, 'America/New_York'), ' New York')),
+                              ': ', said),
+                       NULL), '; ' ORDER BY pri, check_name) AS new_list,
+         STRING_AGG(IF(status = 'RED' AND NOT is_new AND n_snaps > 0,
+                       CONCAT(check_name, ' since ', FORMAT_TIMESTAMP('%Y-%m-%d', red_since, 'America/New_York'),
+                              IF(red_since = first_at, ' or earlier', ''),
+                              IF(pri <= 3, CONCAT(' (', COALESCE(detail, 'no detail'), ')'), '')),
+                       NULL), ', ' ORDER BY pri, check_name) AS standing_list,
          COALESCE(MAX(IF(check_name = 'plan_partition_fresh',  SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
                   'plan_partition_fresh is not on the board') AS plan_clause,
+         COALESCE(MAX(IF(check_name = 'plan_pass_failed',      SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
+                  'plan_pass_failed is not on the board') AS pass_clause,
          COALESCE(MAX(IF(check_name = 'pipeline_step_failing', SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
                   'pipeline_step_failing is not on the board') AS pipe_clause
-  FROM (SELECT check_name, status, detail,
-               CASE check_name WHEN 'pipeline_step_failing' THEN 1
-                               WHEN 'plan_partition_fresh'  THEN 2
-                               ELSE 3 END AS pri
-        FROM `onyga-482313.OI.V_ENGINE_HEALTH`)
+  FROM (SELECT *,
+               IF(pri <= 3, CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name) AS said,
+               (status = 'RED' AND n_snaps > 0
+                AND (red_since IS NULL
+                     OR (red_since > first_at
+                         AND red_since >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)))) AS is_new
+        FROM (SELECT b.check_name, b.status, b.detail, r.red_since, m.n_snaps, m.first_at, m.last_at,
+                     CASE b.check_name WHEN 'pipeline_step_failing' THEN 1
+                                       WHEN 'plan_partition_fresh'  THEN 2
+                                       WHEN 'plan_pass_failed'      THEN 3
+                                       ELSE 4 END AS pri
+              FROM `onyga-482313.OI.V_ENGINE_HEALTH` b
+              LEFT JOIN hs_run r ON r.check_name = b.check_name
+              CROSS JOIN hs_meta m))
 ),
 system_health AS (
   -- an aggregate over zero rows is still one row, so the line exists on a quiet board — and on
   -- an EMPTY board, where it says so instead of saying nothing is wrong
+  -- v27.163: a RED line lists the NEW REDs first ('NEW since <time>: …', each with the time of the
+  -- snapshot its run started on, or 'the last snapshot' when it turned RED after the latest one)
+  -- and the standing ones after ('standing: contradiction_rate since <date>, …'); with no NEW RED it
+  -- says 'nothing NEW in the last 24 hours'. With an empty memory it lists the REDs as v27.152 did
+  -- and says the memory is empty rather than calling every RED new. Every line, green or red, ends
+  -- with the memory's size and span, so a reader can see the snapshots stop.
   SELECT
     'SYSTEM' AS section, 7 AS section_rank,
     'ENGINE HEALTH' AS source,
@@ -598,20 +686,34 @@ system_health AS (
     FORMAT('%d of %d checks RED', h.n_red, h.n_checks) AS item,
     CASE WHEN h.n_checks = 0 THEN 'the board is empty — V_ENGINE_HEALTH returned no rows; read the view by hand before trusting anything above this line'
          WHEN h.n_alarm > 0 THEN 'A NIGHT WAS NOT SAVED — read the failing step\'s error in this line, fix it, and run the step by hand; nothing re-runs it for you, and PLANNED above may be quoting a plan older than it looks'
+         WHEN h.n_pass_failed > 0 THEN 'A PLAN PASS FAILED — read the error quoted in this line and fix its cause; nothing re-runs a failed pass for you'
+         WHEN h.n_new > 0 THEN 'a NEW check is RED — read the one(s) after NEW in this line on V_ENGINE_HEALTH first; each names what it measures and what breaks when it fires'
          WHEN h.n_red > 0 THEN 'read the RED rows on V_ENGINE_HEALTH — each names what it measures and what breaks when it fires'
          ELSE 'nothing to do — no check is RED' END AS action,
     CAST(h.n_red AS FLOAT64) AS from_value,
     0.0 AS to_value,
     CASE WHEN h.n_checks = 0 THEN 'RED' WHEN h.n_red > 0 THEN 'RED' ELSE 'GREEN' END AS status,
     CONCAT('SYSTEM: ', CAST(h.n_red AS STRING), ' check', IF(h.n_red = 1, '', 's'), ' RED',
-           IF(h.n_red > 0,
-              CONCAT(' — ', COALESCE(h.red_list, '(the list could not be built)')),
-              CONCAT(' — every check on the board is green, amber or a report · ',
-                     COALESCE(h.plan_clause, 'no plan clause'), ' · ', COALESCE(h.pipe_clause, 'no pipeline clause'))),
+           CASE WHEN h.n_red = 0 THEN
+                  CONCAT(' — every check on the board is green, amber or a report · ',
+                         COALESCE(h.plan_clause, 'no plan clause'), ' · ', COALESCE(h.pass_clause, 'no plan run clause'),
+                         ' · ', COALESCE(h.pipe_clause, 'no pipeline clause'))
+                WHEN m.n_snaps = 0 THEN
+                  CONCAT(' — ', COALESCE(h.red_list, '(the list could not be built)'))
+                ELSE
+                  CONCAT(' — ', COALESCE(h.new_list, 'nothing NEW in the last 24 hours'),
+                         IF(h.standing_list IS NULL, '', CONCAT(' · standing: ', h.standing_list)))
+           END,
+           ' · ',
+           IF(m.n_snaps = 0,
+              'the board\'s memory (FACT_ENGINE_HEALTH_HISTORY) is empty, so this line cannot tell a new RED from a standing one',
+              FORMAT('the board\'s memory: %d snapshot%s, %s to %s New York', m.n_snaps, IF(m.n_snaps = 1, '', 's'),
+                     FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', m.first_at, 'America/New_York'),
+                     FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', m.last_at, 'America/New_York'))),
            ' · ', CAST(h.n_checks AS STRING), ' checks read live from V_ENGINE_HEALTH',
            '; the board: SELECT check_name, measured, status, threshold, detail FROM V_ENGINE_HEALTH ORDER BY status = \'GREEN\', check_name') AS detail,
     CAST(NULL AS STRING) AS campaign_id, CAST(NULL AS STRING) AS keyword_id
-  FROM health h
+  FROM health h CROSS JOIN hs_meta m
 )
 
 SELECT * FROM planned

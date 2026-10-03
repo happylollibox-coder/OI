@@ -2209,12 +2209,20 @@ check reads RED on an empty partition rather than vacuously green.
 | `plan_proposal_lag_days` | the proposal snapshot's date against the live plan's | INFO, amber > 2 |
 | `plan_partition_fresh` | **ALARM.** The latest plan is older than the later of yesterday and the Los Angeles day the plan step last ran, OK or FAIL. Not "older than today": the pass runs three times a day, so "today" alone would be red between midnight and the first pass every day. Since v27.160 the first pass of a New York night (01:35 New York) writes that night's partition (as_of is the New York date, never earlier than the Los Angeles day of the same build), so every pass that saved its partition meets the Los Angeles due date; the clock itself is unchanged. The detail says the last plan date and the nights missing | red > 0 |
 | `pipeline_step_failing` | **ALARM, GENERIC.** Any procedure whose three most recent runs in the last 30 days all logged FAIL, with the first 120 characters of its latest error and the length of the streak. This is the check that would have named the builder on day 1 of the outage, and the next outage needs no new check | red > 0 |
+| `plan_pass_failed` | **ALARM (v27.163, piece-1 Task 9).** The plan step's latest run (last 30 days) logged FAIL, or any of its runs in the last 24 hours did; RED as well when it logged no run in the last 24 hours. The detail leads with the failure's New York time and the first 160 characters of its error. 3 of 9 passes refused 09-29 → 10-01 with never more than two FAILs in a row and a partition saved every night, so the two alarms above could not name one | red > 0 |
 
 **The surface.** `V_DAILY_BRIEF` carries one SYSTEM line (section_rank 7, appended) that reads
 the board LIVE — never an image, which goes stale exactly when the pipeline that builds it stops —
 and folds its RED rows into one sentence, the two alarms first and quoted with the board's own
 detail. The action says A NIGHT WAS NOT SAVED when either alarm is RED. `DAILY_BRIEF.md` has the
 row shape and the reasons.
+
+**v27.163 (2026-10-03, piece-1 Task 9): the line tells a new RED from an old one.** The board now
+has a memory, `FACT_ENGINE_HEALTH_HISTORY`, written once per pass by `SP_SNAPSHOT_ENGINE_HEALTH`
+(Refresh Task 23, the pass's last step). The SYSTEM line lists the NEW REDs first
+(`NEW since <time>: …`) and the standing ones after (`standing: contradiction_rate since <date>, …`),
+quotes `plan_pass_failed`'s error beside the two alarms, and says A PLAN PASS FAILED when it is RED
+and no night alarm is. Rules and reasons: `DAILY_BRIEF.md` SYSTEM, `ENGINE_HEALTH.md`.
 
 **Deploy and verify.**
 
@@ -2230,6 +2238,34 @@ expression run over doctored temp copies (a healthy step's three most recent run
 must be named, two of three must not; the latest partition dropped must read RED; a release
 nulled and a hold weakened must each count 1) and tied to the deployed view's live reading so the
 twin cannot drift. The measured results of the first run are in the file's header.
+
+**Deploy and verify v27.163 (2026-10-03, piece-1 Task 9)**, in this order: the table, the board (the
+first snapshot must carry plan_pass_failed), the procedure, one hand CALL (the memory's first
+snapshot), the orchestrator (after diffing its deployed body against the file: the only code
+difference must be Refresh Task 23), the brief, then the acceptance. The acceptance reads the brief
+in full (two `V_CHANGE_SCORECARD` arms beside the board's), so it runs longer than a bq call should
+wait: submit it with `--nosync` and poll.
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/tables/FACT_ENGINE_HEALTH_HISTORY.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_SNAPSHOT_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache 'CALL `onyga-482313.OI.SP_SNAPSHOT_ENGINE_HEALTH`()'
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_ORCHESTRATE_DAILY_REFRESH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_DAILY_BRIEF.sql)"
+JOB=$(bq query --nosync --format=none --use_legacy_sql=false --project_id=onyga-482313 --nouse_cache "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql)" 2>&1 | grep -o 'bqjob_[A-Za-z0-9_]*')
+bq wait "$JOB" 60   # repeat until DONE; then read the last child job: bq ls -j --parent_job_id="$JOB"
+```
+
+**Deployed 2026-10-03 (06:29–06:48 UTC)** in that order, with a second hand CALL after the board's
+last deploy. The orchestrator's deployed body differed from the file only by Refresh Task 23
+(comment lines removed on both sides), and equals the stripped file after the deploy. Board: 34
+checks, plan_pass_failed GREEN 0, the same 3 RED. PLAN_HEALTH_acceptance: 42 of 42 PASS (job
+`bqjob_r43c4576878d111d2_000001a1008dc061_1`, 29,439.4 slot-s, 26,479.0 of them the brief read);
+the controls' readings are in the file's header. Each snapshot reads the board once
+(4,535.4 and 3,197.7 slot-s for the two hand CALLs; the board's scorecard arm scans
+`FACT_AMAZON_ADS`).
 
 **What this half does not do.** It does not grade the plan (`V_PLAN_SCORECARD`), does not record
 the rule settings' history (the 1.5× `strong_day_mult` and the 1-order `strong_day_min_orders` in

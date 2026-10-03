@@ -86,6 +86,18 @@
 -- seat_every_occupant_numbered, seat_past_due_in_future_tense), 4402.4 slot-s. V_DAILY_BRIEF's
 -- SYSTEM line counts RED rows only, so this AMBER is on the board, not in the brief.
 -- Controls: HOLDOUT_INTEGRITY_acceptance.sql (31 rows PASS, its header).
+-- v27.163 (2026-10-03, piece-1 plan Task 9, Step 1): c34 plan_pass_failed. RED when the latest run of
+-- SP_BUILD_NEXT_WEEK_PLAN in LOG_PIPELINE_RUNS (last 30 days) logged FAIL, or any run in the last 24
+-- hours did; RED as well when the step logged no run in the last 24 hours (an empty log would read
+-- GREEN). The detail leads with the failure's New York time and the first 160 characters of its
+-- error. WHY: the piece-0 proof found 3 of 9 passes refused 2026-09-29 -> 10-01 (the seat-number
+-- continuity ASSERT). Read 2026-10-03: LOG_PIPELINE_RUNS holds at most two FAILs of the plan step in a
+-- row from 09-29 on, and FACT_PLAN_NEXT_WEEK a partition for every night 09-28 -> 10-03, so neither
+-- plan_partition_fresh (a night with no partition) nor pipeline_step_failing (three FAILs in a row)
+-- could name a single refused pass.
+-- Reads LOG_PIPELINE_RUNS only (no FACT_AMAZON_ADS). V_DAILY_BRIEF quotes its detail on the SYSTEM
+-- line beside the two alarms. Negative controls: PLAN_HEALTH_acceptance.sql A1 (results in its
+-- header). Only the ppr, ppf and c34 CTEs and the final UNION changed.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -736,6 +748,58 @@ c32 AS (  -- ALARM, GENERIC: a step that fails three runs running is a step nobo
                     ' New York'))
 ),
 -- ───────────────────────────────────────────────────────────────────────────────────────────
+-- c34: plan_pass_failed (v27.163, piece-1 plan Task 9, Step 1; header). ppr and ppf read only
+-- LOG_PIPELINE_RUNS; PLAN_HEALTH_acceptance.sql (A1) carries their twin. THE TWO MUST CHANGE TOGETHER.
+-- Placed before c33 on purpose: HOLDOUT_INTEGRITY_acceptance.sql's text-identity command reads c33 up
+-- to the first line ')' after it, which must stay the end of the CTE list.
+-- Declared constants: 24 hours (passes start about 01:00, 03:35 and 12:00 New York — LOG_PIPELINE_RUNS
+-- 10-01..10-03 — so a day holds three and the longest gap between two is about 13 hours) and the
+-- 30-day log window of pr.
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+ppr AS (  -- the plan step's runs in the last 30 days, newest first
+  SELECT status, error_message, started_at,
+         ROW_NUMBER() OVER (ORDER BY started_at DESC) AS rn
+  FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+  WHERE procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN'
+    AND run_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+),
+ppf AS (  -- the runs the check judges: the latest one, and every one in the last 24 hours
+  SELECT COUNTIF(status = 'FAIL' AND (rn = 1 OR started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR))) AS n_fail,
+         COUNTIF(started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)) AS n_24h,
+         COUNTIF(status = 'FAIL' AND started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)) AS n_fail_24h,
+         MAX(IF(rn = 1, status, NULL)) AS latest_status,
+         MAX(IF(rn = 1, started_at, NULL)) AS latest_at,
+         -- the newest judged failure, with its message
+         ARRAY_AGG(IF(status = 'FAIL' AND (rn = 1 OR started_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)),
+                      STRUCT(started_at AS fail_at, error_message AS fail_msg), NULL)
+                   IGNORE NULLS ORDER BY started_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS fail,
+         MAX(IF(status = 'FAIL', started_at, NULL)) AS last_fail_30d
+  FROM ppr
+),
+c34 AS (  -- ALARM: a pass of the plan step failed — the latest run, or any run in the last 24 hours
+  -- plan_partition_fresh needs a whole night missing and pipeline_step_failing three failed runs in a
+  -- row; 3 of 9 passes refused 2026-09-29 -> 10-01, never more than two in a row, and another pass
+  -- saved each night (header). This check is RED on the first read of the board after a refused pass.
+  SELECT 'plan_pass_failed',
+    CAST(n_fail AS FLOAT64),
+    'SP_BUILD_NEXT_WEEK_PLAN runs that logged FAIL — its latest run (last 30 days) and every run in the last 24 hours · red > 0; red when the step logged no run in the last 24 hours (a pass reaches it three times a day)',
+    CASE WHEN n_24h = 0 THEN 'RED' WHEN n_fail > 0 THEN 'RED' ELSE 'GREEN' END,
+    CONCAT(
+      IF(fail.fail_at IS NOT NULL,
+         CONCAT('FAIL ', FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', fail.fail_at, 'America/New_York'), ' New York: ',
+                SUBSTR(COALESCE(fail.fail_msg, '(no message)'), 1, 160), ' · '),
+         ''),
+      IF(n_24h = 0,
+         'no plan run logged in the last 24 hours · ',
+         ''),
+      'latest plan run ', COALESCE(latest_status, 'none'), ' ',
+      COALESCE(CONCAT(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', latest_at, 'America/New_York'), ' New York'), 'in 30 days'),
+      ' · ', CAST(n_fail_24h AS STRING), ' of ', CAST(n_24h AS STRING), ' plan run(s) in the last 24 hours failed',
+      ' · last failure ', COALESCE(CONCAT(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', last_fail_30d, 'America/New_York'), ' New York'), 'none in 30 days'),
+      ' · the step is SP_BUILD_NEXT_WEEK_PLAN (Refresh Task 20.8c); nothing re-runs a failed pass by itself')
+  FROM ppf
+),
+-- ───────────────────────────────────────────────────────────────────────────────────────────
 -- c33: the holdout's integrity (v27.162, piece-1 plan Task 8, R9 = P-23, audit fix #27; header).
 -- hu_asg / hu_led / hu_pre / hu_cens / hu_pre_ro / hu_obs are the six inputs; hu_gap, hu_pre_gap and
 -- c33 read nothing else, so HOLDOUT_INTEGRITY_acceptance.sql runs the hu_gap, hu_pre_gap and c33 text
@@ -849,4 +913,4 @@ UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM 
 UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM c27
 UNION ALL SELECT * FROM c28 UNION ALL SELECT * FROM c29 UNION ALL SELECT * FROM c30
 UNION ALL SELECT * FROM c31 UNION ALL SELECT * FROM c32
-UNION ALL SELECT * FROM c33;
+UNION ALL SELECT * FROM c33 UNION ALL SELECT * FROM c34;
