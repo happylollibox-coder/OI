@@ -2,7 +2,8 @@
 -- V_PLAN_SETTLE_COMPLETION + V_PLAN_WINDOW_JUDGMENT acceptance — v27.135 (2026-08-23); C06
 -- restated 2026-10-02 for P-14c (see C06 below); C12 / C22 restated and G1..G4 added 2026-10-02
 -- for the judge's memory, v27.156 (see the v27.156 block below); C08 / C18 restated and P1..P3
--- added 2026-10-02 for the judge's prices and ranks, v27.157 (see the v27.157 block below).
+-- added 2026-10-02 for the judge's prices and ranks, v27.157 (see the v27.157 block below); C22
+-- restated 2026-10-03 for the GRACE sentence's anchored rule, v27.165 (follow-up F3, see its block below).
 -- v27.160 (2026-10-02, piece-1 plan Task 6, P-24): the NIGHT clocks — C12's grace run, G1's history
 -- and tonight, G3, G4's memory and gap nights — read the New York date, the date the view's
 -- today_plan and FACT_PLAN_NEXT_WEEK.as_of are keyed on from v27.160; C01's fence and C06's settle
@@ -110,7 +111,8 @@
 --       "dollars at stake x closeness to the bar" describe two independent terms; the arithmetic
 --       cancels the spend identically, so the ordering is corrected gross profit alone. The check
 --       pins both halves: the factors exist, and rank_score is exactly their product.
---   C22 the GRACE sentence states whether the one-window limit is armed. It is read from
+--   C22 the GRACE sentence states whether the grace limit is armed (and, from v27.165, the anchored
+--       rule of its own run: see the F3 block). It is read from
 --       FACT_PLAN_NEXT_WEEK; SP_BUILD_NEXT_WEEK_PLAN writes that table nightly, so the flag is
 --       FALSE only for a keyword with no partition EARLIER than today and the sentence must name
 --       THAT condition — v27.138: it went on saying "no builder writes it until Task 2 ships"
@@ -226,6 +228,27 @@
 -- 165,826 / 78,252 / 234,068 for the v27.156 file's direct runs earlier the same day: every CTE
 -- that reads j re-evaluates the view. The controls script reads the view ONCE into a temp table and
 -- ran LIVE and 34 doctored copies for 14,145 slot-seconds; prefer it.
+--
+-- v27.165 (2026-10-03, piece-1 follow-up F3) — C22 RESTATED: a GRACE sentence must carry the anchored
+-- rule of its own run, FORMAT('grace lasts %d nightly judgments (the window length in force when it
+-- was granted, %t) through %t', grace_window_days, grace_since, grace_ends_on); no sentence may say
+-- "ONE quiet window" or "ONE-WINDOW LIMIT"; a NULL sentence on a GRACE row counts; no GRACE row reads
+-- 1 (emptiness). The view's GRACE sentence changed with it (V_PLAN_WINDOW_JUDGMENT v27.165).
+-- MEASURED 2026-10-03 (Los Angeles and New York both 10-03), C22's CTE run alone on two snapshots of
+-- the deployed view, same data (356 rows, 33 GRACE, 13 of them on a 7-night run granted 09-28 under
+-- tonight's 3-day window): the v27.160 view (OI._tmp_f3_judge_old) — restated C22 66 (33 rows without
+-- the anchored rule + 33 saying "ONE quiet window"), the v27.156 form of C22 (this file at b0ecc08) 0;
+-- the v27.165 view (OI._tmp_f3_judge_new) — restated C22 0, v27.156 form 0.
+-- check_judge_memory_controls.py on the deployed v27.165 view, job
+-- bqjob_r4f85b3c63fa8c3e1_000001a101194d2f_1 (09:30:02 - 09:34:22 UTC, 15,213.5 slot-seconds): exit 0,
+-- LIVE 30 checks all 0, all 40 doctored copies as expected. New: NC_C22_ONE_QUIET_WINDOW (row 20's rule
+-- put back to the v27.160 words) 2; NC_C22_WRONG_LENGTH (row 20, a 7-night run, saying 3) 1;
+-- NC_C22_NO_GRACE_ROW (every GRACE verdict made GOOD) 1; NC_EMPTY_JUDGEMENT C22 1;
+-- NC_C22_NO_END_DATE 1. NC_C12_RUN_OVER also read C22 1 (its doctored grace_ends_on no longer matches
+-- the sentence's "through" date); printed, not asserted.
+-- The NULL term, run as C22's CTE alone on a copy of OI._tmp_f3_judge_new with the lowest-keyed GRACE
+-- row's sentence set to NULL: restated C22 1; the v27.156 form 0 (its NOT (...) went NULL and the
+-- COUNTIF dropped the row).
 -- =============================================================================================
 WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 sc AS (SELECT * FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`),
@@ -439,14 +462,26 @@ c21 AS (
                  OR ABS(rank_score - rank_dollars_at_stake * rank_closeness) > 1e-9)
   FROM j
 ),
+-- C22 RESTATED v27.165 (2026-10-03, piece-1 follow-up F3): a GRACE sentence states the anchored rule
+-- with the row's own run — "grace lasts <grace_window_days> nightly judgments (the window length in
+-- force when it was granted, <grace_since>) through <grace_ends_on>" — and no sentence says P-5's "ONE
+-- quiet window" or "ONE-WINDOW LIMIT" (through v27.160 every GRACE row said "ONE quiet window"; on
+-- 2026-10-03, 13 of the 33 beside a run of 7 nights on a 3-day window). COALESCE: a NULL sentence
+-- counts. Emptiness: no GRACE row reads 1.
 c22 AS (
-  SELECT 'C22 the grace sentence names the last night of its run and whether the limit is armed',
+  SELECT 'C22 the grace sentence states the anchored rule, names the last night of its run and whether the limit is armed',
          COUNTIF(verdict = 'GRACE'
-                 AND NOT (REGEXP_CONTAINS(sentence, r'(NOT ARMED TONIGHT|grace is SPENT)')
-                          AND STRPOS(sentence, FORMAT('through %t', grace_ends_on)) > 0))
+                 AND NOT COALESCE(REGEXP_CONTAINS(sentence, r'(NOT ARMED TONIGHT|grace is SPENT)')
+                                  AND STRPOS(sentence, FORMAT(
+                                        'grace lasts %d nightly judgments (the window length in force when it was granted, %t) through %t',
+                                        grace_window_days, grace_since, grace_ends_on)) > 0, FALSE))
        + COUNTIF(REGEXP_CONTAINS(sentence, r'no builder writes'))
        -- the v27.135 wording promised ONE nightly judgment of grace; P-17 retired that reading
        + COUNTIF(REGEXP_CONTAINS(sentence, r'grace is now SPENT'))
+       -- F3: P-5's one-window wording, retired by P-17's anchored run
+       + COUNTIF(REGEXP_CONTAINS(sentence, r'ONE quiet window|ONE-WINDOW LIMIT'))
+       -- emptiness: a judgement with no GRACE row tests none of the above
+       + IF(COUNTIF(verdict = 'GRACE') = 0, 1, 0)
   FROM j
 ),
 c23 AS (

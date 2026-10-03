@@ -653,7 +653,10 @@ Four properties of those arms were repaired in **v27.134** and each is now asser
   `GOOD` night, or a night whose row records `memory_cleared_by_gap`, P-29 below); its length is
   the `window_days` of that first night's row; nights are counted on the date `as_of` is keyed on
   (the New York date since v27.160, P-24; the Los Angeles date before). Every row publishes `grace_since`, `grace_window_days` and
-  `grace_ends_on`, and the GRACE sentence prints "through <last night>". `C12` asserts the arm and
+  `grace_ends_on`, and the GRACE sentence states the anchored rule of the row's own run: "grace lasts
+  N nightly judgments (the window length in force when it was granted, <date>) through <date>"
+  (v27.165, follow-up F3; until then it opened with "keeps the good side for ONE quiet window (P-5)"
+  whatever the run's length — see "The GRACE sentence states the anchored rule" in §3). `C12` asserts the arm and
   that a GRACE row is inside its run; `G1` asserts no run outlasts its window over the whole
   history; `C22` asserts the sentence. (v27.135 to v27.155 granted ONE nightly judgment and
   refused grace while the most recent `GRACE` was later than the most recent `GOOD`.) **The
@@ -2139,6 +2142,60 @@ nothing to the clicks it asks for (P-25); `388620934464557` went from $0.1067 to
   assertion alone on the same snapshot ("an incumbent before its verdict date that is still a
   candidate keeps its seat and its contract, … (P-16)", job `f2_dry__tmp_f2_nc_1791017706`, 381.5
   slot-seconds); every assertion before it passed.
+
+### The GRACE sentence states the anchored rule (v27.165, piece-1 follow-up F3 — P-17)
+
+**The defect.** P-17 anchors a grace run to the night it was granted: it lasts the `window_days` in
+force that night. The judge's GRACE sentence still opened with P-5's words, "A proven winner keeps
+the good side for ONE quiet window (P-5)", and then granted the run's own length. On 2026-10-03
+(window 09-29 … 10-01, BOOST, 3-day window) all 33 GRACE rows said it, 13 of them on a run of 7
+nights granted 2026-09-28 under a 7-day window, through 2026-10-04.
+
+**The rule (V_PLAN_WINDOW_JUDGMENT v27.165).** The sentence states the anchored rule with the row's
+own run: "A proven winner keeps the good side, held, not cut (P-5): grace lasts N nightly judgments
+(the window length in force when it was granted, `grace_since`) through `grace_ends_on` (P-17, Ori
+2026-10-02)." The unarmed branch says "THE GRACE LIMIT IS NOT ARMED TONIGHT" (it said "THE
+ONE-WINDOW LIMIT"). No verdict, side, price or date changes. `SP_BUILD_NEXT_WEEK_PLAN` copies the
+sentence into the plan's rows, so a partition carries the new words from the first build after the
+deploy. The 2026-10-03 partition (built 08:58:26 UTC, before the 09:27 deploy) carries the old words
+on its 33 GRACE rows of each plan; no CALL was run for this fix, so the next orchestrator build is the
+first to write the new ones.
+
+**Check.** Acceptance `C22` is restated: every GRACE sentence carries
+`FORMAT('grace lasts %d nightly judgments (the window length in force when it was granted, %t) through %t', grace_window_days, grace_since, grace_ends_on)`
+and says SPENT-from or NOT ARMED; no sentence says "ONE quiet window" or "ONE-WINDOW LIMIT"; a NULL
+sentence on a GRACE row counts; a judgement with no GRACE row reads 1 (emptiness).
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --submit      # prints JOB=...
+bq wait <JOB> 60                                                           # repeat until DONE
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --collect <JOB>
+```
+
+```sql
+-- GRACE rows, the runs that outlast tonight's window, and any sentence still in P-5's words
+SELECT family, COUNTIF(verdict = 'GRACE') AS grace,
+       COUNTIF(verdict = 'GRACE' AND grace_window_days != window_days) AS run_length_not_tonights_window,
+       COUNTIF(REGEXP_CONTAINS(sentence, r'ONE quiet window|ONE-WINDOW LIMIT')) AS old_words
+FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 1;
+```
+
+Measured 2026-10-03 (Los Angeles and New York both 10-03). The deployed v27.160 view was
+snapshotted at 09:26 UTC (`OI._tmp_f3_judge_old`, 747.8 slot-seconds), the v27.165 view deployed at
+09:27 and snapshotted at 09:28 (`OI._tmp_f3_judge_new`, 666.4 slot-seconds; 128,069,145 bytes each).
+Keyed on campaign × keyword: 356 rows each side; of the 98 columns besides the key, 97 equal on every
+row (floats to 1e-9 relative); `sentence` differs on the 33 GRACE rows only, each the old sentence
+with the rule phrase replaced. The restated `C22` reads 66 on the old snapshot (33 without the
+anchored rule, 33 saying "ONE quiet window") and 0 on the new one; the v27.156 form read 0 on both.
+`check_judge_memory_controls.py` on the deployed view (job
+`bqjob_r4f85b3c63fa8c3e1_000001a101194d2f_1`, 15,213.5 slot-seconds): exit 0, LIVE 30 checks 0, all
+40 doctored copies as expected. The new ones: the rule put back to the v27.160 words `C22` 2; a
+7-night run's sentence saying 3 `C22` 1; every GRACE verdict made GOOD `C22` 1; the empty judgement
+`C22` 1. A GRACE row with a NULL sentence (C22's CTE alone on a copy of the new snapshot) reads 1; the
+v27.156 form read 0 on it.
 
 ### Four checks that depart from the plan's draft, and why
 

@@ -78,6 +78,17 @@ THE COPIES (one script, one scan of the view; each copy is one run of the accept
                              C02 1 (the emptiness term). NC_EMPTY_JUDGEMENT now also expects C02 2
                              (no judgement row; and the population is read over the judgement's own
                              HARVEST families, so an empty judgement has none).
+  v27.165 (piece-1 follow-up F3: C22 restated — a GRACE sentence states the anchored rule of its own
+  run, no sentence says "ONE quiet window" / "ONE-WINDOW LIMIT", and no GRACE row reads 1):
+    NC_C22_ONE_QUIET_WINDOW  the lowest GRACE row's rule put back to the v27.160 wording ("keeps the good
+                             side for ONE quiet window (P-5), held, not cut: grace lasts N nightly
+                             judgments from <date>, the night it was granted, through <date>"): C22 2
+                             (the anchored rule missing, and the retired words present).
+    NC_C22_WRONG_LENGTH      the lowest GRACE row whose run length differs from tonight's window states
+                             tonight's window_days as its length: C22 1 (0 when no such row exists).
+    NC_C22_NO_GRACE_ROW      every GRACE verdict made GOOD: C22 1 (the emptiness term).
+    NC_EMPTY_JUDGEMENT now also expects C22 1, and NC_C22_NO_END_DATE expects 1 on every night (on a
+    night with no GRACE row the emptiness term reads it).
 
 EXIT CODES
     0  LIVE read 0 on every check and every copy read its expected value on its target check
@@ -188,16 +199,33 @@ COPIES = {
     "NC_C12_RUN_OVER": (
         "SELECT * EXCEPT (rn) REPLACE (IF(rn = (SELECT grace_rn FROM pick), DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY), grace_ends_on) AS grace_ends_on) FROM jbase",
         H_LIVE, ("C12", "1_IF_GRACE")),
+    # v27.165 (follow-up F3): C22 has an emptiness term, so a night with no GRACE row reads 1 here too
     "NC_C22_NO_END_DATE": (
         "SELECT * EXCEPT (rn) REPLACE (IF(rn = (SELECT grace_rn FROM pick), REPLACE(sentence, FORMAT('through %t', grace_ends_on), 'through then'), sentence) AS sentence) FROM jbase",
-        H_LIVE, ("C22", "1_IF_GRACE")),
+        H_LIVE, ("C22", 1)),
+    # ---- v27.165 (piece-1 follow-up F3): the GRACE sentence states the anchored rule ----
+    "NC_C22_ONE_QUIET_WINDOW": (
+        j_at("grace_rn", sentence=(
+            "REPLACE(sentence, FORMAT('keeps the good side, held, not cut (P-5): grace lasts %d nightly judgments "
+            "(the window length in force when it was granted, %t) through %t', grace_window_days, grace_since, grace_ends_on), "
+            "FORMAT('keeps the good side for ONE quiet window (P-5), held, not cut: grace lasts %d nightly judgments "
+            "from %t, the night it was granted, through %t', grace_window_days, grace_since, grace_ends_on))")),
+        H_LIVE, ("C22", "2_IF_GRACE")),
+    "NC_C22_WRONG_LENGTH": (
+        j_at("grace7_rn", sentence=(
+            "REPLACE(sentence, FORMAT('grace lasts %d nightly judgments', grace_window_days), "
+            "FORMAT('grace lasts %d nightly judgments', window_days))")),
+        H_LIVE, ("C22", "1_IF_GRACE7")),
+    "NC_C22_NO_GRACE_ROW": (
+        "SELECT * EXCEPT (rn) REPLACE (IF(verdict = 'GRACE', 'GOOD', verdict) AS verdict) FROM jbase",
+        H_LIVE, ("C22", 1)),
     # ---- v27.157 (piece-1 plan Task 3): P-19 / P-20 / P-25 ----
     "NC_P1_RAISED": (j_at("p1_rn", planned_bid="current_bid + 0.05"), H_LIVE, ("P1", 1)),
     "NC_P1_COST_ABOVE_SPEND": (j_at("p1_rn", seat_cost_per_day="w_sp / window_days + 0.01"), H_LIVE, ("P1", 1)),
     "HC_P1_AT_BAR_RAISED": (j_at("p1_bar_rn", planned_bid="current_bid + 0.05"), H_LIVE, ("P1", 0)),
     "NC_P1_LABEL_DISHONEST": (j_at("p1_bar_rn", planned_bid_basis="'P19_HELD_AT_CURRENT'"), H_LIVE, ("P1", "GE1")),
     "NC_P1_SENTENCE_SILENT": (j_at("p19c_rn", sentence="REPLACE(sentence, '(P-19, Ori 2026-10-02)', '')"), H_LIVE, ("P1", 1)),
-    "NC_EMPTY_JUDGEMENT": (f"{J_LIVE} WHERE FALSE", H_LIVE, [("P1", 1), ("P2", 1), ("P3", 1), ("C02", 2)]),
+    "NC_EMPTY_JUDGEMENT": (f"{J_LIVE} WHERE FALSE", H_LIVE, [("P1", 1), ("P2", 1), ("P3", 1), ("C02", 2), ("C22", 1)]),
     "NC_P2_SWAPPED": (
         "SELECT * EXCEPT (rn) REPLACE ("
         "CASE WHEN rn = (SELECT a_rn FROM p2pair) THEN (SELECT b_rmb FROM p2pair) "
@@ -238,6 +266,8 @@ def build_script(judge_source):
         "CREATE TEMP TABLE pick AS SELECT "
         "(SELECT MIN(rn) FROM jbase WHERE served AND NOT holdout) AS held_rn, "
         "(SELECT MIN(rn) FROM jbase WHERE verdict = 'GRACE') AS grace_rn, "
+        # v27.165 (F3): a GRACE row whose run length is not tonight's window length
+        "(SELECT MIN(rn) FROM jbase WHERE verdict = 'GRACE' AND grace_window_days != window_days) AS grace7_rn, "
         "(SELECT MIN(rn) FROM jbase WHERE memory_cleared_by_gap IN ('GRACE', 'GRACE_AND_HOLD')) AS cleared_rn, "
         # v27.157: the rows Task 3's controls doctor
         "(SELECT MIN(rn) FROM jbase WHERE side_b = 'NOT_GOOD' AND NOT is_probe AND COALESCE(ret_corrected, 0) < family_bar "
@@ -285,6 +315,7 @@ def build_script(judge_source):
         "CREATE TEMP TABLE res (copy STRING, check_name STRING, violations INT64, detail STRING);",
         "INSERT INTO res SELECT 'PICK', 'PICK', 0, TO_JSON_STRING(STRUCT("
         "(SELECT held_rn FROM pick) AS held_rn, (SELECT grace_rn FROM pick) AS grace_rn, "
+        "(SELECT grace7_rn FROM pick) AS grace7_rn, "
         "(SELECT cleared_rn FROM pick) AS cleared_rn, (SELECT k FROM g4key) AS g4key, "
         "(SELECT p1_rn FROM pick) AS p1_rn, (SELECT p1_bar_rn FROM pick) AS p1_bar_rn, "
         "(SELECT p19c_rn FROM pick) AS p19c_rn, (SELECT p3_rn FROM pick) AS p3_rn, "
@@ -384,6 +415,11 @@ def collect(job):
                 want = 1 if pick.get("cleared_rn") else 0
             if want == "1_IF_GRACE":
                 want = 1 if pick.get("grace_rn") else 0
+            # v27.165 (F3): with no GRACE row, C22's emptiness term reads 1 on every copy
+            if want == "2_IF_GRACE":
+                want = 2 if pick.get("grace_rn") else 1
+            if want == "1_IF_GRACE7":
+                want = 1 if (pick.get("grace7_rn") or not pick.get("grace_rn")) else 0
             if want == "1_IF_SUBFLOOR":
                 want = 1 if pick.get("sub_rn") else 0
             if want == "C02_CAMPAIGN_ROWS":

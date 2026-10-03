@@ -505,7 +505,7 @@ each with its own check and negative control.
   current_bid` on tonight's window (probes: `click_goal_day × probe price`), so the direction clause
   ("A RAISE / a cut / no change") and `expected_after_upload` / `share_closed` read tonight's money.
   Measured on 2026-10-03: 30 incumbent rows said "A RAISE" while their price was held or cut ($15.24/day).
-- [ ] **F3 GRACE sentence.** State the anchored rule: "grace lasts N nightly judgments (the window length
+- [x] **F3 GRACE sentence.** State the anchored rule: "grace lasts N nightly judgments (the window length
   in force when it was granted, <date>) through <date>" — not "ONE quiet window (P-5)" while granting 7
   nights on a 3-day window.
 - [ ] **F4 the scorecard's clock.** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` date nights on the New York
