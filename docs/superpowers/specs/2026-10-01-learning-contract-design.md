@@ -212,7 +212,13 @@ that has no grade yet, it:
 2. decides which scenario applied from the observed-change record: `ACT` if an observed change on the
    keyword/campaign within 3 days after `as_of` matched the proposed move within tolerance (bid
    ± $0.005, budget ± $0.01, state exact), else `DO_NOTHING`; a change that matched neither is
-   `OTHER_ACTION` and the row is graded on neither scenario (reported);
+   `OTHER_ACTION` and the row is graded on neither scenario (reported).
+   *Corrected 2026-10-04 (Task-5 review; ruled, §14.1): the window is the prediction's own clock,
+   not the dates after `as_of`. Only changes applied at or after `built_at` are read; one matches a
+   component when applied before the Los Angeles midnight that starts `horizon_from +
+   MATCH_WINDOW_DAYS` (never past `horizon_to`); "nothing else changed" and `DO_NOTHING` read every
+   change from `built_at` to the end of `horizon_to` (an SB keyword's own changes one day longer, for
+   the sync lag). `architecture/LEARNING.md` §4 step 4;*
 3. buckets the keyword-week by realised clicks: `0, 1–5, 6–10, 11–20, 21–40, 41–80, 81+`.
    *Corrected 2026-10-03 (§14 D4): the `0` bucket is new — more than half the August plan rows
    realised no click (§14 E6); a row there is always `INCONCLUSIVE` and is counted as "predicted
@@ -454,6 +460,20 @@ argument against a cap holds only for a cap on campaigns the plan does not cut, 
 runs. The clause scales every `ACT` number of a cut campaign, so it reaches the brief's "upload the
 plan $Y" line and the report card's `pred_lift`. Piece-2 Task 4 built the recommended form under
 Ori's "all recommended" (`architecture/LEARNING.md` §3, §10 "Task 4").
+
+**The applied scenario's clock (raised 2026-10-04 by the Task-5 review) — ruled: the recommended
+form.** §7 step 2 read changes "within 3 days after `as_of`", which piece-2 Task 5 built as the Los
+Angeles dates `as_of … as_of + 3`. That window is not the prediction's (`built_at … horizon_to`): it
+read changes made before the plan existed (on the six August nights, 64 of the 163 `OTHER_ACTION`
+plan rows per plan had every change applied before `built_at`, and on 60 of them every change's new
+bid or budget already equalled the row's current one), it missed a change made between a New
+York-keyed build and Los Angeles midnight (dated `as_of − 1`), and its "nothing else changed" test
+left four days of a 7-day horizon unread. Recommended, and built under Ori's "all recommended"
+(`SP_GRADE_PREDICTIONS` v27.174): a change matches a component when applied at or after `built_at`
+and before the Los Angeles midnight that starts `horizon_from + MATCH_WINDOW_DAYS`; the other-change
+scan reads from `built_at` to the end of `horizon_to`, an SB keyword's own changes one day longer. The
+August grades were re-graded under it (`regrade_seq` 1): 64 rows per plan moved from `OTHER_ACTION` to
+`DO_NOTHING` (`architecture/LEARNING.md` §4, §10 "Task 5 follow-up").
 
 The brief's corrections that are not a ruling, made in place above: `UNGRADABLE` means an archived
 keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG` are defined (§7);

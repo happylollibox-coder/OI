@@ -1,13 +1,14 @@
 -- =============================================================================================
 -- PREDICTION_GRADE acceptance — 2026-10-03, learning-contract piece 2, Task 5: the grader
--- (SP_GRADE_PREDICTIONS v27.173), its grades (FACT_PREDICTION_GRADE) and its report card
+-- (SP_GRADE_PREDICTIONS v27.173; v27.174 and V9 since the Task 5 follow-up, 2026-10-04), its grades
+-- (FACT_PREDICTION_GRADE) and its report card
 -- (T_PREDICTION_SCORECARD), checked against independent recomputes. EVERY ASSERTED ROW MUST READ
 -- PASS; the V2g row is a REPORT. Run it right after a grader run (V1 reads the house watermark now).
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --nosync "$(grep -v '^[[:space:]]*--' FILE)"
 --   bq wait JOB 60; then bq ls -j --parent_job_id=JOB and bq head the last child (the final SELECT).
 -- Reads FACT_PREDICTION_GRADE, T_PREDICTION_SCORECARD, V_PREDICTION_LEDGER, FACT_AMAZON_ADS (the
--- graded horizons), DIM_KEYWORD, DIM_CAMPAIGN, DE_COACH_THRESHOLDS; writes only this script's TEMP
--- tables. Piece-2 Task 7's contract suite (PREDICTION_CONTRACT_acceptance.sql) is the spec §11 suite;
+-- graded horizons), DIM_KEYWORD, DIM_CAMPAIGN, DE_COACH_THRESHOLDS, V_PPC_CHANGE_LOG_LANDED (V9);
+-- writes only this script's TEMP tables. Piece-2 Task 7's contract suite (PREDICTION_CONTRACT_acceptance.sql) is the spec §11 suite;
 -- this file is the grader's own.
 -- Spec: docs/superpowers/specs/2026-10-01-learning-contract-design.md §7, §11.
 -- Plan: docs/superpowers/plans/2026-10-03-learning-piece2-ledger-grader.md Task 5.
@@ -37,6 +38,13 @@
 --   V8 the report card reads back from the grades: every SINCE_START CURVE row (predictor x family
 --      x state x bucket) and ACCURACY APPLIED row (predictor x family, 'ALL' included) equals a
 --      recompute from the grade rows (floats within 1e-6); +1 when the card has no such row
+--   V9 the applied scenario and both change-id lists equal an independent recompute from
+--      V_PPC_CHANGE_LOG_LANDED (not LOGGED_ONLY) on the prediction's own clock: only changes applied
+--      at or after built_at; the keyword's own and its campaign's state / budget changes read until
+--      the Los Angeles midnight that ends horizon_to (an SB keyword's own: one day later); a change
+--      matches a component only before the midnight that starts horizon_from + MATCH_WINDOW_DAYS
+--      (never past horizon_to); ACT / DO_NOTHING / OTHER_ACTION as architecture/LEARNING.md §4;
+--      +1 when empty
 --
 -- THE NEGATIVE CONTROLS. Each check runs once over labelled TEMP copies: LIVE and doctored copies of
 -- the grade rows (and, for V8, of the card). A control row reads PASS when its copy FIRED; its
@@ -53,6 +61,21 @@
 --                          day on (the archive record copy only)    -> V7
 --   NC_V8_CURVE            one card CURVE bucket_spend + 1           -> V8
 --   NC_V8_ACC              one card ACCURACY mae_net_share + 0.01    -> V8
+-- V9's controls act on two picks (v9_pick: the first plan key in key order, every predictor's rows of
+-- it, that applied as DO_NOTHING on an SP keyword with no change read, and that the injected change
+-- cannot reach through any other graded night of the keyword; DAY5 also needs no real change on the
+-- keyword or its campaign from built_at to horizon_from + 8). Each injects one change into its own copy
+-- of the change record. A PC_ copy must read 0, an NC_ copy must fire:
+--   PC_V9_PREBUILD  the bid the row already had (current_bid), set one hour before built_at; the row
+--                   keeps its DO_NOTHING label                                   -> V9 reads 0
+--   NC_V9_PREBUILD  the same change, the row labelled OTHER_ACTION for it (the v27.173 reading)
+--                                                                                -> V9 fires
+--   PC_V9_DAY5      the row's horizon stretched to 7 days (horizon_to = horizon_from + 6), a bid 0.37
+--                   above current_bid set at noon Los Angeles on day 5; the row labelled
+--                   OTHER_ACTION with that change in other_change_ids            -> V9 reads 0
+--   NC_V9_DAY5      the same stretch and change, the row left DO_NOTHING (the v27.173 reading, which
+--                   read Los Angeles dates as_of .. as_of + 3 only)              -> V9 fires
+-- A pick that finds no row leaves its copy equal to LIVE, so its NC reads 0 and FAILS (loud).
 --
 -- RUN LOG — each entry dated.
 -- RUN 2026-10-03 20:51:49 UTC (Task 5; SP_GRADE_PREDICTIONS v27.173 deployed 20:41:50 UTC, first
@@ -66,6 +89,26 @@
 --   139.8 slot-seconds, 159,024,712 bytes, 49 s. Every label on this run is INCONCLUSIVE (no line
 --   at the 0.80 bar), so V4's RIGHT / WRONG arms were exercised on a copy with the bar at 0.30
 --   (architecture/LEARNING.md §10 "Task 5": V1..V7 0 there, 1,428 RIGHT and 2,078 WRONG rows).
+-- RUNS 2026-10-03 21:29-21:34 UTC (Task 5 follow-up; SP_GRADE_PREDICTIONS v27.174 deployed 21:29:52
+--   UTC, V9 added), each as written (33 rows):
+--   * before the re-grade, the v27.173 grades current (t5f_acc_pre_1791063005, 195.3 slot-seconds):
+--     V1..V8 and every V1..V8 control as before; V9 LIVE FAIL 368 = 92 plan rows per plan x 2 plans x
+--     2 scenarios (64 labelled OTHER_ACTION only for changes made before built_at, 28 OTHER_ACTION rows
+--     whose id lists held 31 such changes); V9a 1, V9c 372, V9e 372; PC_V9_PREBUILD and PC_V9_DAY5 368
+--     each (LIVE's 368, nothing added).
+--   * after CALL SP_GRADE_PREDICTIONS(DATE '2026-08-23', reason) appended the v27.174 re-grade
+--     (t5f_acc_post_1791063180, 201.8 slot-seconds, 192,112,052 bytes): every asserted row PASS.
+--     LIVE V1..V9 0 (V1's gradable population 8,944); V2g REPORT 0. Controls, each FIRED: NC_EMPTY V1
+--     8944, V2..V9 1 each; NC_V1_MISSING 1; NC_V2_REAL 1; NC_V3_FROZEN 1; NC_V4_LABEL 1; NC_V5_SIDE 1;
+--     NC_V6_APPLIED 1; NC_V7_FALSE_UNGRADABLE 1; NC_V7_MISSED_ARCHIVE 24; NC_V8_CURVE 1; NC_V8_ACC 1;
+--     NC_V9_PREBUILD 4; NC_V9_DAY5 4 (one plan key x 2 plans x 2 scenarios). PC_V9_PREBUILD 0,
+--     PC_V9_DAY5 0. Picks: PREBUILD 2026-08-23 keyword 108301382467865 (change at 04:34:19 UTC on
+--     08-24, built_at 05:34:19 UTC); DAY5 2026-08-25 keyword 236377827196202 (noon Los Angeles on
+--     08-30, horizon 08-26 .. 09-01 on the copy).
+--   * on the procedure-copy fixtures (architecture/LEARNING.md §10 "Task 5 follow-up"): v27.174's
+--     grades every asserted row PASS (t5fx_acc_new_1791062874, 85.0 slot-seconds); v27.173's grades
+--     of the same inputs V9 LIVE FAIL 388 (t5fx_acc_old_1791062874): the 368 above and the 20 rows
+--     of the five fixtures the two rules label differently.
 -- =============================================================================================
 
 CREATE TEMP TABLE cur AS
@@ -95,33 +138,106 @@ SELECT 'GRADED_KW', predictor, variant, as_of, campaign_id, keyword_id, scenario
 WHERE grade <> 'UNGRADABLE' AND scenario = 'DO_NOTHING'
 QUALIFY ROW_NUMBER() OVER (ORDER BY as_of, predictor DESC, campaign_id DESC, keyword_id DESC) = 1;
 
+-- V9's settings and its two picks (one plan key each, every predictor's rows of it): a DO_NOTHING SP row
+-- with no change read, on which a change can be injected without reaching any other graded row of the
+-- keyword (PREBUILD: one hour before built_at; DAY5: noon Los Angeles on day 5 of the row's horizon
+-- stretched to 7 days, which must also hold no real change on the keyword or its campaign)
+CREATE TEMP TABLE st AS
+SELECT MAX(IF(threshold_key = 'MATCH_WINDOW_DAYS', CAST(threshold_value AS INT64), NULL)) AS match_days,
+       MAX(IF(threshold_key = 'MATCH_BID_TOL', threshold_value, NULL))                    AS bid_tol,
+       MAX(IF(threshold_key = 'MATCH_BUDGET_TOL', threshold_value, NULL))                 AS budget_tol
+FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+WHERE strategy_id = 'LEARNING' AND coach_mode = 'GUARDIAN' AND product_family IS NULL
+  AND threshold_key IN ('MATCH_WINDOW_DAYS', 'MATCH_BID_TOL', 'MATCH_BUDGET_TOL');
+
+CREATE TEMP TABLE chg_real AS
+SELECT change_id, action, keyword_id, campaign_id, new_bid, new_budget, applied_at
+FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+WHERE landed_evidence <> 'LOGGED_ONLY'
+  AND applied_at >= (SELECT MIN(built_at) FROM cur)
+  AND applied_at <  TIMESTAMP(DATE_ADD((SELECT MAX(horizon_to) FROM cur), INTERVAL 9 DAY), 'America/Los_Angeles');
+
+CREATE TEMP TABLE v9_pick AS
+WITH cand AS (
+  SELECT c.predictor, c.as_of, c.campaign_id, c.keyword_id, c.built_at, c.horizon_from, c.current_bid,
+         what,
+         IF(what = 'PREBUILD', TIMESTAMP_SUB(c.built_at, INTERVAL 1 HOUR),
+            TIMESTAMP(DATETIME(DATE_ADD(c.horizon_from, INTERVAL 4 DAY), TIME '12:00:00'), 'America/Los_Angeles')) AS ts
+  FROM cur c CROSS JOIN UNNEST(['PREBUILD', 'DAY5']) AS what
+  WHERE c.scenario = 'DO_NOTHING' AND c.applied_scenario = 'DO_NOTHING' AND c.channel = 'SP'
+    AND c.grade <> 'UNGRADABLE' AND c.predictor <> 'FIXTURE'
+    AND ARRAY_LENGTH(c.matched_change_ids) = 0 AND ARRAY_LENGTH(c.other_change_ids) = 0
+),
+ok AS (
+  SELECT x.* FROM cand x
+  WHERE NOT EXISTS (SELECT 1 FROM cur o
+                    WHERE o.keyword_id = x.keyword_id AND o.as_of <> x.as_of
+                      AND x.ts >= o.built_at AND x.ts < TIMESTAMP(DATE_ADD(o.horizon_to, INTERVAL 2 DAY), 'America/Los_Angeles'))
+    AND (x.what = 'PREBUILD' OR NOT EXISTS (
+          SELECT 1 FROM chg_real r
+          WHERE (r.keyword_id = x.keyword_id OR (r.keyword_id IS NULL AND r.campaign_id = x.campaign_id))
+            AND r.applied_at >= x.built_at
+            AND r.applied_at < TIMESTAMP(DATE_ADD(x.horizon_from, INTERVAL 8 DAY), 'America/Los_Angeles')))
+)
+SELECT what, as_of, campaign_id, keyword_id, ts, current_bid
+FROM ok
+QUALIFY ROW_NUMBER() OVER (PARTITION BY what ORDER BY as_of, keyword_id, predictor) = 1;
+
 CREATE TEMP TABLE cur_f AS
 SELECT c.*,
        EXISTS (SELECT 1 FROM pick p WHERE p.what = 'ANY' AND p.predictor = c.predictor AND p.as_of = c.as_of
                AND p.campaign_id = c.campaign_id AND p.keyword_id = c.keyword_id AND p.scenario = c.scenario) AS f_any,
        EXISTS (SELECT 1 FROM pick p WHERE p.what = 'INCONCL' AND p.predictor = c.predictor AND p.as_of = c.as_of
-               AND p.campaign_id = c.campaign_id AND p.keyword_id = c.keyword_id AND p.scenario = c.scenario) AS f_inc
+               AND p.campaign_id = c.campaign_id AND p.keyword_id = c.keyword_id AND p.scenario = c.scenario) AS f_inc,
+       EXISTS (SELECT 1 FROM v9_pick p WHERE p.what = 'PREBUILD' AND p.as_of = c.as_of
+               AND p.campaign_id = c.campaign_id AND p.keyword_id = c.keyword_id) AS f_pre,
+       EXISTS (SELECT 1 FROM v9_pick p WHERE p.what = 'DAY5' AND p.as_of = c.as_of
+               AND p.campaign_id = c.campaign_id AND p.keyword_id = c.keyword_id) AS f_d5
 FROM cur c;
 
 CREATE TEMP TABLE g AS
-SELECT 'LIVE' AS copy, c.* EXCEPT (f_any, f_inc) FROM cur_f c
-UNION ALL SELECT 'NC_V1_MISSING', c.* EXCEPT (f_any, f_inc) FROM cur_f c WHERE NOT c.f_any
-UNION ALL SELECT 'NC_V2_REAL', c.* EXCEPT (f_any, f_inc) REPLACE (IF(c.f_any, c.real_spend + 1.0, c.real_spend) AS real_spend) FROM cur_f c
-UNION ALL SELECT 'NC_V3_FROZEN', c.* EXCEPT (f_any, f_inc) REPLACE (IF(c.f_any, c.pred_net + 0.01, c.pred_net) AS pred_net) FROM cur_f c
-UNION ALL SELECT 'NC_V4_LABEL', c.* EXCEPT (f_any, f_inc) REPLACE (IF(c.f_inc, 'RIGHT', c.grade) AS grade) FROM cur_f c
-UNION ALL SELECT 'NC_V5_SIDE', c.* EXCEPT (f_any, f_inc) REPLACE (IF(c.f_any, 1 - c.real_side, c.real_side) AS real_side) FROM cur_f c
-UNION ALL SELECT 'NC_V6_APPLIED', c.* EXCEPT (f_any, f_inc) REPLACE (IF(c.f_any, NOT c.is_applied, c.is_applied) AS is_applied) FROM cur_f c
-UNION ALL SELECT 'NC_V7_FALSE_UNGRADABLE', c.* EXCEPT (f_any, f_inc) REPLACE (
+SELECT 'LIVE' AS copy, c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c
+UNION ALL SELECT 'NC_V1_MISSING', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c WHERE NOT c.f_any
+UNION ALL SELECT 'NC_V2_REAL', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (IF(c.f_any, c.real_spend + 1.0, c.real_spend) AS real_spend) FROM cur_f c
+UNION ALL SELECT 'NC_V3_FROZEN', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (IF(c.f_any, c.pred_net + 0.01, c.pred_net) AS pred_net) FROM cur_f c
+UNION ALL SELECT 'NC_V4_LABEL', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (IF(c.f_inc, 'RIGHT', c.grade) AS grade) FROM cur_f c
+UNION ALL SELECT 'NC_V5_SIDE', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (IF(c.f_any, 1 - c.real_side, c.real_side) AS real_side) FROM cur_f c
+UNION ALL SELECT 'NC_V6_APPLIED', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (IF(c.f_any, NOT c.is_applied, c.is_applied) AS is_applied) FROM cur_f c
+UNION ALL SELECT 'NC_V7_FALSE_UNGRADABLE', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (
             IF(c.f_any, 'UNGRADABLE', c.grade) AS grade, IF(c.f_any, 'KEYWORD_ARCHIVED', c.ungradable_reason) AS ungradable_reason) FROM cur_f c
-UNION ALL SELECT 'NC_V7_MISSED_ARCHIVE', c.* EXCEPT (f_any, f_inc) FROM cur_f c
-UNION ALL SELECT 'NC_V8_CURVE', c.* EXCEPT (f_any, f_inc) FROM cur_f c
-UNION ALL SELECT 'NC_V8_ACC', c.* EXCEPT (f_any, f_inc) FROM cur_f c;
+UNION ALL SELECT 'NC_V7_MISSED_ARCHIVE', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c
+UNION ALL SELECT 'NC_V8_CURVE', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c
+UNION ALL SELECT 'NC_V8_ACC', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c
+-- V9: PC_ copies must read 0, NC_ copies must fire; the change each injects is in chg (below)
+UNION ALL SELECT 'PC_V9_PREBUILD', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) FROM cur_f c
+UNION ALL SELECT 'NC_V9_PREBUILD', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (
+            IF(c.f_pre, 'OTHER_ACTION', c.applied_scenario) AS applied_scenario, IF(c.f_pre, FALSE, c.is_applied) AS is_applied,
+            IF(c.f_pre, ['acc|V9|NC_V9_PREBUILD'], c.other_change_ids) AS other_change_ids) FROM cur_f c
+UNION ALL SELECT 'PC_V9_DAY5', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (
+            IF(c.f_d5, DATE_ADD(c.horizon_from, INTERVAL 6 DAY), c.horizon_to) AS horizon_to,
+            IF(c.f_d5, 'OTHER_ACTION', c.applied_scenario) AS applied_scenario, IF(c.f_d5, FALSE, c.is_applied) AS is_applied,
+            IF(c.f_d5, ['acc|V9|PC_V9_DAY5'], c.other_change_ids) AS other_change_ids) FROM cur_f c
+UNION ALL SELECT 'NC_V9_DAY5', c.* EXCEPT (f_any, f_inc, f_pre, f_d5) REPLACE (
+            IF(c.f_d5, DATE_ADD(c.horizon_from, INTERVAL 6 DAY), c.horizon_to) AS horizon_to) FROM cur_f c;
 -- NC_EMPTY has no grade row.
 
 CREATE TEMP TABLE copies AS
 SELECT copy FROM UNNEST(['LIVE', 'NC_EMPTY', 'NC_V1_MISSING', 'NC_V2_REAL', 'NC_V3_FROZEN', 'NC_V4_LABEL',
                          'NC_V5_SIDE', 'NC_V6_APPLIED', 'NC_V7_FALSE_UNGRADABLE', 'NC_V7_MISSED_ARCHIVE',
-                         'NC_V8_CURVE', 'NC_V8_ACC']) AS copy;
+                         'NC_V8_CURVE', 'NC_V8_ACC', 'PC_V9_PREBUILD', 'NC_V9_PREBUILD', 'PC_V9_DAY5',
+                         'NC_V9_DAY5']) AS copy;
+
+-- V9's change record: every landed change that can bear on a graded row, for every copy, plus the one
+-- change each V9 copy injects (PREBUILD: the bid the row already had, an hour before built_at; DAY5: a
+-- bid 0.37 above it, at noon Los Angeles on day 5)
+CREATE TEMP TABLE chg AS
+SELECT CAST(NULL AS STRING) AS only_copy, r.* FROM chg_real r
+UNION ALL
+SELECT copy, 'acc|V9|' || copy, 'REDUCE_BID', p.keyword_id, p.campaign_id,
+       IF(p.what = 'PREBUILD', p.current_bid, p.current_bid + 0.37), CAST(NULL AS FLOAT64), p.ts
+FROM v9_pick p
+JOIN UNNEST(['PC_V9_PREBUILD', 'NC_V9_PREBUILD', 'PC_V9_DAY5', 'NC_V9_DAY5']) AS copy
+  ON ENDS_WITH(copy, p.what);
 
 -- V2's independent outcome: FACT_AMAZON_ADS over each graded row's horizon
 CREATE TEMP TABLE real AS
@@ -316,6 +432,74 @@ v8_rows AS (   -- every recomputed row has its card row, equal (floats within 1e
    AND c.calendar_state = r.calendar_state AND c.bucket IS NOT DISTINCT FROM r.bucket
   GROUP BY r.copy
 ),
+v9_prow AS (   -- one row per plan row of each copy, the columns the applied scenario is decided on
+  SELECT copy, predictor, variant, as_of, campaign_id, keyword_id,
+         MAX(channel) AS channel, MAX(built_at) AS built_at, MAX(horizon_from) AS horizon_from, MAX(horizon_to) AS horizon_to,
+         MAX(IF(scenario = 'ACT', move, NULL)) AS move, MAX(current_bid) AS current_bid, MAX(planned_bid) AS planned_bid,
+         MAX(campaign_current_budget) AS ccb, MAX(campaign_planned_budget) AS cpb
+  FROM g GROUP BY 1, 2, 3, 4, 5, 6
+),
+v9_comp AS (
+  SELECT p.*,
+         COALESCE(ABS(p.planned_bid - p.current_bid) >= st.bid_tol, FALSE) AS has_bid,
+         COALESCE(p.move = 'PAUSE', FALSE)                                  AS has_state,
+         COALESCE(ABS(p.cpb - p.ccb) >= st.budget_tol, FALSE)              AS has_budget,
+         LEAST(TIMESTAMP(DATE_ADD(p.horizon_from, INTERVAL st.match_days DAY), 'America/Los_Angeles'),
+               TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles')) AS match_end,
+         st.bid_tol, st.budget_tol
+  FROM v9_prow p CROSS JOIN st
+),
+v9_hit AS (    -- the changes read: from built_at to the end of horizon_to (an SB keyword's own: one day more)
+  SELECT c.copy, c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id, x.change_id,
+         CASE WHEN x.applied_at >= c.match_end THEN NULL
+              WHEN c.has_bid AND x.new_bid IS NOT NULL AND ABS(x.new_bid - c.planned_bid) <= c.bid_tol + 1e-9 THEN 'BID'
+              WHEN c.has_state AND x.action IN ('KEYWORD_PAUSE', 'STOP_TARGET') THEN 'STATE' END AS matched
+  FROM v9_comp c
+  JOIN chg x
+    ON x.keyword_id = c.keyword_id AND (x.only_copy IS NULL OR x.only_copy = c.copy)
+   AND x.applied_at >= c.built_at
+   AND x.applied_at < TIMESTAMP(DATE_ADD(c.horizon_to, INTERVAL IF(c.channel = 'SB', 2, 1) DAY), 'America/Los_Angeles')
+  UNION ALL
+  SELECT c.copy, c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id, x.change_id,
+         CASE WHEN x.applied_at >= c.match_end THEN NULL
+              WHEN c.has_budget AND x.action LIKE '%BUDGET%' AND x.new_budget IS NOT NULL
+                   AND ABS(x.new_budget - c.cpb) <= c.budget_tol + 1e-9 THEN 'BUDGET' END
+  FROM v9_comp c
+  JOIN chg x
+    ON x.campaign_id = c.campaign_id AND x.keyword_id IS NULL AND (x.only_copy IS NULL OR x.only_copy = c.copy)
+   AND (x.action LIKE '%BUDGET%' OR STARTS_WITH(x.action, 'CAMPAIGN_'))
+   AND x.applied_at >= c.built_at
+   AND x.applied_at < TIMESTAMP(DATE_ADD(c.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles')
+),
+v9_exp AS (    -- the applied scenario and the two id lists the rule gives
+  SELECT c.copy, c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id,
+         CASE WHEN (c.has_bid OR c.has_state OR c.has_budget)
+                   AND (NOT c.has_bid OR COALESCE(LOGICAL_OR(h.matched = 'BID'), FALSE))
+                   AND (NOT c.has_state OR COALESCE(LOGICAL_OR(h.matched = 'STATE'), FALSE))
+                   AND (NOT c.has_budget OR COALESCE(LOGICAL_OR(h.matched = 'BUDGET'), FALSE))
+                   AND COUNTIF(h.change_id IS NOT NULL AND h.matched IS NULL) = 0 THEN 'ACT'
+              WHEN COUNT(h.change_id) = 0 THEN 'DO_NOTHING'
+              ELSE 'OTHER_ACTION' END AS exp_applied,
+         COALESCE(STRING_AGG(IF(h.matched IS NOT NULL, h.change_id, NULL), ',' ORDER BY h.change_id), '') AS exp_matched,
+         COALESCE(STRING_AGG(IF(h.change_id IS NOT NULL AND h.matched IS NULL, h.change_id, NULL), ',' ORDER BY h.change_id), '') AS exp_other
+  FROM v9_comp c
+  LEFT JOIN v9_hit h
+    ON h.copy = c.copy AND h.predictor = c.predictor AND h.variant = c.variant AND h.as_of = c.as_of
+   AND h.campaign_id = c.campaign_id AND h.keyword_id = c.keyword_id
+  GROUP BY c.copy, c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id,
+           c.has_bid, c.has_state, c.has_budget
+),
+v9_rows AS (   -- every grade row carries the applied scenario and the change ids its plan row's rule gives
+  SELECT g.copy,
+         COUNTIF(e.copy IS NULL OR g.applied_scenario IS DISTINCT FROM e.exp_applied
+                 OR ARRAY_TO_STRING(g.matched_change_ids, ',') IS DISTINCT FROM e.exp_matched
+                 OR ARRAY_TO_STRING(g.other_change_ids, ',') IS DISTINCT FROM e.exp_other) AS n
+  FROM g
+  LEFT JOIN v9_exp e
+    ON e.copy = g.copy AND e.predictor = g.predictor AND e.variant = g.variant AND e.as_of = g.as_of
+   AND e.campaign_id = g.campaign_id AND e.keyword_id = g.keyword_id
+  GROUP BY g.copy
+),
 card_n AS (SELECT copy, COUNT(*) AS n FROM card_c GROUP BY copy),
 pop AS (SELECT x.copy, COUNT(g.copy) AS n FROM copies x LEFT JOIN g ON g.copy = x.copy GROUP BY x.copy),
 f AS (
@@ -327,6 +511,7 @@ f AS (
   UNION ALL SELECT p.copy, 'V5', COALESCE(v.n, 0) + IF(p.n = 0, 1, 0) FROM pop p LEFT JOIN v5_rows v ON v.copy = p.copy
   UNION ALL SELECT p.copy, 'V6', COALESCE(v.n, 0) + IF(p.n = 0, 1, 0) FROM pop p LEFT JOIN v6_rows v ON v.copy = p.copy
   UNION ALL SELECT p.copy, 'V7', COALESCE(v.n, 0) + IF(p.n = 0, 1, 0) FROM pop p LEFT JOIN v7_rows v ON v.copy = p.copy
+  UNION ALL SELECT p.copy, 'V9', COALESCE(v.n, 0) + IF(p.n = 0, 1, 0) FROM pop p LEFT JOIN v9_rows v ON v.copy = p.copy
   UNION ALL SELECT p.copy, 'V2g', COALESCE(v.n_gp_drift, 0) FROM pop p LEFT JOIN v2_rows v ON v.copy = p.copy
   UNION ALL SELECT x.copy, 'V8', COALESCE(v.n, 0) + IF(COALESCE(k.n, 0) = 0, 1, 0)
             FROM copies x LEFT JOIN v8_rows v ON v.copy = x.copy LEFT JOIN card_n k ON k.copy = x.copy
@@ -358,7 +543,13 @@ expect AS (
     ('V8 the report card reads back from the grades (SINCE_START CURVE and ACCURACY APPLIED)', 'V8', 'LIVE', FALSE),
     ('V8a NC fires: no card row', 'V8', 'NC_EMPTY', TRUE),
     ('V8b NC fires: one CURVE bucket_spend + 1', 'V8', 'NC_V8_CURVE', TRUE),
-    ('V8c NC fires: one ACCURACY mae_net_share + 0.01', 'V8', 'NC_V8_ACC', TRUE)
+    ('V8c NC fires: one ACCURACY mae_net_share + 0.01', 'V8', 'NC_V8_ACC', TRUE),
+    ('V9 the applied scenario and change ids follow from the changes made after built_at, to the end of the horizon', 'V9', 'LIVE', FALSE),
+    ('V9a NC fires: no grade row', 'V9', 'NC_EMPTY', TRUE),
+    ('V9b PC reads 0: a change made before built_at, to the bid the row already had, leaves the row DO_NOTHING', 'V9', 'PC_V9_PREBUILD', FALSE),
+    ('V9c NC fires: that row labelled OTHER_ACTION for that pre-build change', 'V9', 'NC_V9_PREBUILD', TRUE),
+    ('V9d PC reads 0: a change on day 5 of a 7-day horizon makes the row OTHER_ACTION', 'V9', 'PC_V9_DAY5', FALSE),
+    ('V9e NC fires: that row left DO_NOTHING after a change on day 5 of its 7-day horizon', 'V9', 'NC_V9_DAY5', TRUE)
   ])
 )
 SELECT e.check_name, e.copy, f.n AS violations,

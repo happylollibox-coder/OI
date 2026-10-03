@@ -1,7 +1,10 @@
 -- =============================================================================================
--- SP_GRADE_PREDICTIONS(regrade_from DATE, reason STRING) — v27.173 (2026-10-03, learning-contract
--- piece 2, Task 5): grade every prediction of V_PREDICTION_LEDGER whose horizon has settled, append
--- the grades to FACT_PREDICTION_GRADE, and rebuild the report card T_PREDICTION_SCORECARD.
+-- SP_GRADE_PREDICTIONS(regrade_from DATE, reason STRING) — v27.174 (2026-10-04, learning-contract
+-- piece 2, Task 5 follow-up: the applied scenario is read on the prediction's own clock, built_at ..
+-- the end of horizon_to, ruled 2026-10-04; v27.173, 2026-10-03, Task 5, read Los Angeles dates
+-- as_of .. as_of + MATCH_WINDOW_DAYS): grade every prediction of V_PREDICTION_LEDGER whose horizon
+-- has settled, append the grades to FACT_PREDICTION_GRADE, and rebuild the report card
+-- T_PREDICTION_SCORECARD.
 -- Nightly: CALL `onyga-482313.OI.SP_GRADE_PREDICTIONS`(NULL, NULL) (orchestrator Task 20.8f, between
 -- SP_APPEND_CATALOG_FORECAST and SP_REFRESH_CUBE_TABLES, from piece-2 Task 6).
 -- Re-grade: CALL `onyga-482313.OI.SP_GRADE_PREDICTIONS`(DATE 'yyyy-mm-dd', 'why') appends a new grade,
@@ -25,17 +28,33 @@
 --     whose state is ARCHIVED, in any letter case, in force at any moment of the horizon (SCD2
 --     effective_from / effective_to, the UTC wall clock, against the horizon's Los Angeles days).
 --  4. WHICH SCENARIO APPLIED, from V_PPC_CHANGE_LOG_LANDED (landed_evidence other than
---     LOGGED_ONLY), changes on Los Angeles dates as_of .. as_of + MATCH_WINDOW_DAYS: the keyword's
---     changes (keyword_id) and its campaign's state and budget changes (keyword_id NULL, the same
---     campaign_id, a *BUDGET* or CAMPAIGN_* action). The plan row's expected components: bid when
---     |planned_bid - current_bid| >= MATCH_BID_TOL, state when the move is PAUSE, budget when
---     |campaign_planned_budget - campaign_current_budget| >= MATCH_BUDGET_TOL (the ledger's
---     act_is_noop test). A change matches a component: bid, new_bid within MATCH_BID_TOL of
---     planned_bid; state, KEYWORD_PAUSE or STOP_TARGET; budget, a *BUDGET* action whose new_budget
---     is within MATCH_BUDGET_TOL of campaign_planned_budget (SP_RECORD_OBSERVED_CHANGES' rules).
+--     LOGGED_ONLY), on the prediction's own clock (ruled 2026-10-04, architecture/LEARNING.md §4):
+--     only changes applied at or after built_at are read — a change made before the plan existed is
+--     the baseline the plan was built on, never an action on it. The keyword's changes (keyword_id)
+--     and its campaign's state and budget changes (keyword_id NULL, the same campaign_id, a
+--     *BUDGET* or CAMPAIGN_* action) applied in [built_at, the Los Angeles midnight that ends
+--     horizon_to) are read; an SB keyword's own changes until the midnight one day later (below).
+--     The plan row's expected components: bid when |planned_bid - current_bid| >= MATCH_BID_TOL,
+--     state when the move is PAUSE, budget when |campaign_planned_budget - campaign_current_budget|
+--     >= MATCH_BUDGET_TOL (the ledger's act_is_noop test). A change applied in [built_at, the Los
+--     Angeles midnight that starts horizon_from + MATCH_WINDOW_DAYS) — never past the end of
+--     horizon_to — matches a component: bid, new_bid within MATCH_BID_TOL of planned_bid; state,
+--     KEYWORD_PAUSE or STOP_TARGET; budget, a *BUDGET* action whose new_budget is within
+--     MATCH_BUDGET_TOL of campaign_planned_budget (SP_RECORD_OBSERVED_CHANGES' rules). Every other
+--     change read is an other change, a matching one made after the match window included.
 --     ACT = at least one component, every component matched, and no other change; DO_NOTHING = no
---     change at all (so a row whose plan asks for nothing, with nothing done, is DO_NOTHING);
---     OTHER_ACTION otherwise, a partial match included. placement_changed: the keyword's
+--     change read at all, from built_at to the end of the horizon (so a row whose plan asks for
+--     nothing, with nothing done after the build, is DO_NOTHING); OTHER_ACTION otherwise, a partial
+--     match included.
+--     SB LAG: an SB keyword's observed instant is the Fivetran sync that first saw the change, up to
+--     a day after it (V_AMAZON_OBSERVED_CHANGES); campaigns and SP keywords carry Amazon's own
+--     last-updated time. So an SB keyword's own changes are read until the Los Angeles midnight
+--     that ends horizon_to + 1: a change made on the last horizon day and seen the next day still
+--     counts, and one made on horizon_to + 1 is read too and makes the row OTHER_ACTION — the
+--     scan leaves a row out of APPLIED rather than call a disturbed horizon undisturbed. At the
+--     start, an SB keyword change made before built_at and first seen after it is read as made
+--     after the build.
+--     placement_changed: the keyword's
 --     FACT_KEYWORD_STATE_HISTORY.m_effective on its latest snapshot on or before as_of
 --     (placement_m_from) differs, beyond float noise (1e-6), from the one on or before horizon_to
 --     (placement_m_to); NULL when either is missing. m_effective is V_BID_CPC_TRANSFER's
@@ -70,9 +89,9 @@
 -- SOP:  architecture/LEARNING.md §4, §5, §10 "Task 5".
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_GRADE_PREDICTIONS`(regrade_from DATE, reason STRING)
-OPTIONS (description = "v27.173 (2026-10-03, learning-contract piece 2 Task 5): grades every prediction of V_PREDICTION_LEDGER whose horizon_to + SETTLE_HORIZON_DAYS is at or before the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) and that has no grade, appending one FACT_PREDICTION_GRADE row per ledger row (both scenarios), then rebuilds T_PREDICTION_SCORECARD. Realised numbers from FACT_AMAZON_ADS over horizon_from..horizon_to (no row = 0); UNGRADABLE only for a keyword or campaign archived (any case) within the horizon; the applied scenario from V_PPC_CHANGE_LOG_LANDED within as_of..as_of + MATCH_WINDOW_DAYS (ACT: every expected bid / state / budget component matched within MATCH_BID_TOL / MATCH_BUDGET_TOL and nothing else changed; DO_NOTHING: nothing changed on the keyword or its campaign's state or budget; else OTHER_ACTION); realised side = the judge's test (orders >= min_orders and gross profit per ad dollar >= family_bar); the minimum-investment line per predictor x family x calendar_state = the smallest click floor whose cumulative spend-weighted side accuracy over every current grade (tonight's included) is >= MIN_INVEST_SIDE_ACCURACY with >= MIN_INVEST_MIN_ROWS rows; labels UNGRADABLE, else INCONCLUSIVE (0 clicks, below the line or no line), else RIGHT / WRONG; the line stored as min_clicks_at_grade. Settings from DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL), asserted. Idempotent: a second run inserts nothing. regrade_from (with a reason) appends a re-grade, regrade_seq + 1, of every current grade of the nights as_of >= regrade_from. CALL with (NULL, NULL) nightly. SOP: architecture/LEARNING.md 4-5.")
+OPTIONS (description = "v27.174 (2026-10-04, learning-contract piece 2 Task 5 follow-up; v27.173 2026-10-03): grades every prediction of V_PREDICTION_LEDGER whose horizon_to + SETTLE_HORIZON_DAYS is at or before the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) and that has no grade, appending one FACT_PREDICTION_GRADE row per ledger row (both scenarios), then rebuilds T_PREDICTION_SCORECARD. Realised numbers from FACT_AMAZON_ADS over horizon_from..horizon_to (no row = 0); UNGRADABLE only for a keyword or campaign archived (any case) within the horizon; the applied scenario from V_PPC_CHANGE_LOG_LANDED on the prediction's own clock, reading only changes applied at or after built_at and before the end of horizon_to (an SB keyword's own changes one day more, for the sync lag): ACT when every expected bid / state / budget component matched, within MATCH_BID_TOL / MATCH_BUDGET_TOL, by a change made before the start of horizon_from + MATCH_WINDOW_DAYS (never past horizon_to), and nothing else changed; DO_NOTHING when nothing changed on the keyword or its campaign's state or budget; else OTHER_ACTION; realised side = the judge's test (orders >= min_orders and gross profit per ad dollar >= family_bar); the minimum-investment line per predictor x family x calendar_state = the smallest click floor whose cumulative spend-weighted side accuracy over every current grade (tonight's included) is >= MIN_INVEST_SIDE_ACCURACY with >= MIN_INVEST_MIN_ROWS rows; labels UNGRADABLE, else INCONCLUSIVE (0 clicks, below the line or no line), else RIGHT / WRONG; the line stored as min_clicks_at_grade. Settings from DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL), asserted. Idempotent: a second run inserts nothing. regrade_from (with a reason) appends a re-grade, regrade_seq + 1, of every current grade of the nights as_of >= regrade_from. CALL with (NULL, NULL) nightly. SOP: architecture/LEARNING.md 4-5.")
 BEGIN
-  DECLARE grader_version_d STRING DEFAULT 'v27.173';
+  DECLARE grader_version_d STRING DEFAULT 'v27.174';
   DECLARE graded_at_d TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
   DECLARE settle_days_d INT64;
   DECLARE match_days_d INT64;
@@ -136,13 +155,14 @@ BEGIN
                                                   campaign_id, keyword_id, scenario)) FROM _due)
     AS 'SP_GRADE_PREDICTIONS: V_PREDICTION_LEDGER has two rows for one prediction key; a grade appended now could never be told apart (PREDICTION_CONTRACT acceptance L1a).';
   ASSERT NOT EXISTS (SELECT 1 FROM _due WHERE min_orders IS NULL OR family_bar IS NULL OR pred_side IS NULL
-                                           OR horizon_from IS NULL OR horizon_to IS NULL)
-    AS 'SP_GRADE_PREDICTIONS: a gradable ledger row has no min_orders, family_bar, pred_side or horizon; its realised side cannot be tested (V_PREDICTION_LEDGER).';
+                                           OR horizon_from IS NULL OR horizon_to IS NULL OR built_at IS NULL)
+    AS 'SP_GRADE_PREDICTIONS: a gradable ledger row has no min_orders, family_bar, pred_side, horizon or built_at; its realised side or its applied scenario cannot be decided (V_PREDICTION_LEDGER).';
 
   -- one row per plan row (both scenario rows of a plan row carry the same plan columns)
   CREATE TEMP TABLE _prow AS
   SELECT predictor, variant, as_of, campaign_id, keyword_id,
          MAX(horizon_from) AS horizon_from, MAX(horizon_to) AS horizon_to,
+         MAX(built_at) AS built_at, MAX(channel) AS channel,
          MAX(IF(scenario = 'ACT', move, NULL)) AS move,
          MAX(current_bid) AS current_bid, MAX(planned_bid) AS planned_bid,
          MAX(campaign_current_budget) AS campaign_current_budget,
@@ -197,27 +217,35 @@ BEGIN
               AND ca.horizon_from = k.horizon_from AND ca.horizon_to = k.horizon_to;
 
   -- ── 4. which scenario applied ─────────────────────────────────────────────────────────────────
+  -- every change that can bear on a due row: applied at or after the earliest built_at, before the
+  -- Los Angeles midnight that ends the latest horizon_to + 1 (the SB keyword scan's end)
   CREATE TEMP TABLE _chg AS
-  SELECT change_id, action, keyword_id, campaign_id, new_bid, new_budget,
-         DATE(applied_at, 'America/Los_Angeles') AS la_date
+  SELECT change_id, action, keyword_id, campaign_id, new_bid, new_budget, applied_at
   FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
   WHERE landed_evidence <> 'LOGGED_ONLY'
-    AND DATE(applied_at, 'America/Los_Angeles')
-        BETWEEN (SELECT MIN(as_of) FROM _prow)
-            AND DATE_ADD((SELECT MAX(as_of) FROM _prow), INTERVAL match_days_d DAY);
+    AND applied_at >= (SELECT MIN(built_at) FROM _prow)
+    AND applied_at <  TIMESTAMP(DATE_ADD((SELECT MAX(horizon_to) FROM _prow), INTERVAL 2 DAY), 'America/Los_Angeles');
 
   CREATE TEMP TABLE _app AS
   WITH comp AS (
     SELECT p.*,
            COALESCE(ABS(p.planned_bid - p.current_bid) >= bid_tol_d, FALSE)                          AS has_bid,
            COALESCE(p.move = 'PAUSE', FALSE)                                                          AS has_state,
-           COALESCE(ABS(p.campaign_planned_budget - p.campaign_current_budget) >= budget_tol_d, FALSE) AS has_budget
+           COALESCE(ABS(p.campaign_planned_budget - p.campaign_current_budget) >= budget_tol_d, FALSE) AS has_budget,
+           -- the prediction's clock: a change applied in [built_at, match_end) can match a component;
+           -- every change applied in [built_at, scan_end) is read (kw_scan_end for the keyword's own:
+           -- one day more on an SB keyword, whose observed instant is the sync that first saw it)
+           LEAST(TIMESTAMP(DATE_ADD(p.horizon_from, INTERVAL match_days_d DAY), 'America/Los_Angeles'),
+                 TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles'))                 AS match_end,
+           TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL 1 DAY), 'America/Los_Angeles')                          AS scan_end,
+           TIMESTAMP(DATE_ADD(p.horizon_to, INTERVAL IF(p.channel = 'SB', 2, 1) DAY), 'America/Los_Angeles') AS kw_scan_end
     FROM _prow p
   ),
   hits AS (
     -- the keyword's own changes
     SELECT c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id, x.change_id,
            CASE
+             WHEN x.applied_at >= c.match_end THEN NULL
              WHEN c.has_bid AND x.new_bid IS NOT NULL
                   AND ABS(x.new_bid - c.planned_bid) <= bid_tol_d + 1e-9 THEN 'BID'
              WHEN c.has_state AND x.action IN ('KEYWORD_PAUSE', 'STOP_TARGET') THEN 'STATE'
@@ -225,11 +253,12 @@ BEGIN
     FROM comp c
     JOIN _chg x
       ON x.keyword_id = c.keyword_id
-     AND x.la_date BETWEEN c.as_of AND DATE_ADD(c.as_of, INTERVAL match_days_d DAY)
+     AND x.applied_at >= c.built_at AND x.applied_at < c.kw_scan_end
     UNION ALL
     -- its campaign's state and budget changes
     SELECT c.predictor, c.variant, c.as_of, c.campaign_id, c.keyword_id, x.change_id,
            CASE
+             WHEN x.applied_at >= c.match_end THEN NULL
              WHEN c.has_budget AND x.action LIKE '%BUDGET%' AND x.new_budget IS NOT NULL
                   AND ABS(x.new_budget - c.campaign_planned_budget) <= budget_tol_d + 1e-9 THEN 'BUDGET'
            END AS matched
@@ -238,7 +267,7 @@ BEGIN
       ON x.campaign_id = c.campaign_id
      AND x.keyword_id IS NULL
      AND (x.action LIKE '%BUDGET%' OR STARTS_WITH(x.action, 'CAMPAIGN_'))
-     AND x.la_date BETWEEN c.as_of AND DATE_ADD(c.as_of, INTERVAL match_days_d DAY)
+     AND x.applied_at >= c.built_at AND x.applied_at < c.scan_end
   ),
   agg AS (
     SELECT predictor, variant, as_of, campaign_id, keyword_id,

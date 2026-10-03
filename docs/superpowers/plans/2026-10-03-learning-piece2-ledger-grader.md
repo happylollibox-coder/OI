@@ -226,7 +226,12 @@ pred_net    = pred_gp - pred_spend
 - [ ] **Step 4: which scenario applied** — the brief §4 Step 2 rules over `V_PPC_CHANGE_LOG_LANDED`
   (expected components; ACT only when every component matched and nothing else changed; DO_NOTHING when the
   keyword and its campaign were untouched; else OTHER_ACTION). `placement_changed` from
-  `FACT_KEYWORD_STATE_HISTORY.m_effective`.
+  `FACT_KEYWORD_STATE_HISTORY.m_effective`. *Corrected 2026-10-04 (Task-5 review, ruled "all
+  recommended"): the brief's window, Los Angeles dates `as_of … as_of + MATCH_WINDOW_DAYS`, is
+  replaced by the prediction's clock — only changes applied at or after `built_at`; a match before the
+  Los Angeles midnight that starts `horizon_from + MATCH_WINDOW_DAYS`; the other-change scan to the end
+  of `horizon_to` (an SB keyword's own changes one day longer). `SP_GRADE_PREDICTIONS` v27.174; the
+  August band re-graded (spec §7, §14.1; `architecture/LEARNING.md` §4, §10 "Task 5 follow-up").*
 - [ ] **Step 5: the grade** — realised side = GOOD when `orders >= min_orders AND GP / spend >=
   family_bar` (the judge's own test). Buckets `0, 1–5, 6–10, 11–20, 21–40, 41–80, 81+` by realised clicks.
   Inside one run, in this order: errors; then per predictor × family × calendar_state the cumulative,

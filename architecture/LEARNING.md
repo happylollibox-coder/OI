@@ -290,7 +290,7 @@ constants (Ori's rulings of 2026-10-03); where one came from a measurement, the 
 | `BID_TO_CPC_RATIO_FALLBACK` | — | 0.974 | ledger | CPC ÷ bid for a zero-basis probe (measured: spec §14 E4) |
 | `OWN_CVR_MIN_CLICKS` | — | 30 | ledger | settled clicks a probe needs before its own rate is used |
 | `SETTLE_HORIZON_DAYS` | — | 14 | grader, health | settled days after `horizon_to` before a row is graded |
-| `MATCH_WINDOW_DAYS` | — | 3 | grader | days after `as_of` in which a change can count as the plan's |
+| `MATCH_WINDOW_DAYS` | — | 3 | grader | days from the start of `horizon_from` (and the hours from `built_at` before it) in which a change can count as the plan's (§4; until v27.174, Los Angeles dates `as_of … as_of + 3`, and the setting's stored description still says so) |
 | `MATCH_BID_TOL` | — | 0.005 | ledger, grader | a bid matches the plan within this; a plan row has a bid component when its bid moves by at least this (`act_is_noop`) |
 | `MATCH_BUDGET_TOL` | — | 0.01 | ledger, grader | a budget matches the plan within this; a budget component when the campaign budget moves by at least this (`act_is_noop`) |
 | `MIN_INVEST_SIDE_ACCURACY` | — | 0.80 | grader | the side accuracy a click bucket must clear to set the line (D4) |
@@ -344,30 +344,56 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
    holds both) in `DIM_KEYWORD` / `DIM_CAMPAIGN` at any point of the horizon (SCD2
    `effective_from` / `effective_to`). Counted, never dropped.
 4. **Which scenario applied**, from `V_PPC_CHANGE_LOG_LANDED` (every `landed_evidence` except
-   `LOGGED_ONLY`), changes applied on Los Angeles dates `as_of … as_of + MATCH_WINDOW_DAYS`:
+   `LOGGED_ONLY`), **on the prediction's own clock** — `built_at` to the end of the horizon (ruled
+   2026-10-04, below):
    - the changes read: the keyword's own (`keyword_id`), and its campaign's state and budget changes
-     (`keyword_id` NULL, the same `campaign_id`, a `*BUDGET*` or `CAMPAIGN_*` action). Ad-group
-     changes are not read (§9);
+     (`keyword_id` NULL, the same `campaign_id`, a `*BUDGET*` or `CAMPAIGN_*` action), **applied at
+     or after `built_at`** and before the Los Angeles midnight that ends `horizon_to` (an SB
+     keyword's own changes: the midnight one day later, below). A change made before the plan existed
+     is the state the plan was built on, never an action on it. Ad-group changes are not read (§9);
    - the plan's **expected components**: a bid component when |`planned_bid` − `current_bid`| ≥
      `MATCH_BID_TOL`; a state component for PAUSE; a budget component when |planned − current
      budget| ≥ `MATCH_BUDGET_TOL`. `act_is_noop` = none of the three;
-   - a component **matches** a change on the same keyword (bid within `MATCH_BID_TOL` of
-     `planned_bid`; PAUSE ← `KEYWORD_PAUSE` / `STOP_TARGET`) or the same campaign (a `*BUDGET*`
-     action within `MATCH_BUDGET_TOL` of `campaign_planned_budget`) — the recorder's own rules
-     (`SP_RECORD_OBSERVED_CHANGES`);
-   - **`ACT`** when the plan row has at least one component, every one matched, and nothing else
-     changed on the keyword or its campaign; **`DO_NOTHING`** when nothing changed on the keyword
-     and no state or budget changed on its campaign — so a row whose plan asks for nothing, with
-     nothing done, is `DO_NOTHING` (its two scenarios are equal by anchoring, §3); **`OTHER_ACTION`**
-     otherwise, a partial match included (a matched bid on a row whose budget component did not
-     land is `OTHER_ACTION`);
+   - a change **matches** a component when it is applied in `[built_at`, the Los Angeles midnight
+     that starts `horizon_from + MATCH_WINDOW_DAYS)` — never past the end of `horizon_to` — and is
+     on the same keyword (bid within `MATCH_BID_TOL` of `planned_bid`; PAUSE ← `KEYWORD_PAUSE` /
+     `STOP_TARGET`) or the same campaign (a `*BUDGET*` action within `MATCH_BUDGET_TOL` of
+     `campaign_planned_budget`) — the recorder's own rules (`SP_RECORD_OBSERVED_CHANGES`). Every
+     other change read is an *other* change, a matching one made after the match window included;
+   - **`ACT`** when the plan row has at least one component, every one matched, and no other change
+     was read; **`DO_NOTHING`** when no change was read at all — nothing on the keyword and no state
+     or budget change on its campaign, from `built_at` to the end of the horizon — so a row whose
+     plan asks for nothing, with nothing done after the build, is `DO_NOTHING` (its two scenarios
+     are equal by anchoring, §3); **`OTHER_ACTION`** otherwise, a partial match included (a matched
+     bid on a row whose budget component did not land is `OTHER_ACTION`);
    - `placement_changed`: the keyword's `FACT_KEYWORD_STATE_HISTORY.m_effective` on its latest
      snapshot on or before `as_of` differs, beyond float noise (1e-6), from the one on or before
      `horizon_to`; both readings are on the grade row (`placement_m_from`, `placement_m_to`), and the
      flag is NULL when either is missing. Placement changes are not in the change log, and
      `m_effective` moves with the click mix as well as with a setting (§9).
 
-   An SB change is observed at the Fivetran sync, up to a day late; the 3-day window covers it.
+   **Why the clock is `built_at` … `horizon_to`** (Task-5 review, ruled 2026-10-04 "all
+   recommended"; spec §7 and §14.1 record it). v27.173 read changes on the Los Angeles dates `as_of …
+   as_of + MATCH_WINDOW_DAYS` (the spec's "within 3 days after `as_of`"). That window is not the
+   prediction's: (a) it read changes made on `as_of` before the build — on the August nights 64 of the
+   163 `OTHER_ACTION` plan rows per plan had every change applied before `built_at`, and on 60 of
+   them every change's new bid or budget already equalled the row's `current_bid` /
+   `campaign_current_budget`, so their horizons ran the `DO_NOTHING` baseline; (b) under New York
+   keying the night is written on the Los Angeles evening before `as_of` (§1 "Which pass writes a
+   night"), so a change made between the build and Los Angeles midnight carries the date `as_of − 1`
+   and was never read; (c) the "nothing else changed" test covered `as_of … as_of + 3` only — four of
+   a 7-day `OFF_PEAK` horizon's seven days unread, and one day past a New York-keyed 3-day horizon.
+   The re-grade's numbers are in §10 "Task 5 follow-up".
+
+   **The SB sync lag.** An SB keyword's observed instant is the Fivetran sync that first saw the
+   change, up to a day after it (`V_AMAZON_OBSERVED_CHANGES`); campaigns and SP keywords carry
+   Amazon's own last-updated time. At the end of the horizon the grader therefore reads an SB
+   keyword's own changes one Los Angeles day longer, through `horizon_to + 1`: a change made on the
+   last horizon day and seen the next day still counts, and a change made on `horizon_to + 1` itself
+   is read too and makes the row `OTHER_ACTION` — the scan leaves a row out of `APPLIED` rather than
+   call a disturbed horizon undisturbed. The match window is not lengthened: an SB hand change made
+   inside it but first seen after it is an other change. At the start, an SB keyword change made
+   before `built_at` and first seen after it is read as made after the build.
 5. **The realised side.** GOOD when realised orders ≥ `min_orders` AND realised gross profit ÷ spend
    ≥ `family_bar` — the judge's own test (`V_PLAN_WINDOW_JUDGMENT`, `sided` CTE). A row with no spend
    has no return and is not GOOD, as in the judge (`COALESCE(ret, −1) >= family_bar`).
@@ -1107,7 +1133,9 @@ The brief's realised gross profit and net are the pre-16:08 UTC reading (E6). Ov
 on the keyword and 98 with a campaign-level change. Measured: 92 (A) / 91 (B) and 98, and 0 ACT —
 the PARK row (2026-08-25, keyword 445052966395752, bid 0.41 → 0.20) matched its bid change but its
 campaign's budget component (62.50 → 60.04) did not land, so under the plan's rule (every component
-matched) it is OTHER_ACTION, with the matched change in `matched_change_ids`.
+matched) it is OTHER_ACTION, with the matched change in `matched_change_ids`. *Re-graded 2026-10-04
+(Task 5 follow-up, below): on the ruled clock (`built_at` … `horizon_to`) 64 of the 163
+OTHER_ACTION rows per plan are DO_NOTHING; this row stays OTHER_ACTION.*
 
 **`placement_changed`, measured** (per plan, over the 2,236 August plan rows): 126 have no reading,
 2,048 moved beyond 1e-6, 311 by more than 1%, 17 by more than 5%. §9 says why the flag reads so
@@ -1201,4 +1229,236 @@ SELECT predictor, COUNT(*) AS plan_rows, COUNTIF(placement_changed IS NULL) AS n
 FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
 WHERE scenario = 'DO_NOTHING'
 GROUP BY predictor ORDER BY predictor;
+```
+
+### Task 5 follow-up — the applied scenario on the prediction's own clock (2026-10-04)
+
+**The finding** (Task-5 review): `_chg` / `hits` read changes on the Los Angeles dates `as_of … as_of +
+MATCH_WINDOW_DAYS`, not on the prediction's clock `built_at … horizon_to` (§4 step 4 says why each
+of the three errors follows). **Ruled 2026-10-04, "all recommended":** a change can match a component
+when it is applied at or after `built_at` and before the Los Angeles midnight that starts
+`horizon_from + MATCH_WINDOW_DAYS`; the "any other change" scan reads from `built_at` to the end of
+`horizon_to`; the SB sync lag is handled as §4 states (an SB keyword's own changes one day longer).
+The grader adds one bound the ruling did not name: the match window never runs past the end of
+`horizon_to` (no stored night has `window_days` below `MATCH_WINDOW_DAYS`: 3 and 7 are the only
+values, so it changes nothing today).
+
+**Measured on the frozen v27.173 grades before the fix** (query 1 below, run before the re-grade;
+the reviewer's numbers reproduced): 163 `OTHER_ACTION` plan rows per plan; 64 with every change
+applied before `built_at`; 60 of those with every change's new bid or budget equal to the row's
+`current_bid` / `campaign_current_budget`. Bid hits before the build 59, 57 of them already the
+current bid; budget hits 40, all 40 already the current budget (each plan). The other four rows per
+plan: two on the 08-25 night whose campaign or keyword was paused before the build
+(`CAMPAIGN_PAUSE` 05:17:10 and `KEYWORD_PAUSE` 05:18:20 UTC on 08-26; built 05:58:01 UTC), and two on
+the 08-26 night whose bid went 0.90 → 0.30 / 0.34 at 12:10 UTC and back to 0.90 at 16:01 UTC on 08-26
+(built 05:44:35 UTC on 08-27). Under the ruling all 64 are `DO_NOTHING`: nothing was done after the
+build. Error (b) — a change between the build and Los Angeles midnight of a New York-keyed night —
+cannot be seen in the data (Ori made no change after 2026-09-27: the plan's rulings, "Also
+recorded"); it is shown on a fixture below.
+
+**Deployed** `scripts/bigquery/procedures/SP_GRADE_PREDICTIONS.sql` v27.174 (comment lines
+stripped) at 21:29:52 UTC 2026-10-03 (job `t5f_deploy_sp_1791062988`): `INFORMATION_SCHEMA.ROUTINES`
+`routine_definition` equals the file's `BEGIN … END`, 42,973 characters; the routine's description
+(1,916 characters) and arguments (`regrade_from DATE`, `reason STRING`) equal the file's. Changed:
+`_prow` carries `built_at` and `channel`; `_chg` reads `applied_at` from the earliest `built_at` to the
+Los Angeles midnight that ends the latest `horizon_to + 1`; `_app` reads the windows above; a due row
+with no `built_at` is refused (ASSERT); `grader_version` v27.174. `config.yaml`'s description of the
+procedure says the same.
+
+**Proved on copies of the grader** (the file with its comment lines stripped and only the procedure,
+`FACT_PREDICTION_GRADE`, `T_PREDICTION_SCORECARD`, `V_PREDICTION_LEDGER` and `V_PPC_CHANGE_LOG_LANDED`
+names swapped). Inputs (query 2, job `t5fx_fixtures_1791062610`, 119.6 slot-seconds): `OI._tmp_t5fx_chg`
+= the view's 2,016 rows + six injected keyword changes; `OI._tmp_t5fx_led` = the ledger's 17,588 rows
+with three plan keys doctored (12 rows). v27.174 and v27.173 (commit d49e7a5) each graded the copy
+from empty (`t5fx_runnew_1791062660`, 96.3 slot-seconds; `t5fx_runold_1791062660`, 95.2): 8,944 rows
+each. Per plan row, both plans alike (query 3):
+
+| fixture | night, horizon | change injected | v27.174 | v27.173 |
+|---|---|---|---|---|
+| F1 pre-build, in the baseline | 08-23, 08-24 … 08-26 (SP, built 05:34:19 UTC 08-24) | bid 0.25 = current, 04:34:19 UTC | DO_NOTHING | OTHER_ACTION |
+| F2 day 5 of 7 | 08-28, stretched to 08-29 … 09-04 (SP) | bid 0.62, noon LA 09-02 | OTHER_ACTION | DO_NOTHING |
+| F3 build evening, New York keying | 08-24 moved to built 05:30 UTC 08-24 (LA 08-23 22:30), 08-24 … 08-26 (SP, plan 0.25 → 0.21, no budget component) | bid 0.21, 05:45 UTC 08-24 | ACT | DO_NOTHING |
+| F3, the night before | 08-23, built 05:34:19 UTC 08-24 | the same change, after that build | ACT | ACT |
+| F4 matching bid on day 5 | 08-28, stretched to 08-29 … 09-04 (SP, plan B bid 1.16) | bid 1.16, noon LA 09-02 | OTHER_ACTION | DO_NOTHING |
+| F5 SB, the day after the horizon | 08-28, 08-29 … 08-31 (SB) | bid 0.31, 10:00 LA 09-01 | OTHER_ACTION | DO_NOTHING |
+| F5 SP, the day after the horizon | 08-28, 08-29 … 08-31 (SP) | bid 1.07, 10:00 LA 09-01 | DO_NOTHING | DO_NOTHING |
+
+Every other plan row of the copy (2,200 per plan) against the live v27.173 grade: 2,037 DO_NOTHING
+both, 64 OTHER_ACTION → DO_NOTHING, 99 OTHER_ACTION both, nothing else. The acceptance suite with V9
+on each copy (names swapped the same way): v27.174's grades every asserted row PASS
+(`t5fx_acc_new_1791062874`, 85.0 slot-seconds); v27.173's V9 LIVE FAIL 388 (`t5fx_acc_old_1791062874`,
+107.8): the 368 rows the live re-grade moved (below) and the 20 rows of the five fixtures the two
+rules label differently. Scratch tables `OI._tmp_t5fx_chg`, `_tmp_t5fx_led`, `_tmp_t5fx_grade_new`,
+`_tmp_t5fx_grade_old`, `_tmp_t5fx_sc_new`, `_tmp_t5fx_sc_old` expire 2026-10-11; the two procedure
+copies were dropped.
+
+**The re-grade** — `CALL SP_GRADE_PREDICTIONS(DATE '2026-08-23', 'v27.174 Task 5 follow-up: …')`,
+job `t5f_regrade_1791063086`, 21:31:28 to 21:32:36 UTC, 165.6 slot-seconds, 129,017,601 bytes
+(673,185,792 billed): 8,944 due, 8,944 appended at `regrade_seq` 1 with the reason, `grader_version`
+v27.174; labels INCONCLUSIVE 8,944; applied ACT 0, DO_NOTHING 4,274, OTHER_ACTION 198. Seq 0 against
+seq 1 (query 4), per plan: 2,073 DO_NOTHING both; **64 OTHER_ACTION → DO_NOTHING**; 99 OTHER_ACTION
+both, 28 of them with 31 change ids dropped from their lists, every one applied before `built_at`, none
+added; realised numbers, gross profit, `placement_changed` and labels unchanged on every row. A
+`(NULL, NULL)` run after it (`t5f_call_null_1791063180`, 186.5 slot-seconds): 0 due, 0 inserted. The
+table holds 17,888 rows, two `graded_at`.
+
+**Before and after** (the report card, `family` ALL, SINCE_START; query 5), per plan:
+
+| | before (v27.173) | after (v27.174) |
+|---|---|---|
+| APPLIED rows (DO_NOTHING-applied; ACT 0) | 2,073 | 2,137 |
+| OTHER_ACTION rows (HONESTY `n_other_action`) | 163 | 99 |
+| ACT with no matching action (HONESTY) | 1,854 | 1,916 |
+| ACCURACY APPLIED realised spend | 14,471.52 | 15,514.60 |
+| ACCURACY APPLIED `mae_net_share` / `bias_share` | 0.9325 / 0.1685 | 0.9430 / 0.1305 |
+| ACCURACY APPLIED `side_accuracy`, A / B | 0.3554 / 0.3559 | 0.3557 / 0.3612 |
+| MONEY `dn_net_per_dollar` | −0.2537 | −0.2468 |
+| MONEY `counterfactual_net_per_alloc`, A / B | −0.1874 / −0.1678 | −0.1874 / −0.1678 (every plan row; unchanged) |
+
+ACCURACY DO_NOTHING and ACT (every plan row, applied or not), YOUNG and NEXT_WEEK are unchanged.
+
+**Checked.** `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql` gains V9 — the applied scenario
+and both id lists recomputed from `V_PPC_CHANGE_LOG_LANDED` on the ruled clock — with PC_V9_PREBUILD /
+NC_V9_PREBUILD (a change to the bid the row already had, one hour before `built_at`: the row stays
+`DO_NOTHING`; labelled `OTHER_ACTION` for it, V9 fires) and PC_V9_DAY5 / NC_V9_DAY5 (a change on day 5
+of the row's horizon stretched to 7 days: the row is `OTHER_ACTION`; left `DO_NOTHING`, V9 fires).
+Run as written before the re-grade (`t5f_acc_pre_1791063005`, 195.3 slot-seconds): V1–V8 and their
+controls as in "Task 5"; V9 LIVE FAIL 368 = 92 plan rows per plan × 2 plans × 2 scenarios (the 64
+relabelled and the 28 whose id lists moved). After it (`t5f_acc_post_1791063180`, 201.8
+slot-seconds, 192,112,052 bytes): 33 rows, every asserted row PASS — LIVE V1–V9 0, V2g REPORT 0;
+NC_EMPTY V1 8,944 and V2–V9 1 each; the V1–V8 controls as before; NC_V9_PREBUILD 4, NC_V9_DAY5 4;
+PC_V9_PREBUILD 0, PC_V9_DAY5 0 (the file's RUN LOG names the picks).
+
+**Not changed.** The `MATCH_WINDOW_DAYS` row of `DE_COACH_THRESHOLDS` still describes the v27.173
+window ("Los Angeles dates as_of .. as_of + this"); correcting it is an UPDATE of a `DE_` row, which
+the house rules leave to Ori. Its value, 3, is read as before.
+
+```sql
+-- 1. the v27.173 OTHER_ACTION rows whose every change was applied before built_at, and whether each
+--    such change's new value already equals the row's current bid / budget (run before the re-grade)
+CREATE TEMP TABLE r AS
+SELECT g.predictor, g.as_of, g.campaign_id, g.keyword_id, g.built_at, g.current_bid, g.campaign_current_budget,
+       g.planned_bid, g.campaign_planned_budget, g.move, g.channel, id, x.action, x.applied_at, x.new_bid, x.new_budget, x.landed_evidence,
+       x.keyword_id AS x_kw
+FROM `onyga-482313.OI.FACT_PREDICTION_GRADE` g,
+     UNNEST(ARRAY_CONCAT(g.matched_change_ids, g.other_change_ids)) id
+JOIN `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED` x ON x.change_id = id
+WHERE g.scenario = 'DO_NOTHING' AND g.applied_scenario = 'OTHER_ACTION' AND g.regrade_seq = 0;
+SELECT predictor,
+       COUNT(DISTINCT FORMAT('%t|%s', as_of, keyword_id)) rows_other,
+       COUNT(DISTINCT IF(all_pre, FORMAT('%t|%s', as_of, keyword_id), NULL)) rows_all_pre,
+       COUNT(DISTINCT IF(all_pre AND all_base, FORMAT('%t|%s', as_of, keyword_id), NULL)) rows_all_pre_in_base,
+       COUNTIF(pre AND x_kw IS NOT NULL AND new_bid IS NOT NULL) pre_bid_hits,
+       COUNTIF(pre AND x_kw IS NOT NULL AND new_bid IS NOT NULL AND ABS(new_bid - current_bid) <= 0.005 + 1e-9) pre_bid_in_base,
+       COUNTIF(pre AND x_kw IS NULL AND new_budget IS NOT NULL) pre_budget_hits,
+       COUNTIF(pre AND x_kw IS NULL AND new_budget IS NOT NULL AND ABS(new_budget - campaign_current_budget) <= 0.01 + 1e-9) pre_budget_in_base
+FROM (
+  SELECT r.*, applied_at < built_at AS pre,
+         LOGICAL_AND(applied_at < built_at) OVER k AS all_pre,
+         LOGICAL_AND(COALESCE(IF(x_kw IS NOT NULL, ABS(new_bid - current_bid) <= 0.005 + 1e-9,
+                                 ABS(new_budget - campaign_current_budget) <= 0.01 + 1e-9), FALSE)) OVER k AS all_base
+  FROM r WINDOW k AS (PARTITION BY predictor, as_of, keyword_id)
+)
+GROUP BY predictor ORDER BY predictor;
+```
+
+```sql
+-- 2. the fixture inputs
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5fx_chg`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC') AS
+WITH tpl AS (
+  SELECT * FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+  WHERE landed_evidence = 'SEEN_ON_AMAZON_NOT_LOGGED' AND keyword_id IS NOT NULL AND new_bid IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (ORDER BY change_id) = 1
+),
+inj AS (
+  SELECT * FROM UNNEST([
+    -- F1: night 08-23 (built 2026-08-24 05:34:19 UTC), SP keyword, a change one hour before the build to the bid it already had
+    STRUCT('fx|F1_PREBUILD_IN_BASELINE' AS change_id, '108301382467865' AS keyword_id, '531456687555062' AS campaign_id,
+           0.25 AS new_bid, TIMESTAMP '2026-08-24 04:34:19 UTC' AS applied_at),
+    -- F2: night 08-28 stretched to 7 days (08-29 .. 09-04), SP keyword, a non-matching change at noon LA on day 5 (09-02)
+    ('fx|F2_DAY5_OF_7', '11084263298679', '531456687555062', 0.62, TIMESTAMP('2026-09-02 12:00:00', 'America/Los_Angeles')),
+    -- F3: night 08-24 moved to a build at 2026-08-24 05:30 UTC (LA 08-23 22:30), horizon 08-24 .. 08-26; the plan's bid (0.21) 15 minutes after
+    ('fx|F3_BUILD_EVENING_MATCH', '66007207046728', '222497123677300', 0.21, TIMESTAMP '2026-08-24 05:45:00 UTC'),
+    -- F4: night 08-28 stretched to 7 days, SP keyword whose plan B bid is 1.16; that bid set at noon LA on day 5 (09-02)
+    ('fx|F4_DAY5_MATCHING_BID', '112492877088507', '43890791772293', 1.16, TIMESTAMP('2026-09-02 12:00:00', 'America/Los_Angeles')),
+    -- F5_SB / F5_SP: night 08-28 (horizon 08-29 .. 08-31), a change seen at 10:00 LA on horizon_to + 1 (09-01)
+    ('fx|F5_SB_DAY_AFTER', '145785644018633', '446868628489343', 0.31, TIMESTAMP('2026-09-01 10:00:00', 'America/Los_Angeles')),
+    ('fx|F5_SP_DAY_AFTER', '117765426526312', '2626284884970', 1.07, TIMESTAMP('2026-09-01 10:00:00', 'America/Los_Angeles'))
+  ])
+)
+SELECT * FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_LANDED`
+UNION ALL
+SELECT t.* REPLACE (i.change_id AS change_id, i.keyword_id AS keyword_id, i.campaign_id AS campaign_id,
+                    i.new_bid AS new_bid, i.applied_at AS applied_at, 'DECREASE_BID' AS action,
+                    CAST(NULL AS FLOAT64) AS new_budget, CAST(NULL AS FLOAT64) AS old_budget,
+                    'Task 5 follow-up fixture' AS upload_note, CAST(NULL AS STRING) AS paired_change_id)
+FROM tpl t CROSS JOIN inj i;
+
+CREATE OR REPLACE TABLE `onyga-482313.OI._tmp_t5fx_led`
+OPTIONS (expiration_timestamp = TIMESTAMP '2026-10-11 00:00:00 UTC') AS
+SELECT l.* REPLACE (
+  CASE WHEN l.as_of = '2026-08-28' AND l.keyword_id IN ('11084263298679', '112492877088507') THEN DATE_ADD(l.horizon_from, INTERVAL 6 DAY)
+       WHEN l.as_of = '2026-08-24' AND l.keyword_id = '66007207046728' THEN DATE '2026-08-26'
+       ELSE l.horizon_to END AS horizon_to,
+  CASE WHEN l.as_of = '2026-08-24' AND l.keyword_id = '66007207046728' THEN DATE '2026-08-24' ELSE l.horizon_from END AS horizon_from,
+  CASE WHEN l.as_of = '2026-08-24' AND l.keyword_id = '66007207046728' THEN TIMESTAMP '2026-08-24 05:30:00 UTC' ELSE l.built_at END AS built_at,
+  CASE WHEN l.as_of = '2026-08-28' AND l.keyword_id IN ('11084263298679', '112492877088507') THEN 7 ELSE l.window_days END AS window_days)
+FROM `onyga-482313.OI.V_PREDICTION_LEDGER` l;
+
+SELECT 'chg' AS t, COUNT(*) AS n, COUNTIF(STARTS_WITH(change_id, 'fx|')) AS fx FROM `onyga-482313.OI._tmp_t5fx_chg`
+UNION ALL
+SELECT 'led', COUNT(*), COUNTIF((as_of = '2026-08-28' AND keyword_id IN ('11084263298679', '112492877088507'))
+                                OR (as_of = '2026-08-24' AND keyword_id = '66007207046728')) FROM `onyga-482313.OI._tmp_t5fx_led`;
+```
+
+```sql
+-- 3. v27.174 against v27.173 on the copy: the fixture keys, then every other plan row against the live seq 0
+CREATE TEMP TABLE n AS SELECT * FROM `onyga-482313.OI._tmp_t5fx_grade_new` WHERE scenario = 'DO_NOTHING';
+CREATE TEMP TABLE o AS SELECT * FROM `onyga-482313.OI._tmp_t5fx_grade_old` WHERE scenario = 'DO_NOTHING';
+CREATE TEMP TABLE fx AS SELECT * FROM UNNEST(['108301382467865', '11084263298679', '66007207046728', '112492877088507', '145785644018633', '117765426526312']) AS keyword_id;
+SELECT 'FIXTURE' AS part, n.keyword_id, n.as_of, n.predictor, n.channel, n.horizon_from, n.horizon_to, n.applied_scenario AS v174, o.applied_scenario AS v173,
+       ARRAY_TO_STRING(n.matched_change_ids, ',') AS m174, ARRAY_TO_STRING(n.other_change_ids, ',') AS o174,
+       ARRAY_TO_STRING(o.other_change_ids, ',') AS o173, CAST(NULL AS INT64) AS n_rows
+FROM n JOIN o USING (predictor, variant, as_of, campaign_id, keyword_id)
+WHERE n.keyword_id IN (SELECT keyword_id FROM fx)
+  AND (n.applied_scenario <> o.applied_scenario OR ARRAY_LENGTH(n.matched_change_ids) + ARRAY_LENGTH(n.other_change_ids) + ARRAY_LENGTH(o.other_change_ids) + ARRAY_LENGTH(o.matched_change_ids) > 0)
+UNION ALL
+SELECT 'REAL', NULL, NULL, n.predictor, NULL, NULL, NULL, n.applied_scenario, l.applied_scenario, NULL, NULL, NULL, COUNT(*)
+FROM n JOIN `onyga-482313.OI.FACT_PREDICTION_GRADE` l
+  ON l.scenario = 'DO_NOTHING' AND l.regrade_seq = 0 AND l.predictor = n.predictor AND l.variant = n.variant AND l.as_of = n.as_of
+ AND l.campaign_id = n.campaign_id AND l.keyword_id = n.keyword_id
+WHERE n.keyword_id NOT IN (SELECT keyword_id FROM fx)
+GROUP BY n.predictor, n.applied_scenario, l.applied_scenario
+ORDER BY part, keyword_id, as_of, predictor, v174, v173;
+```
+
+```sql
+-- 4. seq 0 (v27.173) against seq 1 (v27.174), per predictor
+SELECT a.predictor, a.applied_scenario AS seq0, b.applied_scenario AS seq1,
+       COUNTIF(a.scenario = 'DO_NOTHING') AS plan_rows,
+       COUNTIF(a.scenario = 'DO_NOTHING' AND (ARRAY_TO_STRING(a.matched_change_ids, ',') <> ARRAY_TO_STRING(b.matched_change_ids, ',')
+                                          OR ARRAY_TO_STRING(a.other_change_ids, ',') <> ARRAY_TO_STRING(b.other_change_ids, ','))) AS ids_moved,
+       COUNTIF(a.is_applied) AS applied0, COUNTIF(b.is_applied) AS applied1,
+       COUNTIF(a.scenario = 'DO_NOTHING' AND (a.real_clicks <> b.real_clicks OR ABS(a.real_spend - b.real_spend) > 0.005)) AS real_moved,
+       COUNTIF(a.scenario = 'DO_NOTHING' AND ABS(a.real_gp - b.real_gp) > 0.005) AS gp_moved,
+       COUNTIF(a.grade <> b.grade) AS grade_moved,
+       COUNTIF(a.scenario = 'DO_NOTHING' AND a.placement_changed IS DISTINCT FROM b.placement_changed) AS plc_moved
+FROM `onyga-482313.OI.FACT_PREDICTION_GRADE` a
+JOIN `onyga-482313.OI.FACT_PREDICTION_GRADE` b
+  ON b.regrade_seq = 1 AND a.predictor = b.predictor AND a.variant = b.variant AND a.as_of = b.as_of
+ AND a.campaign_id = b.campaign_id AND a.keyword_id = b.keyword_id AND a.scenario = b.scenario
+WHERE a.regrade_seq = 0
+GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
+```
+
+```sql
+-- 5. the report card rows that read the applied scenario
+SELECT row_type, predictor, scenario, n_rows, ROUND(real_spend, 2) AS real_spend, ROUND(mae_net_share, 4) AS mae_net_share,
+       ROUND(bias_share, 4) AS bias_share, ROUND(side_accuracy, 4) AS side_accuracy,
+       ROUND(counterfactual_net_per_alloc, 4) AS cf_net_per_alloc, ROUND(dn_net_per_dollar, 4) AS dn_net_per_dollar,
+       n_other_action, n_act_no_matching_action, lift_rows
+FROM `onyga-482313.OI.T_PREDICTION_SCORECARD`
+WHERE family = 'ALL' AND level = 'SINCE_START' AND row_type IN ('ACCURACY', 'MONEY', 'HONESTY')
+ORDER BY row_type, predictor, scenario
 ```
