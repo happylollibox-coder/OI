@@ -510,7 +510,7 @@ each with its own check and negative control.
   nights on a 3-day window.
 - [x] **F4 the scorecard's clock.** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` date nights on the New York
   date that keys `as_of` since Task 6; fix the view description that still says "below 10".
-- [ ] **F5 spec P-7.** Restate P-7's "ties by clicks" to point at P-20 (zero-score candidates by money
+- [x] **F5 spec P-7.** Restate P-7's "ties by clicks" to point at P-20 (zero-score candidates by money
   burned, then clicks).
 - [ ] **F6 SEAT_REQUEST R02.** It claims the ledger matches the plan's seats "count and content" but
   subtracts counts (it read −1). Compare the key sets both ways; the value is never negative.
