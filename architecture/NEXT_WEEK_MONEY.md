@@ -1233,8 +1233,9 @@ settled record clearing the bar with the window's order floor met).
 
 `SP_BUILD_NEXT_WEEK_PLAN` reads `V_PLAN_WINDOW_JUDGMENT` once and turns the judgement into money.
 It writes one partition of `FACT_PLAN_NEXT_WEEK` per night — **both plans**, `B` live and `A` in
-shadow (P-9) — and nothing else. It is idempotent (it rewrites only today's `as_of`) and
-deterministic (every ordering reaches the keyword key). Orchestrator step **20.8c**, after the seat
+shadow (P-9) — and nothing else. It is idempotent (it rewrites only today's `as_of`, and since
+v27.170 only until Los Angeles midnight of it — the freeze of learning piece 2, Ori's ruling D2 (c);
+`architecture/LEARNING.md` §1 "The freeze") and deterministic (every ordering reaches the keyword key). Orchestrator step **20.8c**, after the seat
 ledger at 20.8b, because a continuing occupant's seat number comes from the ledger that step
 maintains and the judgement reads the snapshot 20.8 writes.
 
@@ -1764,7 +1765,10 @@ stays on Los Angeles** — the window fence `window_to = LEAST(watermark − 1, 
 settle ages, `settled`, the hold's settle clock (`today_la > hold_settles_on`, an ads date) and the
 holdout date — because ads days are Los Angeles days. So within one New York night the window can
 move a day between the 01:35 and 04:10 New York passes: fresher evidence for the same night, under
-the same calendar state.
+the same calendar state. *Since v27.170 (2026-10-03, learning piece 2 Task 3, ruling D2 (c)) the
+04:10 New York pass no longer rewrites the night: it runs after Los Angeles midnight of the night's
+`as_of`, when a written night is final, so the night stands on the 01:35 pass's window
+(`architecture/LEARNING.md` §1 "The freeze").*
 
 **Partitions before v27.160 are keyed on the Los Angeles date.** The eight built after 22:00 Los
 Angeles — 2026-08-23 … 08-28, 09-28 and 09-30 — carry an `as_of` one day before the New York date of

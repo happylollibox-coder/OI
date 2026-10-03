@@ -6,9 +6,10 @@ rulings D1–D6 and the evidence behind them in §14)
 **Doctrine:** `architecture/THREE_LAYERS.md` §6 (every layer gets better on its own; the Brain keeps
 the ledger)
 **Status:** Task 1 (2026-10-03) wrote this SOP before any code. Task 2 (2026-10-03) seeded the
-LEARNING settings (§3; §10 "Task 2"). Nothing else below is deployed yet: the freeze is Task 3, the
-ledger Task 4, the grader and the report card Task 5, the schedule and the health checks Task 6, the
-contract suite Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
+LEARNING settings (§3; §10 "Task 2"). Task 3 (2026-10-03) deployed the freeze and `builder_version`
+(§1 "The freeze"; §10 "Task 3"). Nothing else below is deployed yet: the ledger is Task 4, the
+grader and the report card Task 5, the schedule and the health checks Task 6, the contract suite
+Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
 sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
@@ -63,6 +64,49 @@ forecasts. Every night stored before piece 2 was written after Los Angeles midni
 ledger therefore starts each horizon on the first full Los Angeles day after `built_at`, and the
 builder (Task 3) refuses to rewrite a night once Los Angeles midnight of its `as_of` has passed. A
 first write is always allowed: a late plan is still a plan, and its horizon simply starts later.
+
+**The freeze — a night is final once it has begun (D2 (c); `SP_BUILD_NEXT_WEEK_PLAN` v27.170,
+deployed by Task 3).**
+
+- **The rule.** Before it touches tonight's partition (`as_of_d`, the New York date), the builder
+  reads whether a partition for that night exists and what the Los Angeles date is. A written night
+  whose Los Angeles midnight has passed (`CURRENT_DATE('America/Los_Angeles') >= as_of_d`) is not
+  rewritten: the builder selects `FROZEN: partition <as_of> was written at <built_at>; its first day
+  has begun; not rewritten (…)` as `log_message` and returns normally, so `LOG_PIPELINE_RUNS`
+  records OK and `plan_pass_failed` stays GREEN, and `SP_APPEND_SEAT_REQUEST`, the next step,
+  re-reads the same partition. A night with no partition is written whenever the builder runs — a
+  late first write — and the ledger starts its horizon later instead (above).
+- **Read twice.** At entry, so a frozen pass reads one partition and never the judgement view; and
+  again just before the `DELETE`, so a build that started before Los Angeles midnight and reaches the
+  write after it does not rewrite (`built_at` is stamped before that second reading, so a rewrite it
+  lets through was stamped before midnight). Both readings come before R11's calendar-state guard: a
+  frozen night returns OK whatever state it was written under.
+- **`builder_version`** is written on every row: the `vNN.NNN` of the builder's header and
+  description (`builder_version_d` in the body; the three are bumped together). NULL on rows written
+  before v27.170 (migration `scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql`).
+- **Which pass writes a night.** The orchestrator's three scheduled queries start at 05:00, 07:35
+  and 16:00 UTC (BigQuery scheduled-query times, UTC all year). A night is keyed on the New York
+  date, so a pass can rewrite it only between New York midnight and Los Angeles midnight of that
+  date — 04:00–07:00 UTC under daylight time, 05:00–08:00 UTC under standard time — and writes it
+  for the first time whenever, on that date, it finds no partition. The 05:00 UTC pass's plan step
+  runs inside that span (the Los Angeles evening before `as_of`), so it is each night's first write;
+  the 07:35 and 16:00 UTC passes' plan step runs after Los Angeles midnight, finds the night written
+  and is a no-op. Two edges: under standard time the 07:35 UTC pass would
+  still rewrite if its plan step reached the builder before 08:00 UTC, which the rule allows (before
+  midnight); and if the 05:00 UTC pass's build fails, the 07:35 UTC pass writes the night as its first
+  write, after Los Angeles midnight, and that night's horizon starts a day later.
+- **What it costs in freshness.** The judge fences the window at two days before the Los Angeles
+  date of the build (`window_to = LEAST(watermark − 1, today_la − 2)`). The 05:00 UTC pass builds
+  on the Los Angeles day before `as_of`, so the window it judges ends three days before `as_of`; the
+  later passes, a Los Angeles day on, would have judged a window ending two days before. A night now
+  stands on the older window — one day less evidence — and the later passes' restatement of the
+  window's days is not taken in. The measured windows of one night are in §10 "Task 3".
+- **Checked by** `FACT_PLAN_NEXT_WEEK_acceptance.sql` F1 (no night written since the deploy was
+  rewritten after Los Angeles midnight of its `as_of`; whether a write was the night's first is read
+  from its own `DELETE` in `INFORMATION_SCHEMA.JOBS_BY_PROJECT` — a first write removes nothing) and
+  F2 (every row written since the deploy carries a `builder_version`, the deployed builder's on rows
+  written since its deploy), each with an emptiness term; controls in
+  `scripts/bigquery/tests/check_plan_clock_controls.py`.
 
 **Why a ledger row never changes after its night is final.** The view reads only stored columns of
 a night that is no longer rewritten, the settings history (append-only, `FACT_THRESHOLD_HISTORY`)
@@ -353,7 +397,9 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    missing keys; never deletes or updates; its last statement is `CALL SP_SNAPSHOT_THRESHOLDS()`, so
    the history holds them), then `scripts/bigquery/tests/LEARNING_SETTINGS_acceptance.sql`.
 2. **The freeze** (Task 3): `scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql` (the
-   column), then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the guard and `builder_version`).
+   column), then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the guard and `builder_version`), then
+   `FACT_PLAN_NEXT_WEEK_acceptance.sql` (F1 and F2 read their emptiness terms until the first night
+   written after the deploy) and `check_plan_clock_controls.py` on a simulated pass.
 3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`.
 4. **The grader** (Task 5): `tables/FACT_PREDICTION_GRADE.sql`, `tables/T_PREDICTION_SCORECARD.sql`,
    then `procedures/SP_GRADE_PREDICTIONS.sql`, then its first CALL (the August nights grade).
@@ -395,6 +441,8 @@ and confirms the column names in §5.
   or one channel stalled while the other loads, grades as zero clicks.
 - **"Do nothing" rests on the change record.** A keyword is DO_NOTHING-applied when no change was
   seen on it or its campaign. A stalled change feed would look the same as a quiet week.
+- **A night stands on its first pass's window** (§1, "The freeze"): one day older than a later pass
+  of the same night would have judged, and blind to that pass's restatement of the window's days.
 - **Not day-over-day.** One window is noise; the regression check compares spans of
   `MIN_GRADED_WINDOWS` windows.
 - **No minimum-investment line may exist for a long time.** At the 0.80 bar every plan row can read
@@ -554,3 +602,110 @@ the new rows; 446.3 slot-seconds, 104 s; its `TMP_THIST_*` tables dropped.
          COUNTIF(clk90 IS NULL) AS keys_no_snapshot
   FROM snap GROUP BY as_of ORDER BY as_of;
   ```
+
+### Task 3 — the freeze and `builder_version` (2026-10-03)
+
+**Deployed.** `scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql` at 17:34:46 UTC (job
+`t3_migration_1791048884`): `FACT_PLAN_NEXT_WEEK.builder_version STRING`, ordinal 109 of 109; run
+again at 17:35:00 UTC, a no-op (`t3_migration_rerun_1791048898`). Mirrored in
+`scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql`. `SP_BUILD_NEXT_WEEK_PLAN` v27.170 at 17:41:54 UTC
+(`INFORMATION_SCHEMA.ROUTINES.last_altered`; job `t3_deploy_builder_1791049311`), with its comment
+lines stripped. Before it, the deployed v27.169 body equalled HEAD's file (comment lines stripped,
+whitespace normalized); after it, the deployed body equals this file the same way. `config.yaml`:
+`FACT_PLAN_NEXT_WEEK` (description, the migration in `source_files`) and `SP_BUILD_NEXT_WEEK_PLAN`
+(description). `architecture/NEXT_WEEK_MONEY.md` §3: two sentences that said every pass rewrites the
+night now point here. No real build ran: the 10-03 night is frozen from the deploy on (its Los
+Angeles midnight passed at 07:00 UTC), and the first night v27.170 writes is 10-04, at the 05:00 UTC
+pass of 2026-10-04. Piece-2 Task 8 runs the real builder after that midnight and shows `FROZEN`.
+
+**What the freeze stops, measured before it** (every write of the plan table since nights were keyed
+on the New York date, read 17:54 UTC): the 10-03 night was written 9 times — 1 first write (the
+05:00 UTC pass, 05:36 UTC) and 8 rewrites, all after Los Angeles midnight of 10-03 (2 by the
+orchestrator's 07:35 and 16:00 UTC passes, 6 by hand CALLs); the 10-02 night's stored write was a
+hand rewrite at 02:50 UTC on 10-03.
+
+```sql
+SELECT DATE(creation_time, 'America/New_York') AS night,
+       COUNTIF(statement_type = 'DELETE') AS writes,
+       COUNTIF(statement_type = 'DELETE' AND dml_statistics.deleted_row_count = 0) AS first_writes,
+       COUNTIF(statement_type = 'DELETE' AND dml_statistics.deleted_row_count > 0
+               AND creation_time >= TIMESTAMP(DATE(creation_time, 'America/New_York'), 'America/Los_Angeles'))
+         AS rewrites_after_la_midnight,
+       COUNTIF(statement_type = 'DELETE' AND STARTS_WITH(parent_job_id, 'scheduled_query_')) AS by_the_orchestrator
+FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE creation_time >= TIMESTAMP '2026-10-03 02:45:20+00'
+  AND state = 'DONE' AND error_result IS NULL AND statement_type IN ('INSERT', 'DELETE')
+  AND destination_table.dataset_id = 'OI' AND destination_table.table_id = 'FACT_PLAN_NEXT_WEEK'
+GROUP BY night ORDER BY night;
+```
+
+F1's own text, its cutover set to 2026-10-02 00:00 UTC, read the table as it stood at 17:34 UTC: 2
+(the 10-02 and 10-03 nights, each stored by a rewrite after Los Angeles midnight of its `as_of`; job
+`bqjob_r26caffed21880c52_000001a102d4cb72_1`, 44.8 slot-seconds).
+
+**Which pass writes, and the freshness it costs** (§1, "The freeze"). The schedules (`bq ls
+--transfer_config --transfer_location=us`): `daily_run_sp_orchestrate_morning` every day 05:00,
+`daily_run_sp_orchestrate` 07:35, `daily_run_sp_orchestrate_evening` 16:00, UTC. The plan step's
+runs in `LOG_PIPELINE_RUNS` 2026-09-29 … 10-03 started 05:34–05:43, 08:05–08:21 and 16:33–17:02 UTC
+(22:34–22:43, 01:05–01:21 and 09:33–10:02 Los Angeles). One night's windows, read by BigQuery time
+travel on the 10-03 night: the 05:36:35 UTC write (22:36 Los Angeles on 10-02) judged 09-28 … 09-30
+(`as_of` − 3); the 08:12:08 and 16:34:13 UTC rewrites judged 09-29 … 10-01 (`as_of` − 2). Under the
+freeze the first stands.
+
+```sql
+-- run once per read time: 2026-10-03 05:40:00, 08:20:00, 17:20:00 UTC
+SELECT as_of, MAX(built_at) AS built_at, MIN(window_from) AS window_from, MAX(window_to) AS window_to,
+       DATE_DIFF(as_of, MAX(window_to), DAY) AS as_of_minus_window_to
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` FOR SYSTEM_TIME AS OF TIMESTAMP '2026-10-03 05:40:00+00'
+WHERE as_of = '2026-10-03' GROUP BY as_of;
+```
+
+(Time travel reaches back 7 days; after 2026-10-10 the plan step's times are still readable from
+`LOG_PIPELINE_RUNS` and the windows only from a night written before and after a later pass.)
+
+**The guard, proved on a copy of the builder** (no real rewrite). One judgement snapshot,
+`OI._tmp_t3_judge` (17:34 UTC, job `t3_judge_snap_1791048876`, 366.6 slot-seconds). The procedure
+copy `OI._tmp_t3_build(la1, la2)` is this file with its comment lines stripped and four swaps: the
+plan table → `OI._tmp_t3_plan` (a `COPY` of `FACT_PLAN_NEXT_WEEK` after the migration), the view →
+the snapshot, and the two Los Angeles readings → `COALESCE(la1 | la2, CURRENT_DATE('America/Los_Angeles'))`
+(NULL = the clock). The scratch tables expire 2026-10-10; the three procedure copies were
+dropped after the run.
+
+| case | call | what happened | job, slot-seconds |
+|---|---|---|---|
+| first write after Los Angeles midnight | 10-03 night removed from the copy; `(NULL, NULL)` at 10:44 Los Angeles 10-03 | written: 712 rows, `builder_version = 'v27.170'` on all, `built_at` 17:44:03 UTC; its `DELETE` removed 0, its `INSERT` wrote 712 | `t3_caseB2_1791049335`, 657.0 |
+| rewrite after Los Angeles midnight | `(NULL, NULL)` again | `FROZEN: partition 2026-10-03 was written at 2026-10-03 17:44:03 UTC; its first day has begun; not rewritten (…)` at entry; no `DELETE` or `INSERT`; 1.6 s | `t3_caseC2_1791049500`, 0.12 |
+| rewrite before Los Angeles midnight | copy `OI._tmp_t3_plan2`; `(10-02, 10-02)` | rewritten: its `DELETE` removed 712, `built_at` 17:44:03 → 17:46:40 UTC | `t3_caseD_1791049524`, 501.3 |
+| a build that crosses Los Angeles midnight | `(10-02, 10-03)` | built (`INSERT INTO final`), then `FROZEN … 17:46:40 UTC …` at the second reading; no `DELETE` or `INSERT` on the copy; the night still 17:46:40 | `t3_caseE_1791049666`, 705.0 |
+
+The same two first cases ran before the deploy too (`t3_caseB_1791048940`, 831.1; `t3_caseC_1791049200`,
+0.17), with the same outcome. **No verdict, seat or move changes:** HEAD's v27.169 body, swapped the
+same way into `OI._tmp_t3_build169` / `OI._tmp_t3_plan169` (`t3_v169_dry_1791049178`, 490.3), and
+the v27.170 body (`t3_caseB_1791048940`) wrote equal 10-03 nights on the snapshot: 712 rows, the
+same keys, all 107 columns other than `built_at` and `builder_version` equal value for value.
+
+**Checked.** `FACT_PLAN_NEXT_WEEK_acceptance.sql` gained F1 and F2 (cutover 2026-10-03 17:41:54+00,
+the deploy). On the live table at 17:51 UTC: 37 rows PASS, F1 1 and F2 1 from their emptiness terms
+alone — no night written since the deploy (`t3_acc_live_1791049874`, 734.4 slot-seconds, 330,785,449
+bytes). They read 0 only after the 10-04 night is written; Task 8 re-runs the suite.
+`check_plan_clock_controls.py` gained the write record (`--jobs-table-id`) and six copies; run on the
+simulated pass above (`--plan-table onyga-482313.OI._tmp_t3_plan --jobs-table-id _tmp_t3_plan
+--judge-table onyga-482313.OI._tmp_t3_judge`), exit 0, all 17 copies exercised (job
+`bqjob_r7d71ccc3fee762d1_000001a102e149e3_1`, 5,558.7 slot-seconds, 678,044,832 bytes):
+
+- LIVE — the late first write (17:44:03 UTC, after Los Angeles midnight, its `DELETE` removing 0):
+  41 readings 0 (the file's 39, and V_ENGINE_HEALTH c23's two).
+- NC_EMPTY: F1 1, F2 1.
+- NC_F1_SECOND_WRITE_AFTER_MIDNIGHT (the plan's control — the write's `DELETE` recorded as removing
+  the night's 712 rows): F1 1. NC_F1_WRITE_NOT_ON_RECORD (its `INSERT` removed): F1 1.
+- HC_F1_REWRITE_BEFORE_MIDNIGHT (that rewrite re-keyed to 10-04 and stamped 22:35 Los Angeles on
+  10-03, its two jobs moved with it): F1 0, F2 0. NC_F1_REWRITE_AT_MIDNIGHT (stamped 00:00 Los
+  Angeles on 10-04): F1 1.
+- NC_F2_NULL (the plan's control, one row NULL): F2 2 — no version, and not the deployed one.
+  NC_F2_STALE_VERSION (one row `'v27.169'`): F2 1.
+- Unasserted, printed: NC_K1_NOT_NY_DATE and NC_K3_NO_SHADOW also read F1 1 (a night restamped
+  22:40 Los Angeles has no `INSERT` in the hour after it; a night without its shadow rows no longer
+  has the row count its `INSERT` wrote).
+
+The first collect expected NC_F2_NULL to read 1; it read 2, because a NULL fails both of F2's terms.
+The expectation was corrected in the script and the same job re-collected (exit 0).

@@ -5,7 +5,9 @@
 --   plan 'A'  the SHADOW plan — the ladder decides the side, the window decides the amount.
 -- Nothing is ever deleted except today's own partition, which the builder rewrites when it re-runs
 -- (idempotent on one pass). History is the scorecard's evidence and the P-14b guard's memory of
--- what the plan said last night.
+-- what the plan said last night. From v27.170 (learning piece 2, ruling D2 (c)) a night is final
+-- once Los Angeles midnight of its as_of has passed: the builder writes it then only if it was
+-- never written (a late first write), and never rewrites it.
 --
 -- Written by SP_BUILD_NEXT_WEEK_PLAN (orchestrator Task 20.8c, Task 2 of the plan). Read by
 -- V_PLAN_WINDOW_JUDGMENT (last night's side, for P-14b), SP_SNAPSHOT_ENGINE_PROPOSALS (the PLAN
@@ -166,7 +168,9 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   -- LEFT_ALLOWANCE_SHRANK | NULL) and is_probe (the judge's LIFT nomination flag)
   seat_since                 DATE,
   seat_tenure                STRING,
-  is_probe                   BOOL
+  is_probe                   BOOL,
+  -- v27.170 (learning piece 2 Task 3, ruling D2 (c)): the builder version that wrote the row
+  builder_version            STRING
 )
 PARTITION BY as_of
 CLUSTER BY plan, family, campaign_id
@@ -273,3 +277,13 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS plan_
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS seat_since DATE;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS seat_tenure STRING;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS is_probe BOOL;
+
+-- v27.170 (2026-10-03) — THE CODE THAT WROTE THE ROW. Shipped as
+-- scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql; mirrored here. Learning piece 2,
+-- Task 3, Ori's ruling D2 (c): builder_version is the vNN.NNN of SP_BUILD_NEXT_WEEK_PLAN's header,
+-- written on every row, so the prediction ledger can name the code a forecast was made under when
+-- no setting changed. NULL on the partitions written before the column existed; no existing row is
+-- updated.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  ADD COLUMN IF NOT EXISTS builder_version STRING
+  OPTIONS (description = "v27.170 (2026-10-03, learning piece 2 Task 3, ruling D2 (c)): the version of SP_BUILD_NEXT_WEEK_PLAN that wrote the row -- the vNN.NNN opening the procedure's header and description. NULL on rows written before v27.170.");

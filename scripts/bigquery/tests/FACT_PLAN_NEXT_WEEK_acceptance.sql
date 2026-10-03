@@ -1,6 +1,7 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.168 (2026-10-03). The spec's §9 guarantees, read on the
--- latest as_of partition. EVERY ROW MUST READ PASS.
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.170 (2026-10-03). The spec's §9 guarantees, read on the
+-- latest as_of partition (F1 / F2: every night written since the v27.170 deploy). EVERY ROW MUST
+-- READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
 -- P-12, P-14. Object: scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql.
@@ -294,6 +295,42 @@
 --   row PASS (job g1_acc_new_on_old_1791032862, 236.9 slot-seconds).
 -- NEGATIVE CONTROLS: see check_plan_seat_controls.py's header (four G1 copies) and the SOP section
 -- "An incumbent is costed by the question it keeps".
+--
+-- v27.170 (2026-10-03, learning-contract piece 2 Task 3 — Ori's ruling D2 (c)). NEW: F1 (no night
+-- written since the v27.170 deploy, 2026-10-03 17:41:54 UTC, INFORMATION_SCHEMA.ROUTINES
+-- last_altered, was rewritten after Los Angeles midnight of its as_of; a late first write is
+-- allowed — read from the write's own DELETE in INFORMATION_SCHEMA.JOBS_BY_PROJECT: a first write
+-- removes nothing) and F2 (every row written since the deploy carries a builder_version, and the
+-- deployed builder's on rows written since its deploy). Each has an emptiness term.
+-- BEFORE THE FREEZE, F1's text with its cutover set to 2026-10-02 00:00 UTC, on the table as it stood
+-- (17:34 UTC): 2 — the 10-02 night (stored write 02:50:03 UTC 10-03, 19:50 Los Angeles; its DELETE
+-- removed 722 rows) and the 10-03 night (16:34:13 UTC, 09:34 Los Angeles; 712), both rewrites after
+-- Los Angeles midnight of their as_of (job bqjob_r26caffed21880c52_000001a102d4cb72_1, 44.8
+-- slot-seconds, 26,042,060 bytes).
+-- RUN 2026-10-03 17:51 UTC on the live table and the deployed view: 37 rows PASS, F1 1 and F2 1 from
+-- their emptiness terms alone — no night has been written since the deploy (the 10-03 night is
+-- frozen; the first is the 10-04 night, at the 05:00 UTC pass of 2026-10-04) — job
+-- t3_acc_live_1791049874, 734.4 slot-seconds, 330,785,449 bytes. They read 0 only once that night is
+-- written; piece-2 Task 8 re-runs this file.
+-- NEGATIVE CONTROLS, run 2026-10-03 17:48-17:51 UTC by scripts/bigquery/tests/check_plan_clock_controls.py
+-- --plan-table onyga-482313.OI._tmp_t3_plan --jobs-table-id _tmp_t3_plan --judge-table
+-- onyga-482313.OI._tmp_t3_judge: a simulated pass — a copy of the table whose 10-03 night was removed
+-- and written again at 17:44:03 UTC (10:44 Los Angeles, its first write, after Los Angeles midnight)
+-- by the deployed v27.170 text with the plan table swapped for the copy and the judgement for the
+-- snapshot OI._tmp_t3_judge (17:34 UTC); exit 0, all 17 copies exercised (job
+-- bqjob_r7d71ccc3fee762d1_000001a102e149e3_1, 5,558.7 slot-seconds, 678,044,832 bytes):
+--   LIVE (the late first write): 41 readings 0 (39 here, H23M, H23S).
+--   NC_EMPTY: F1 1, F2 1 (with K1 K2 K3 H23S 1).
+--   NC_F1_SECOND_WRITE_AFTER_MIDNIGHT (the plan's control: the night's DELETE recorded as removing its
+--     712 rows): F1 1.  NC_F1_WRITE_NOT_ON_RECORD (its INSERT removed from the record): F1 1.
+--   HC_F1_REWRITE_BEFORE_MIDNIGHT (that rewrite re-keyed to 10-04 and stamped 22:35 Los Angeles on
+--     10-03, its jobs moved with it): F1 0, F2 0.  NC_F1_REWRITE_AT_MIDNIGHT (stamped 00:00 Los Angeles
+--     on 10-04): F1 1.
+--   NC_F2_NULL (one row NULL): F2 2 (no version, and not the deployed one).  NC_F2_STALE_VERSION (one row
+--     'v27.169'): F2 1.
+--   Unasserted moves: NC_K1_NOT_NY_DATE and NC_K3_NO_SHADOW also read F1 1 (a night stamped 22:40 Los
+--     Angeles has no INSERT in the hour after it; a night with its shadow rows removed no longer has
+--     the row count its INSERT wrote).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -1018,6 +1055,77 @@ k3 AS (
           WHERE NOT a.is_live_plan)
        + (SELECT COUNTIF(planned_bid IS NOT NULL AND STRPOS(sentence, 'carries no planned price') > 0) FROM p)
        + (SELECT IF(COUNTIF(NOT is_live_plan) = 0, 1, 0) FROM p)
+),
+-- ---- v27.170 (2026-10-03, learning piece 2 Task 3 — Ori's ruling D2 (c)): a night is final once it has begun ----
+-- The cutover is the v27.170 deploy of SP_BUILD_NEXT_WEEK_PLAN (INFORMATION_SCHEMA.ROUTINES
+-- last_altered): F1 and F2 read only partitions whose built_at is at or after it.
+-- f_dml: every write to the plan table since the cutover, from BigQuery's own job record. A build
+-- that writes runs one DELETE and one INSERT on the table, as child jobs of the script that called
+-- it (the orchestrator's pass or a hand CALL alike). The table keeps only a night's last write, so
+-- whether that write found the night already written is read from its own DELETE: a first write
+-- deletes 0 rows, a rewrite deletes the rows it replaces.
+f_dml AS (
+  SELECT parent_job_id, creation_time, statement_type,
+         dml_statistics.inserted_row_count AS ins, dml_statistics.deleted_row_count AS del
+  FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+  WHERE creation_time >= TIMESTAMP '2026-10-03 17:41:54+00'
+    AND state = 'DONE' AND error_result IS NULL
+    AND statement_type IN ('INSERT', 'DELETE')
+    AND destination_table.project_id = 'onyga-482313' AND destination_table.dataset_id = 'OI'
+    AND destination_table.table_id = 'FACT_PLAN_NEXT_WEEK'
+),
+f_part AS (  -- every night written since the cutover: its write's built_at and its rows
+  SELECT as_of, MAX(built_at) AS built_at, COUNT(*) AS n
+  FROM all_p WHERE built_at >= TIMESTAMP '2026-10-03 17:41:54+00'
+  GROUP BY as_of
+),
+f_ins AS (  -- the INSERT that stored it: the first INSERT into the table after its built_at
+  SELECT p.as_of, p.built_at, p.n, w.parent_job_id, w.ins_at, w.ins
+  FROM f_part p
+  LEFT JOIN (SELECT p2.as_of, i.parent_job_id, i.creation_time AS ins_at, i.ins
+             FROM f_part p2 JOIN f_dml i
+               ON i.statement_type = 'INSERT' AND i.creation_time >= p2.built_at
+              AND i.creation_time < TIMESTAMP_ADD(p2.built_at, INTERVAL 1 HOUR)
+             QUALIFY ROW_NUMBER() OVER (PARTITION BY p2.as_of ORDER BY i.creation_time) = 1) w
+    ON w.as_of = p.as_of
+),
+f_del AS (  -- that build's DELETE of the night: the last DELETE of the same script before the INSERT
+  SELECT f.*, d.del
+  FROM f_ins f
+  LEFT JOIN f_dml d ON d.parent_job_id = f.parent_job_id AND d.statement_type = 'DELETE'
+                   AND d.creation_time <= f.ins_at
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY f.as_of ORDER BY d.creation_time DESC) = 1
+),
+-- F1 (D2 (c)): no night written since v27.170 was REWRITTEN after Los Angeles midnight of its as_of
+-- (TIMESTAMP(as_of, 'America/Los_Angeles')). A write stamped after it is allowed only as the
+-- night's first write (its DELETE removed nothing): a late plan is still a plan. A night whose
+-- write is not on the job record (no INSERT of its row count within the hour after its built_at,
+-- or no DELETE before that INSERT in the same script) cannot be shown to be a first write and
+-- counts. Emptiness: no night written since the cutover reads 1.
+f1 AS (
+  SELECT 'F1 D2 (c): no night written since v27.170 was rewritten after Los Angeles midnight of its as_of (a late first write is allowed)',
+         (SELECT COUNTIF(parent_job_id IS NULL OR ins IS DISTINCT FROM n OR del IS NULL
+                         OR (built_at >= TIMESTAMP(as_of, 'America/Los_Angeles') AND del > 0))
+          FROM f_del)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM f_part)
+),
+-- F2 (D2 (c)): every row written since v27.170 carries a builder_version (vNN.NNN), and every row
+-- written since the DEPLOYED builder was deployed carries the version its description opens with
+-- (so a deploy that forgets to bump builder_version_d is caught on its first night). The routine
+-- must be found with a version (else 1). Emptiness: no row written since the cutover reads 1.
+f_rt AS (
+  SELECT REGEXP_EXTRACT(ddl, r'description\s*=\s*"(v\d+\.\d+)') AS v, last_altered
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES`
+  WHERE routine_name = 'SP_BUILD_NEXT_WEEK_PLAN'
+),
+f2 AS (
+  SELECT 'F2 D2 (c): every row written since v27.170 carries a builder_version, the deployed builder version on rows written since its deploy',
+         (SELECT COUNTIF(builder_version IS NULL OR NOT REGEXP_CONTAINS(builder_version, r'^v\d+\.\d+$'))
+          FROM all_p WHERE built_at >= TIMESTAMP '2026-10-03 17:41:54+00')
+       + (SELECT COUNTIF(a.builder_version IS DISTINCT FROM r.v)
+          FROM all_p a JOIN f_rt r ON a.built_at >= r.last_altered)
+       + (SELECT IF(COUNT(*) = 1 AND MAX(v) IS NOT NULL, 0, 1) FROM f_rt)
+       + (SELECT IF(COUNTIF(built_at >= TIMESTAMP '2026-10-03 17:41:54+00') = 0, 1, 0) FROM all_p)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -1032,5 +1140,5 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM m2 UNION ALL SELECT * FROM m3 UNION ALL SELECT * FROM t1
       UNION ALL SELECT * FROM t2 UNION ALL SELECT * FROM t3 UNION ALL SELECT * FROM t4
       UNION ALL SELECT * FROM t5 UNION ALL SELECT * FROM k1 UNION ALL SELECT * FROM k2
-      UNION ALL SELECT * FROM k3)
+      UNION ALL SELECT * FROM k3 UNION ALL SELECT * FROM f1 UNION ALL SELECT * FROM f2)
 ORDER BY check_name;
