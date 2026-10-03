@@ -49,8 +49,9 @@
 -- does not materialise a view or a non-recursive WITH clause: each reference is evaluated again (its
 -- documentation). The script reads the view ONCE (CREATE TEMP TABLE jbase AS SELECT ... FROM the view)
 -- and runs this file's text on that copy: the proof's run of it, job
--- bqjob_r4ff38afd8a4ee55e_000001a100b7884b_1, started 07:43:14 UTC, finished in 207.6 s at 9,315.5
--- slot-seconds, exit 0, LIVE 30 checks 0, 40 copies as expected.
+-- bqjob_r4ff38afd8a4ee55e_000001a100b7884b_1 (the script before F3's three C22 copies), started
+-- 07:43:14 UTC, finished in 207.6 s at 9,315.5 slot-seconds, exit 0, LIVE 30 checks 0, all 37
+-- doctored copies (40 expected values) as expected.
 -- F7 RUN, these three lines on the deployed v27.165 view, 2026-10-03: job
 -- bqjob_r147f2d7b2d5a0b7c_000001a1015acda9_1, 10:41:35 - 10:45:41 UTC (246.2 s), 14,818.3 slot-seconds,
 -- exit 0, LIVE 30 checks 0, all 40 doctored copies as expected; its one read of the view (child job
