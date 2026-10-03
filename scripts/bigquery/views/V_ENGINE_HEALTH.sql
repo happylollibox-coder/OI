@@ -51,6 +51,12 @@
 -- counts a candidate's NONE on anything but an unseated probe, or an OPEN_PROBE on anything but a
 -- seated one (reads FACT_PLAN_NEXT_WEEK.is_probe, migration 2026-10-02_plan_seat_tenure_columns.sql).
 -- Only that CTE changed.
+-- Negative controls, 2026-10-03 02:01–02:10 UTC (job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1), by
+-- scripts/bigquery/tests/check_plan_seat_controls.py. It ran this file's own pl, plb and c25 text,
+-- with comment lines stripped, on doctored copies of FACT_PLAN_NEXT_WEEK, after finding that text in
+-- the deployed definition (INFORMATION_SCHEMA.VIEWS). Results: LIVE measured 0, GREEN. A seated
+-- non-probe's move NONE: measured 1, RED (the NONE term). A seated non-probe's move OPEN_PROBE:
+-- measured 1, RED (the OPEN_PROBE term). An empty plan: measured 0, RED.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),

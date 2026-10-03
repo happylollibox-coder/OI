@@ -103,28 +103,51 @@
 -- rows PASS (job t5_acc_live_1790990459, 1,513.2 slot-seconds). On the v27.158 partition of the same
 -- night (17:03 UTC, judgement snapshot OI._tmp_t5_judge): C14 140, T1 118, T2 1, T3 118, T4 22, T5 61,
 -- every other row 0.
--- NEGATIVE CONTROLS, run 2026-10-02 (Los Angeles) by scripts/bigquery/tests/check_plan_seat_controls.py
--- (this file's and PLAN_SEAT_REQUEST_acceptance.sql's own text on doctored, materialized copies of
--- every partition, the judgement read from OI._tmp_t5_judge, which equals the deployed view's output
--- the CALL wrote from row for row; exit 0; 3,642.6 slot-seconds):
---   LIVE: 45 checks (34 here, 11 there), every one 0.
---   NC_EMPTY: C23 1, T1 1, T2 1, T3 1, T4 1, T5 1.
+-- NEGATIVE CONTROLS, run 2026-10-03 02:01–02:10 UTC by scripts/bigquery/tests/check_plan_seat_controls.py
+-- (this file's, PLAN_SEAT_REQUEST_acceptance.sql's and V_ENGINE_HEALTH's c25 own text on doctored,
+-- materialized copies of every partition, the latest being the 2026-10-02 partition v27.159 wrote at
+-- 01:20 UTC, the judgement read from OI._tmp_t5_judge (C13 reads 0 on LIVE: the partition reproduces
+-- it row for row); job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1, 5,789.9 slot-seconds; exit 0, all
+-- 28 copies exercised. A copy whose row to doctor is absent from the partition reads NOT EXERCISED,
+-- and the script exits 1):
+--   LIVE: 47 readings, every one 0: 34 here, 11 there, and plan_one_move_per_notgood's measured value
+--     (HM) and RED status (HS).
+--   NC_EMPTY: C23 1, T1 1, T2 1, T3 1, T4 1, T5 1, HS 1.
 --   HC_T1_INCUMBENT (a continuing live seat given a coherent contract seated the night before): T1 0,
 --     C23 0, T3 0.  NC_T1_PRICE_MOVED (+$0.10): T1 1.  NC_T1_QUESTION_MOVED (+1 click): T1 1.
 --   NC_T1_TENURE_WITHOUT_CONTRACT (a NEW seat tagged INCUMBENT): T1 2 (tenure term + sentence term).
---   NC_C23_SEAT_DROPPED (the plan's control: the previous partition holds a seat dated tomorrow for a
---     keyword tonight's walk queues): C23 1, T1 1.
---   HC_T1_EVICTION_JUSTIFIED (that seat's contract at $1,000 a day, tonight LEFT_ALLOWANCE_SHRANK):
---     C23 0, T1 0.  NC_T1_EVICTION_UNJUSTIFIED (the same at $0.01 a day): C23 0, T1 1.
+--   NC_C23_SEAT_DROPPED (the plan's control: the previous partition holds a seat dated tomorrow, at
+--     $0.01 a day, for a keyword tonight's walk queues): C23 1, T1 1.
+--   HC_T1_EVICTION_JUSTIFIED (that seat's contract at $1,000 a day, tonight LEFT_ALLOWANCE_SHRANK and
+--     "TENURE ENDS EARLY"): C23 0, T1 0.  NC_T1_SHRANK_SILENT (the same without "TENURE ENDS EARLY"):
+--     C23 0, T1 1.  NC_T1_EVICTION_UNJUSTIFIED (the justified copy at $0.01 a day): C23 0, T1 1.
 --   NC_C23_RENUMBERED (a continuing occupant given number 900): C23 1, T2 1.
 --   NC_T2_RETURN_RENUMBERED (a seat back after an absence, its old number honoured, given 901): T2 1.
 --   HC_C17_PLAN_A (a plan-A seat given a number the register holds for another keyword): C17 0 (C23
 --     and T2 read 1, as they must).  NC_C17_PLAN_B (the same on the live plan): C17 2.
 --   NC_T3_CLICKS_DOUBLED (the plan's control): T3 1, S03 1.
---   NC_T4_PROBE_PARKED (an unseated probe parked with the v27.158 words): T4 1, C14 1.
---   NC_T4_OPEN_PROBE_SILENT: T4 1.  NC_C14_PROBE_REPRICED: C14 1.  NC_C06_NONE_ON_SEAT: C06 1.
+--   NC_T4_PROBE_PARKED (an unseated, unserved probe parked with the v27.158 words): T4 1, C14 1.
+--   NC_T4_NONE_SILENT (an unseated probe's sentence without "PROBE NOT OPENED TONIGHT; NOTHING
+--     UPLOADED"): T4 1.  NC_T4_NONE_PRICED (an unseated probe's NONE with a $0.20 bid): T4 1.
+--   NC_T4_OPEN_PROBE_SILENT: T4 1.  NC_C14_PROBE_REPRICED: C14 1.
+--   NC_C12_OPEN_PROBE_ABOVE_CEILING (the seated probe priced $0.10 above GREATEST(current bid,
+--     $2.00)): C12 1.
+--   NC_S07_PROBE_GOAL_NOT_MULTIPLE (the seated probe asking one click more than whole days, its CPC
+--     restated so clicks x CPC / horizon still equals its implied spend): S07 1, T3 1, S03 0.
+--   NC_C06_NONE_ON_SEAT (a seated non-probe's move NONE): C06 1, C19 1 (NONE is a queue move), HM 1.
+--   NC_H_OPEN_PROBE_ON_SEAT (a seated non-probe's move OPEN_PROBE): C14 1, HM 1.
+--   NC_C14_PROBE_FLAG_NULL (a seated candidate's is_probe NULL): C14 1.
+--   NC_S11_BOGUS_BASIS (a seat's request_basis 'BOGUS'): S11 1, T3 1.
 --   NC_T5_RANK_SWAPPED (ranks 1 and 2 of one family): T5 2.
 --   NC_S06_HORIZON (a new ordinary seat asking w_clk under HORIZON_WINDOW_RATE): S06 1, T3 1.
+--   The script's own guards were controlled the same day on the same job. With the PICK row's
+--   probe_open_rn nulled, the four copies that doctor the seated probe read NOT EXERCISED and the
+--   script exits 1. With one word of the file's c25 changed, the script reports "the deployed
+--   V_ENGINE_HEALTH does not carry this file's c25 text" and exits 1.
+--   The first run of the script (commit fef7cd1) had no copy for C12, C19, C14's is_probe term, T1's
+--   sentence term, T4's unseated-probe term, S07, S11 or the board. Its four conditional
+--   expectations expected 0 when the row they doctor was absent, so a control that tested nothing
+--   passed.
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`

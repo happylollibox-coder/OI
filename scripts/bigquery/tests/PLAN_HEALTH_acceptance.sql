@@ -69,6 +69,11 @@
 -- (partition 2026-10-02) had 6 rows under the guard preconditions, all LAST_DAY_NOT_STRONG, and
 -- 0 HELD, so C06a fired on a real row and C06b was vacuous, as its name says.
 --
+-- plan_one_move_per_notgood (V_ENGINE_HEALTH c25) has no twin in this file: C01 only checks that it
+-- is on the board. Its negative controls run the view's OWN c25 text on doctored copies of the plan,
+-- in scripts/bigquery/tests/check_plan_seat_controls.py (readings HM / HS); the results are in
+-- V_ENGINE_HEALTH.sql's header (v27.159).
+--
 -- The '(vacuous when ...)' controls C06a/C06b, and C04a's '(nothing to remove ...)', say so in
 -- their names: a negative control needs a row to doctor, and a live plan with no row under the
 -- guard and nothing held, or a board with no RED, is a legitimate state, not a defect — the live

@@ -12,9 +12,13 @@
 -- FACT_PLAN_NEXT_WEEK_acceptance.sql T1. Bases written before v27.159 (WINDOW_CLICKS, PROBE_GOAL)
 -- keep their own arithmetic, for a latest partition written before it.
 -- RUN 2026-10-02 (Los Angeles) on the v27.159 partition: 11 rows, every one 0. NEGATIVE CONTROLS, by
--- scripts/bigquery/tests/check_plan_seat_controls.py on doctored copies of the plan table (exit 0):
+-- scripts/bigquery/tests/check_plan_seat_controls.py on doctored copies of the plan table (2026-10-03
+-- 02:01–02:10 UTC, job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1, exit 0, every copy exercised):
 -- LIVE 0 on all 11; one seat's clicks doubled: S03 1 (and S06 1); one new ordinary seat asking w_clk
--- under HORIZON_WINDOW_RATE: S06 1 (and S03 1). Results also in FACT_PLAN_NEXT_WEEK_acceptance.sql.
+-- under HORIZON_WINDOW_RATE: S06 1 (and S03 1); the seated probe (HORIZON_PROBE_GOAL) asking one click
+-- more than a whole number of days, its CPC restated so clicks x CPC / horizon still equals its
+-- implied spend: S07 1, S03 0; one seat's request_basis 'BOGUS': S11 1. Results also in
+-- FACT_PLAN_NEXT_WEEK_acceptance.sql.
 -- =============================================================================================
 WITH latest AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`

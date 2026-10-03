@@ -1646,9 +1646,24 @@ bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"          # a long job: submit with --nosync and poll
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
   "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
-# the negative controls of C06 C12 C14 C17 C19 C23 T1..T5 and S03 S06 (exit 0 = every control as expected)
-python3 scripts/bigquery/tests/check_plan_seat_controls.py --judge-table <a snapshot of the judgement>
+# the negative controls of C06 C12 C14 C17 C19 C23 T1..T5, S03 S06 S07 S11 and V_ENGINE_HEALTH
+# plan_one_move_per_notgood (exit 0 = every control exercised and as expected; 1 = a mismatch, or a
+# control NOT EXERCISED because the partition has no row for it to doctor). A long job (one script,
+# 121 statements): submit, then collect, which polls with bq wait.
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit --judge-table <a snapshot of the judgement>
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --collect <the JOB it printed>
 ```
+
+The negative controls, run 2026-10-03 02:01–02:10 UTC on every partition with the 2026-10-02
+v27.159 partition as the latest and the judgement read from `OI._tmp_t5_judge` (job
+`bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1`, 5,789.9 slot-seconds): exit 0. LIVE read 0 on all 47
+readings (34 plan checks, 11 `PLAN_SEAT_REQUEST` checks, the board's `plan_one_move_per_notgood`
+measured value and RED status); all 28 doctored copies were exercised and each read its expected
+value. The per-copy results are in `FACT_PLAN_NEXT_WEEK_acceptance.sql`'s header. The commit before
+this run claimed controls for C12 and C19 that the script did not contain, and it had no control for
+the C14 `is_probe IS NULL` term, the T1 "TENURE ENDS EARLY" sentence term, the T4 unseated-probe
+term, S07, S11, or the board's two v27.159 terms. Its four conditional expectations expected 0 when
+the row they doctor was absent, so a control that tested nothing passed.
 
 Measured at deploy (2026-10-02 Los Angeles, 01:14–01:22 UTC 10-03): the migration added three columns
 and restated two `FACT_SEAT_REQUEST` column descriptions; the deployed bodies of both procedures and
