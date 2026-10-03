@@ -185,7 +185,12 @@ pred_net    = pred_gp - pred_spend
   review; spec §6, §14.1, §14 E8): Ori rules this clause before this task starts.** The form above
   also cuts campaigns whose ACT run rate is already at or below the new budget; the recommended form
   is `LEAST(1, GREATEST(planned * H, SUM(DO_NOTHING spend) * planned / current) / SUM(ACT spend))`,
-  H = `window_days`. Build the ruled form and record it in `architecture/LEARNING.md` §3.
+  H = `window_days`. The recommended form is a cap: on a campaign the plan cuts, ACT spend is capped at
+  the new budget × H, and where DO_NOTHING already overdelivers its current budget
+  (`SUM(DO_NOTHING spend) / H > current`) the cap falls back to the proportional cut. On the stored
+  nights it is the plain cap on 367 of the 369 cut campaign-nights and gives the plain cap's factor on
+  all 369 (spec §14 E8, Q7). The form above is the proportional cut D3 names; the recommended one is
+  not, so Ori chooses. Build the ruled form and record it in `architecture/LEARNING.md` §3.
   Zero-basis OPEN_PROBE rows use the brief's seat rule (spend = `seat_cost_per_day × H`, clicks at
   `planned_bid × BID_TO_CPC_RATIO_FALLBACK`, CVR and GP/order from the keyword's own settled 90-day
   record in `FACT_KEYWORD_STATE_HISTORY` at `built_at` when `settled_clk90 >= OWN_CVR_MIN_CLICKS`, else

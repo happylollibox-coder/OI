@@ -133,15 +133,24 @@ as first written  LEAST(1, Σ DO_NOTHING spend × planned / current ÷ Σ ACT sp
 recommended       LEAST(1, GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)
 ```
 
-The first form also cuts a campaign whose `ACT` run rate (Σ ACT spend ÷ H) is already at or below
-the new budget, where the budget cannot bind — a predicted difference between the scenarios on a
-lever that does not act, the movement anchoring exists to prevent; spec §14 E8 measures how much of
-what it removes falls there (query Q7). The recommended form cuts only while the `ACT` run rate is
-above the new budget, and on a campaign whose `DO_NOTHING` run rate is above its current budget
-(Σ DO_NOTHING spend ÷ H > current) the proportional term is the larger, so both forms cut it in
-proportion. A plain cap at the budget (`ACT` spend ≤ planned × H) is used by neither: `DO_NOTHING`
-already runs above the current budget in some campaigns (spec §14 E5), and a cap would cut those
-whether or not the plan moved them. Task 4 builds the form Ori rules and records it here.
+The first form is the proportional cut D3 names. It also cuts a campaign whose `ACT` run rate
+(Σ ACT spend ÷ H) is already at or below the new budget, where the budget cannot bind — a predicted
+difference between the scenarios on a lever that does not act, the movement anchoring exists to
+prevent; spec §14 E8 measures how much of what it removes falls there (query Q7).
+
+The recommended form is a cap. On a campaign the plan cuts, `ACT` spend is capped at the new
+budget × H. Where `DO_NOTHING` already overdelivers its current budget (Σ DO_NOTHING spend ÷ H >
+current), the cap falls back to the proportional cut. The algebra: when Σ DO_NOTHING ÷ H ≤ current,
+Σ DO_NOTHING × planned / current ≤ planned × H, so GREATEST takes planned × H and the factor is
+`LEAST(1, planned × H ÷ Σ ACT spend)`, the plain cap at the new budget. On the stored nights GREATEST
+takes the cap term on 367 of the 369 cut campaign-nights and the factor equals the plain cap's on all
+369 (spec §14 E8, Q7's `alt_takes_cap_term` and `alt_eq_cap`). It is not the proportional cut D3's
+words name, which is why Ori rules it.
+
+The argument against a cap (spec §14 E5: `DO_NOTHING` already runs above the current budget in some
+campaigns, and a cap would cut those whether or not the plan moved them) applies only to a cap on
+campaigns the plan does not cut. Neither form runs there, and on a cut campaign that overdelivers
+the recommended form keeps the proportional cut. Task 4 builds the form Ori rules and records it here.
 
 **A keyword with no window clicks** (`w_clk = 0`) has `DO_NOTHING` all zero, and `ACT` all zero —
 except `OPEN_PROBE`, which the plan seats to buy clicks it has never had. It is priced from the seat:
@@ -448,3 +457,23 @@ Spec §14.3 was extracted with the snippet above after the edits: eight blocks (
 Q7); Q2 … Q6b are byte-identical to the review's extraction. Run from that text at 16:40 UTC: Q1 as
 above; Q7 reproduced E8 to the cent on both copies; Q6 still lists the six piece-2 and piece-6
 objects as absent beside its two `true` controls, and Q6b 0 LEARNING rows.
+
+### Task 1 follow-up 2 — the recommended budget clause named for what it is (2026-10-03)
+
+Docs only; nothing deployed, `config.yaml` untouched. The second Task-1 review found that §3, spec
+§6, spec §14.1 and plan Task 4 Step 3 described the recommended budget clause as the proportional
+cut and said a plain cap at the budget was "used by neither". On a campaign the plan cuts and whose
+`DO_NOTHING` run rate is at or below its current budget, GREATEST takes planned × H and the
+recommended factor is exactly the plain cap at the new budget. §3, spec §6 and §14.1 and plan Task 4
+Step 3 now say so; spec §6's correction note and E5 now limit the argument against a cap to
+campaigns the plan does not cut, where neither form runs; E8 records the measurement. The clause
+stays open for Ori.
+
+Q7 gained `f_cap`, `alt_takes_cap_term`, `alt_eq_cap`, `cap_binds`, `cap_removed`, `ex_cap_per_day`
+and a third copy, `NC2` (the example's 10-03 current budget $21.00 and planned $10.00, so its
+`DO_NOTHING` $22.00 a day overdelivers). Spec §14.3 extracted with the snippet above: eight blocks;
+Q1 … Q6b byte-identical to the previous extraction, Q7 differs by those additions only. Run from that
+text at 16:54 UTC (998,673 bytes; the 10-03 partition as built at 16:34:13 UTC): every `REAL` and `NC`
+value E8 already quoted is unchanged; `REAL` cap term 367 of 369, factor equal to the cap's 369, cap
+binds 3 and removes $6.17, the same as the recommended form; `NC` 367, 369, 4, $36.82; `NC2` 366, 368,
+the recommended form $35.39 against the cap's $36.82, the example $10.48 a day against $10.00.

@@ -159,28 +159,37 @@ allocation `FN_PLAN_SCORECARD` grades, not a forecast. The catalog's `cvr_hat` a
 are not read (§14 D3, D6).
 
 **Open 2026-10-03 — the budget clause (§14.1, E8; Ori rules before piece-2 Task 4).** The clause as
-first written cuts `ACT` on campaigns whose new budget cannot bind: `Σ DO_NOTHING spend × planned /
-current` can sit below `Σ ACT spend` while the `ACT` run rate (`Σ ACT spend ÷ H`, H = the horizon's
-days) is already at or below the new budget, and the clause then removes spend the budget would not.
-On the stored nights that is almost all of what it removes (E8). Anchoring was ruled in to stop
-exactly this kind of movement on a lever that does not act (E3); E5 and the first §6 compared the
-clause only with a plain cap at the budget and never measured its own cuts. Recommended:
+first written is the proportional cut D3 names, and it cuts `ACT` on campaigns whose new budget
+cannot bind: `Σ DO_NOTHING spend × planned / current` can sit below `Σ ACT spend` while the `ACT`
+run rate (`Σ ACT spend ÷ H`, H = the horizon's days) is already at or below the new budget, and the
+clause then removes spend the budget would not. On the stored nights that is almost all of what it
+removes (E8). Anchoring was ruled in to stop exactly this kind of movement on a lever that does not
+act (E3). Recommended:
 
 ```
 factor = LEAST(1, GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)
 ```
 
-It does not cut while the `ACT` run rate is at or below the new budget, and on a campaign whose
-`DO_NOTHING` run rate is above its current budget (`Σ DO_NOTHING spend ÷ H > current`, the
-overdelivery E5 measured) the proportional term is the larger one, so it cuts in proportion exactly as
-the first form does. Until Ori rules, the ledger is not built.
+On a campaign the plan cuts, this caps `ACT` spend at the new budget × H. Where `DO_NOTHING` already
+overdelivers its current budget (`Σ DO_NOTHING spend ÷ H > current`, the overdelivery E5 measured),
+the cap falls back to the proportional cut. The algebra: when `Σ DO_NOTHING ÷ H ≤ current`,
+`Σ DO_NOTHING × planned / current ≤ planned × H`, so GREATEST takes `planned × H` and the factor is
+`LEAST(1, planned × H ÷ Σ ACT spend)`, the plain cap at the new budget. On the stored nights GREATEST
+takes the cap term on 367 of the 369 cut campaign-nights, and the factor equals the plain cap's on all
+369; on the two that overdeliver, all three forms give the same factor (E8). It is therefore a cap,
+not the proportional cut D3's words name, which is why Ori rules it. The argument
+against a cap (E5: `DO_NOTHING` already runs above the current budget in some campaigns, and a cap
+would cut those whether or not the plan moved them) applies only to a cap on campaigns the plan does
+not cut. This clause never runs there, and on a cut campaign that overdelivers GREATEST keeps the
+proportional cut. Until Ori rules, the ledger is not built.
 
 *Corrected 2026-10-03 (§14 D3): was the literal form — `expected_cpc = new_bid × bid_to_cpc_ratio`
 with an account fallback of 1.17, clicks capped so spend ≤ campaign budget × horizon, orders from
 the catalog's `cvr_hat`. On rows the plan does not move it disagreed with `DO_NOTHING` by as much
 as $290.72 of spend on one move class in one night (§14 E3); 1.17 has no source, and the measured
-account ratio is 0.974 (§14 E4); the literal cap would cut `ACT` below `DO_NOTHING` on campaigns
-whose run rate already exceeds the current budget, whether or not the plan moves them (§14 E5).*
+account ratio is 0.974 (§14 E4); the literal cap, applied to every campaign, would cut `ACT` below
+`DO_NOTHING` on campaigns whose run rate already exceeds the current budget, including campaigns
+whose budget the plan does not cut (§14 E5).*
 
 The response model is itself graded (section 7) and tuned by proposals (section 8, rule 4). Its
 first weeks will show how wrong it is; that is the point of writing it down.
@@ -434,11 +443,15 @@ seated with (builder v27.168, confirmed by Ori); Ori made no change on Amazon af
 ruled "a campaign budget cut applied proportionally", and §6 first wrote it as `LEAST(1, Σ DO_NOTHING
 spend × planned / current ÷ Σ ACT spend)`. That form also cuts campaigns whose `ACT` run rate is
 already at or below the new budget, where the budget cannot bind (E8). Recommended: `LEAST(1,
-GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)` — no cut while the
-`ACT` run rate is at or below the new budget, and the same proportional cut as before on a campaign
-whose `DO_NOTHING` run rate is above its current budget (§6). The clause scales every `ACT` number
-of a cut campaign, so it reaches the brief's "upload the plan $Y" line and the report card's
-`pred_lift`; piece-2 Task 4 does not start until it is ruled.
+GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)`. On a campaign the
+plan cuts, it caps `ACT` spend at the new budget × H; where `DO_NOTHING` already overdelivers its
+current budget, the cap falls back to the proportional cut (§6). On the stored nights it is the
+plain cap at the new budget on 367 of the 369 cut campaign-nights, and gives the plain cap's factor
+on all 369 (E8). It is a cap, not the proportional cut D3's words name, so the choice is Ori's: the
+first form (proportional, as D3 reads) or the recommended one (a cap where the plan cuts). E5's
+argument against a cap holds only for a cap on campaigns the plan does not cut, where neither form
+runs. The clause scales every `ACT` number of a cut campaign, so it reaches the brief's "upload the
+plan $Y" line and the report card's `pred_lift`; piece-2 Task 4 does not start until it is ruled.
 
 The brief's corrections that are not a ruling, made in place above: `UNGRADABLE` means an archived
 keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG` are defined (§7);
@@ -526,8 +539,13 @@ is a constant declared in `V_BID_CPC_TRANSFER`'s `params` CTE, not re-measured h
 the window's spend per day against `campaign_current_budget` (one value per campaign and night on all
 three nights): on 08-28, 09-28 and 10-03 the run rate is above the budget in 14 of 59, 11 of 58 and
 16 of 57 campaigns, by $189.49, $161.39 and $143.14 a day in total. A cap of `ACT` spend at the budget
-would cut those campaigns whether or not the plan moved them; the proportional cut applies only where
-the plan lowers a budget (29, 34 and 27 campaigns; it raises 15, 11 and 11).
+on campaigns the plan does not cut would cut those campaigns whether or not the plan moved them; the
+budget clause, in either form §6 sets out, runs only where the plan lowers a budget (29, 34 and 27
+campaigns; it raises 15, 11 and 11). *Re-framed 2026-10-03 (second Task-1 review): this argument was
+first read as ruling out any cap at the budget. It does not reach a cap on campaigns the plan cuts,
+which is what §6's recommended form is; across the twelve stored nights 2 of the 369 cut
+campaign-nights overdeliver their current budget, and there that form keeps the proportional cut
+(E8).*
 
 **E6 — no minimum-investment line at 0.80 on the August nights (D4, §7). Queries Q5 and Q5b.** The
 old horizon (`as_of` …), the realised side tested as the judge does with `min_orders` 2 (every state's
@@ -564,9 +582,23 @@ $20.22. Two cut campaign-nights have a `DO_NOTHING` run rate above the current b
 forms give the same factor (`dn_over_current_alt_ne_rm1` = 0). Negative control, in the same query: a
 copy of the rows with the example's 10-03 planned budget set to $10.00, below its `ACT` run rate,
 moves it out of the 283 (282) and into the recommended form's cuts (4 binding, $36.82 removed; the
-example reads $10.00 a day under the recommended form and $1.37 under the first). E5 and the first
-§6 compared the proportional form only with a plain cap at the budget; this is the first measurement
-of its own cuts.
+example reads $10.00 a day under the recommended form and $1.37 under the first). The first §6 and
+E5 set the proportional form against a cap on every campaign, never measured its own cuts, and did
+not compare it with a cap on the cut campaigns alone; this is the first measurement of both.
+
+On a cut campaign whose `DO_NOTHING` run rate is at or below its current budget, the recommended
+form is the plain cap at the new budget, `LEAST(1, planned × H ÷ Σ ACT spend)` (§6). Q7's cap
+columns, run from this file's text at 16:54 UTC (998,673 bytes, the 10-03 partition still as built
+at 16:34:13 UTC, every `REAL` and `NC` value above unchanged): GREATEST takes the cap term on 367 of
+the 369 cut campaign-nights (`alt_takes_cap_term`), the recommended factor equals the plain cap's on
+all 369 (`alt_eq_cap`), and the plain cap binds on the same 3 and removes the same $6.17. On the two
+overdelivering cut campaign-nights all three forms give the same factor (`alt_eq_cap` 369 with
+`dn_over_current_alt_ne_rm1` 0). Control `NC2`, the example's 10-03 current budget set to $21.00
+and planned to $10.00 so its `DO_NOTHING` $22.00 a day overdelivers: overdelivering cut
+campaign-nights 3, cap term 366, factor equal to the cap's 368, the recommended form removes $35.39
+against the plain cap's $36.82, and the example reads $10.48 a day under the recommended form (equal
+to the first form's $10.48) against $10.00 under the plain cap. That is the fallback to the
+proportional cut, and the cap columns move with it.
 
 ### 14.3 The queries
 
@@ -728,9 +760,13 @@ SELECT COUNT(*) AS learning_rows
 FROM `onyga-482313.OI.DE_COACH_THRESHOLDS` WHERE strategy_id = 'LEARNING';
 ```
 
-**Q7 — the budget clause's cuts, first form against the recommended form (E8).** Added
-2026-10-03. The `NC` rows are the negative control: the same rows with one campaign's 10-03 planned
-budget set to $10.00, below its `ACT` run rate.
+**Q7 — the budget clause's cuts, first form against the recommended form and the plain cap at the
+new budget (E8).** Added 2026-10-03; the cap columns (`f_cap`, `alt_takes_cap_term`, `alt_eq_cap`,
+`cap_binds`, `cap_removed`, `ex_cap_per_day`) and the `NC2` copy added by the second Task-1 review.
+The `NC` rows are the negative control: the same rows with one campaign's 10-03 planned budget set
+to $10.00, below its `ACT` run rate. The `NC2` rows control the cap columns: the same campaign-night
+with its current budget set to $21.00 and its planned budget to $10.00, so its `DO_NOTHING` run rate
+($22.00 a day) is above its current budget.
 
 ```sql
 WITH base AS (
@@ -740,6 +776,12 @@ WITH base AS (
   UNION ALL  -- the negative control: the same rows, one campaign's 10-03 planned budget set to $10
   SELECT 'NC', as_of, campaign_id, move, window_days, w_clk, w_sp, current_bid, planned_bid,
          bid_park, bid_floor, seat_cost_per_day, campaign_current_budget,
+         IF(as_of = '2026-10-03' AND campaign_id = '435692261851957', 10.0, campaign_planned_budget)
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'
+  UNION ALL  -- the cap columns' control: the same campaign-night overdelivering, current $21, planned $10
+  SELECT 'NC2', as_of, campaign_id, move, window_days, w_clk, w_sp, current_bid, planned_bid,
+         bid_park, bid_floor, seat_cost_per_day,
+         IF(as_of = '2026-10-03' AND campaign_id = '435692261851957', 21.0, campaign_current_budget),
          IF(as_of = '2026-10-03' AND campaign_id = '435692261851957', 10.0, campaign_planned_budget)
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'
 ),
@@ -763,6 +805,7 @@ f AS (
   SELECT *,
     LEAST(1, SAFE_DIVIDE(dn * planned / cur, act)) AS f_rm1,
     LEAST(1, SAFE_DIVIDE(GREATEST(planned * h, dn * planned / cur), act)) AS f_alt,
+    LEAST(1, SAFE_DIVIDE(planned * h, act)) AS f_cap,
     (as_of = '2026-10-03' AND campaign_id = '435692261851957') AS ex
   FROM c WHERE planned < cur
 )
@@ -776,9 +819,14 @@ SELECT copy, COUNT(DISTINCT as_of) AS nights, COUNT(*) AS cut_campaign_nights,
   COUNTIF(f_alt < 1) AS alt_binds,
   ROUND(SUM(IF(f_alt < 1, act * (1 - f_alt), 0)), 2) AS alt_removed,
   COUNTIF(dn / h > cur AND ABS(f_alt - f_rm1) > 1e-9) AS dn_over_current_alt_ne_rm1,
+  COUNTIF(planned * h >= dn * planned / cur) AS alt_takes_cap_term,
+  COUNTIF(ABS(f_alt - f_cap) <= 1e-9) AS alt_eq_cap,
+  COUNTIF(f_cap < 1) AS cap_binds,
+  ROUND(SUM(IF(f_cap < 1, act * (1 - f_cap), 0)), 2) AS cap_removed,
   ROUND(MAX(IF(ex, cur, NULL)), 2) AS ex_current_budget, ROUND(MAX(IF(ex, planned, NULL)), 2) AS ex_planned_budget,
   ROUND(MAX(IF(ex, dn / h, NULL)), 2) AS ex_dn_per_day, ROUND(MAX(IF(ex, act / h, NULL)), 2) AS ex_act_per_day,
   ROUND(MAX(IF(ex, act * f_rm1 / h, NULL)), 2) AS ex_rm1_per_day, ROUND(MAX(IF(ex, act * f_alt / h, NULL)), 2) AS ex_alt_per_day,
+  ROUND(MAX(IF(ex, act * f_cap / h, NULL)), 2) AS ex_cap_per_day,
   ANY_VALUE(b.built_at_1003) AS built_at_1003
 FROM f CROSS JOIN (SELECT MAX(built_at) AS built_at_1003 FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
                    WHERE as_of = '2026-10-03') b
