@@ -1804,6 +1804,13 @@ GROUP BY 1 ORDER BY 1;
   `window_days` ads days from it; the last pass of New York night D is the 12:40 New York pass of Los
   Angeles day D, so the graded days still start on the day the plan's final partition was written.
 - The ramp step's upload count reads `applied_at` on the New York date, the clock `as_of` is on.
+- `SEAT_REQUEST_acceptance.sql` R09 (added after review, 2026-10-03): `SP_APPEND_SEAT_REQUEST` copies
+  the plan's `as_of` into `requested_on`, so `requested_on` is a New York date too. R09 counted a
+  partition dated after `CURRENT_DATE('America/Los_Angeles')` as a future one, which the 01:35 New York
+  pass (about 22:35 Los Angeles) writes every night; it now compares with
+  `CURRENT_DATE('America/New_York')`. Controls on copies of the ledger with the clock pinned to 22:40
+  Los Angeles 10-02 = 01:40 New York 10-03 (recorded in the file): the 10-02 partition copied to 10-03
+  reads R09 118 under the old form and 0 under the new; copied to 10-04 it reads 118 under the new.
 - **Not changed, recorded:** `tools/build_reprice_bulksheet.py` still reads the plan's history with
   `as_of < CURRENT_DATE('America/Los_Angeles')` (and still carries v27.135's grace reading); between
   21:00 and 24:00 Los Angeles its history stops a night short of the judge's. The judge's `holdout`

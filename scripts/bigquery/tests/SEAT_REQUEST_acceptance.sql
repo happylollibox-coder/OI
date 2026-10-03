@@ -15,6 +15,24 @@
 -- HORIZON_WINDOW_RATE with coherent arithmetic (9 clicks, CPC = implied x 7 / 9): R04 0, R11 0; its
 -- implied spend doubled: R11 1; the coherent row labelled WINDOW_CLICKS: R11 1; basis 'BOGUS': R04 1.
 --
+-- v27.160 follow-up (2026-10-03, piece-1 plan Task 6 review, spec P-24): R09 reads "future" on the
+-- New York date, the clock requested_on is keyed on (SP_APPEND_SEAT_REQUEST copies the plan's as_of).
+-- NEGATIVE CONTROLS, run 2026-10-03 03:32 UTC: this file's own text, comment lines stripped, with
+-- FACT_SEAT_REQUEST swapped for a copy (OI._tmp_t6f_seat_*) and the one CURRENT_DATE token pinned to
+-- DATE(TIMESTAMP '2026-10-03 05:40:00+00', tz) = 01:40 New York 10-03 = 22:40 Los Angeles 10-02, inside
+-- the 01:35 New York pass; "old" is the 7af4857 text (Los Angeles clock) run the same way. Every copy is
+-- the live ledger plus the change named. Jobs t6f_seat_run0..8_033202, 76.4 slot-seconds in all
+-- including the four copies; nothing here reads FACT_AMAZON_ADS.
+--   LIVE, real clock (20:32 Los Angeles, both dates 10-02): new R01..R11 0, R12 1; old the same.
+--   LIVE, pinned: new and old R01..R11 0, R12 1.
+--   NC_NY_PASS  the 10-02 partition (118 rows) copied as requested_on 10-03, captured 05:35:46 UTC 10-03,
+--               due dates +1 day — what the 01:35 New York pass writes: new R09 0; old R09 118, the
+--               false fail by construction this change removes. Other checks as LIVE.
+--   NC_FUTURE   the same 118 rows as requested_on 10-04, one day past the New York date: new R09 118.
+--   NC_NULL     one 10-02 row copied with a NULL requested_on: new R09 1 (and R06 1, its lone plan arm).
+--   NC_EMPTY    no rows: R09 reads 0 on an empty ledger; R02 is its emptiness term and reads 118 (the
+--               plan's seats on its latest partition with none in the ledger).
+--
 -- NOTE ON R02: the ledger is expected to go RED if the plan is rebuilt without the append. That is
 -- a true staleness alarm, not a false one, and the fix is CALL SP_APPEND_SEAT_REQUEST(), which is
 -- safe at any time.
@@ -70,9 +88,13 @@ r08 AS (SELECT COUNTIF(captured_at IS NULL OR source IS NULL
                        OR source NOT IN ('ORCHESTRATOR','MANUAL')
                        OR source_detail IS NULL OR source_detail = '') AS v FROM led),
 
--- R09 PARTITION INTEGRITY: no NULL and no future requested_on.
+-- R09 PARTITION INTEGRITY: no NULL and no future requested_on. "Future" is read on the clock
+--     requested_on is keyed on: SP_APPEND_SEAT_REQUEST copies FACT_PLAN_NEXT_WEEK.as_of, which is the
+--     New York date since v27.160 (P-24). The 01:35 New York pass runs at about 22:35 Los Angeles and
+--     writes the next day's requested_on, so the Los Angeles form counted that night's whole partition
+--     from about 22:35 to 24:00 Los Angeles every day (control NC_NY_PASS in the header).
 r09 AS (SELECT COUNTIF(requested_on IS NULL
-                       OR requested_on > CURRENT_DATE('America/Los_Angeles')) AS v FROM led),
+                       OR requested_on > CURRENT_DATE('America/New_York')) AS v FROM led),
 
 -- R10 THE CLAIM TRAVELS WITH THE PROMISE. §6.0 grades the Catalog on whether its recommendation
 --     performed as claimed, and a promise stripped of the claim behind it can be counted but not
