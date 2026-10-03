@@ -709,3 +709,10 @@ simulated pass above (`--plan-table onyga-482313.OI._tmp_t3_plan --jobs-table-id
 
 The first collect expected NC_F2_NULL to read 1; it read 2, because a NULL fails both of F2's terms.
 The expectation was corrected in the script and the same job re-collected (exit 0).
+
+**Follow-up, same day.** `INFORMATION_SCHEMA.JOBS` keeps 180 days of jobs, so from about 2027-04-01
+F1 would have read the first nights' writes as "not on record" for ever. F1 now reads the nights
+written in the last 170 days (its emptiness term too). Re-run after the change: the live table at
+17:57 UTC 37 PASS, F1 1 and F2 1 by emptiness (`t3_acc_live2_1791050257`, 682.4 slot-seconds); the
+controls with the same arguments exit 0, every reading above unchanged
+(`bqjob_r60aad232f3626a83_000001a102ea38f4_1`, 6,722.0 slot-seconds, 678,044,832 bytes).

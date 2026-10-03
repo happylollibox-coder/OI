@@ -331,6 +331,12 @@
 --   Unasserted moves: NC_K1_NOT_NY_DATE and NC_K3_NO_SHADOW also read F1 1 (a night stamped 22:40 Los
 --     Angeles has no INSERT in the hour after it; a night with its shadow rows removed no longer has
 --     the row count its INSERT wrote).
+-- FOLLOW-UP, same day: F1 reads only the nights written in the last 170 days, because
+-- INFORMATION_SCHEMA.JOBS keeps 180 days of jobs and an older night would read "not on record" for
+-- ever (from about 2027-04-01). Re-run after it: live table 17:57 UTC 37 PASS, F1 1, F2 1 by
+-- emptiness (job t3_acc_live2_1791050257, 682.4 slot-seconds, 330,785,449 bytes); the controls, same
+-- arguments, exit 0, every reading above unchanged (job bqjob_r60aad232f3626a83_000001a102ea38f4_1,
+-- 6,722.0 slot-seconds, 678,044,832 bytes).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -1074,9 +1080,13 @@ f_dml AS (
     AND destination_table.project_id = 'onyga-482313' AND destination_table.dataset_id = 'OI'
     AND destination_table.table_id = 'FACT_PLAN_NEXT_WEEK'
 ),
-f_part AS (  -- every night written since the cutover: its write's built_at and its rows
+f_part AS (  -- every night written since the cutover, within the job record's reach: its write's
+             -- built_at and its rows. INFORMATION_SCHEMA.JOBS keeps 180 days of jobs, so F1 reads the
+             -- nights written in the last 170 (a night older than that would read "not on record")
   SELECT as_of, MAX(built_at) AS built_at, COUNT(*) AS n
-  FROM all_p WHERE built_at >= TIMESTAMP '2026-10-03 17:41:54+00'
+  FROM all_p
+  WHERE built_at >= TIMESTAMP '2026-10-03 17:41:54+00'
+    AND built_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 170 DAY)
   GROUP BY as_of
 ),
 f_ins AS (  -- the INSERT that stored it: the first INSERT into the table after its built_at
@@ -1101,7 +1111,8 @@ f_del AS (  -- that build's DELETE of the night: the last DELETE of the same scr
 -- night's first write (its DELETE removed nothing): a late plan is still a plan. A night whose
 -- write is not on the job record (no INSERT of its row count within the hour after its built_at,
 -- or no DELETE before that INSERT in the same script) cannot be shown to be a first write and
--- counts. Emptiness: no night written since the cutover reads 1.
+-- counts. It reads the nights written in the last 170 days: the job record keeps 180. Emptiness: no
+-- such night reads 1.
 f1 AS (
   SELECT 'F1 D2 (c): no night written since v27.170 was rewritten after Los Angeles midnight of its as_of (a late first write is allowed)',
          (SELECT COUNTIF(parent_job_id IS NULL OR ins IS DISTINCT FROM n OR del IS NULL
