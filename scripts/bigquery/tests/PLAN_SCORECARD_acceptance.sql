@@ -14,7 +14,8 @@
 -- (the August nights), every RECOMMENDATION is WAIT, and no guard decision has settled (the guard
 -- columns exist from the 2026-09-28 partition; the first window settles 2026-10-03). Here:
 --   * C04 and C08 hold the scorecard to what the plan history makes gradable, re-derived from
---     FACT_PLAN_NEXT_WEEK in this file — "empty because young" passes, "empty because broken" fails;
+--     FACT_PLAN_NEXT_WEEK in this file — "empty because young" passes, "empty because broken" fails
+--     (C08's control runs on the function the day before the first decision settles: F1 below);
 --   * every check also runs on FN_PLAN_SCORECARD with the clock moved 30 days forward (row CM),
 --     where the guard has 117 real decisions to partition, and at 2026-10-03 (row C12), the clock at
 --     which review MUST_FIX 1 measured the old hint saying KEEP from 0 holds and 1 band row (that
@@ -26,7 +27,8 @@
 --
 -- THE CHECK EXPRESSIONS ARE WRITTEN ONCE, over sc_copies (one tagged copy per scenario), and each
 -- copy is judged against the expectation of its own clock (LIVE = today in Los Angeles, MOVED =
--- today + 30, CASE = 2026-10-03). Twins of the function kept in this file, which must change with
+-- today + 30, CASE = 2026-10-03, YOUNG = the day before the first guard decision settles, read from
+-- the plan history — C08a's clock, follow-up F1). Twins of the function kept in this file, which must change with
 -- it: the gradable-decision predicate (exp_g), the one-night-per-Sunday-week rule (exp_fw), the
 -- 20-decision hint threshold (C09), the 3-week recommendation threshold (C03), the hint's sentence
 -- openings (C11), the band (C13: band_cand / band_exp — a LAST_DAY_NOT_STRONG release with a last day
@@ -105,6 +107,29 @@
 -- function; NEGATIVE CONTROL, the same harness on a copy carrying 10: FAIL on S_HELD_SMALL (reads
 -- RAISE from 15 held), S_BAND_SMALL and S_OTHER_RULE (sentences say 'of the 10 needed'). This file's
 -- own run: 43 of 43 PASS.
+--
+-- F1 (2026-10-03, piece-1 follow-up; plan docs/superpowers/plans/2026-10-02-money-plan-rulings-piece1.md).
+-- C08a doctored TODAY's scorecard, so it could fire only while no guard decision was gradable today:
+-- it passed on 2026-10-02 (0 of 127 gradable) and read FAIL 1 on 2026-10-03, when 20 of 136 were
+-- (the Task 10 proof, workflow wf_3f633eab-f92). It now doctors FN_PLAN_SCORECARD at d_young, the day
+-- before the first live-plan guard decision settles (read from the plan history), where the youth
+-- sentence exists whatever today's date is. The row reads PASS only if the doctored copy fires, the
+-- undoctored copy at the same clock (copy YOUNG) reads 0 on C08, and that clock has decisions
+-- written and none gradable (the emptiness term).
+-- RUN 2026-10-03 (job f1_base_1791015864): 43 of 43 PASS. C08a: d_young 2026-10-02, 123 written,
+--   0 gradable, YOUNG 0 on C08. C08 on LIVE 0 (20 of 136 graded).
+-- C08a's own controls, each this file run with one edit (scratchpad copies, not kept); every other
+-- row read PASS in each:
+--   the doctored sentence left as the function wrote it (nothing to fire on): C08a FAIL 1;
+--   d_young set to today, the pre-F1 clock: C08a FAIL 2 (136 written, 20 gradable: the copy does not
+--     fire, and the emptiness term);
+--   d_young set to 2026-09-27, before the first decision was written: C08a FAIL 1 (0 written; the
+--     doctored copy fired on the "written no guard decision" term, so only the emptiness term
+--     failed it);
+--   the YOUNG copy's sentence naming "settles around" instead of "settles on": C08a FAIL 1 (YOUNG
+--     reads 1 on C08).
+-- COST of the run: 1,076.3 slot-s, 299.1 MB, 71.8 s; the new clock's FN_PLAN_SCORECARD 224.9
+-- slot-s, d_young's DECLARE 0.2. The four control runs: 964.3 to 1,250.3 slot-s each.
 -- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 16 graded holds or 16
 -- graded band rows (at most 9 and 2), so every real hint reads WAIT and LOWER / RAISE / KEEP /
 -- NO_CLEAN_SIGNAL have never come out of the function on real input. C09 and C11 judge the hint's
@@ -140,6 +165,16 @@ DECLARE d30 DATE DEFAULT DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 
 -- the real case review MUST_FIX 1 measured: at this clock 20 decisions are graded and 0 held; the
 -- band read 1 under the 46ae335 function, a release whose hold clock had run out, and reads 0 now
 DECLARE d_case DATE DEFAULT DATE '2026-10-03';
+-- F1 (2026-10-03): C08a's clock, the day before the first live-plan guard decision settles, read from
+-- the plan history with exp_g's predicate (the function's guard_written), so the youth sentence C08
+-- judges exists whatever today's date is. Read 2026-10-03: 2026-10-02 (first settle 2026-10-03;
+-- 123 decisions written by then, 0 gradable). NULL when no decision is written: C08a then FAILs.
+DECLARE d_young DATE DEFAULT (
+  SELECT DATE_SUB(MIN(settle_due_on), INTERVAL 1 DAY)
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE is_live_plan
+    AND last_day_strong IS NOT NULL
+    AND (verdict = 'HELD_UNSETTLED' OR guard_released_by IS NOT NULL));
 -- TWIN, HISTORY not a setting: the last night written before FACT_PLAN_NEXT_WEEK carried the rule
 DECLARE legacy_through DATE DEFAULT DATE '2026-10-01';
 -- TWIN, HISTORY not a setting: the rule the nights to legacy_through were judged under
@@ -159,10 +194,15 @@ CREATE TEMP TABLE sc_case AS
   SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
                                ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
   FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_case);
+CREATE TEMP TABLE sc_young AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_young);
 
 -- ---- what the plan history makes gradable, per clock (TWINS of the function's rules) ----
 CREATE TEMP TABLE clock_dates AS
-  SELECT 'LIVE' AS clock, d0 AS d UNION ALL SELECT 'MOVED', d30 UNION ALL SELECT 'CASE', d_case;
+  SELECT 'LIVE' AS clock, d0 AS d UNION ALL SELECT 'MOVED', d30 UNION ALL SELECT 'CASE', d_case
+  UNION ALL SELECT 'YOUNG', d_young;
 -- one plan night per Sunday-start week: the latest that is at least 14 days old
 CREATE TEMP TABLE exp_fw AS
   WITH night AS (
@@ -220,7 +260,8 @@ CREATE TEMP TABLE band_cand AS
 CREATE TEMP TABLE clock_rule AS
             SELECT 'LIVE'  AS clock, rule_value, rule_min_orders FROM sc_live  WHERE row_type = 'RULE_HINT'
   UNION ALL SELECT 'MOVED',          rule_value, rule_min_orders FROM sc_moved WHERE row_type = 'RULE_HINT'
-  UNION ALL SELECT 'CASE',           rule_value, rule_min_orders FROM sc_case  WHERE row_type = 'RULE_HINT';
+  UNION ALL SELECT 'CASE',           rule_value, rule_min_orders FROM sc_case  WHERE row_type = 'RULE_HINT'
+  UNION ALL SELECT 'YOUNG',          rule_value, rule_min_orders FROM sc_young WHERE row_type = 'RULE_HINT';
 -- one row per clock, zeros included. n_band: the band. n_expired: releases that sit between 1.0x and
 -- their multiplier under the rule but whose hold clock had run out (the rows the 46ae335 band
 -- wrongly counted). n_short_day: the same, clock running, but fewer orders on the last day than the
@@ -243,6 +284,8 @@ CREATE TEMP TABLE sc_copies AS
             SELECT 'LIVE'      AS copy, 'LIVE'  AS clock, * FROM sc_live
   UNION ALL SELECT 'MOVED',              'MOVED', * FROM sc_moved
   UNION ALL SELECT 'CASE',               'CASE',  * FROM sc_case
+  -- C08a's undoctored base (F1): the scorecard at the day before the first guard decision settles
+  UNION ALL SELECT 'YOUNG',              'YOUNG', * FROM sc_young
   -- C01: a GRADE row loses its calendar state; the hint row loses its sentence
   UNION ALL SELECT 'NC_C01',  'LIVE', * REPLACE (IF(row_type = 'GRADE' AND rn = 1, NULL, calendar_state) AS calendar_state) FROM sc_live
   UNION ALL SELECT 'NC_C01S', 'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', NULL, sentence) AS sentence) FROM sc_live
@@ -264,8 +307,10 @@ CREATE TEMP TABLE sc_copies AS
   -- C07: a family-night three days old; a guard week graded before its last window settled
   UNION ALL SELECT 'NC_C07',  'LIVE',  * REPLACE (IF(row_type = 'FAMILY_WEEK' AND rn = 1, DATE_SUB(d0, INTERVAL 3 DAY), graded_night) AS graded_night) FROM sc_live
   UNION ALL SELECT 'NC_C07G', 'MOVED', * REPLACE (IF(row_type = 'GUARD' AND rn = 1, DATE_ADD(d30, INTERVAL 1 DAY), last_settle_due_on) AS last_settle_due_on) FROM sc_moved
-  -- C08: the youth sentence replaced by a count; the moved grades judged against today's clock
-  UNION ALL SELECT 'NC_C08',  'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', 'WAIT: 3 graded guard decision(s) of the 20 this hint needs.', sentence) AS sentence) FROM sc_live
+  -- C08: the youth sentence replaced by a count — on the YOUNG clock (F1), where the youth sentence
+  -- exists whatever today's date is (on today's copy it fired only while 0 decisions were gradable);
+  -- the moved grades judged against today's clock
+  UNION ALL SELECT 'NC_C08',  'YOUNG', * REPLACE (IF(row_type = 'RULE_HINT', 'WAIT: 3 graded guard decision(s) of the 20 this hint needs.', sentence) AS sentence) FROM sc_young
   UNION ALL SELECT 'NC_C08G', 'LIVE', * FROM sc_moved
   -- C09: the hint leaves WAIT below 20; the hint row doubled
   UNION ALL SELECT 'NC_C09',  'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', 'LOWER_STRONG_DAY_MULT', recommendation) AS recommendation) FROM sc_live
@@ -305,7 +350,7 @@ CREATE TEMP TABLE copies AS
     ('NC_C01', 'LIVE'), ('NC_C01S', 'LIVE'), ('NC_C02', 'LIVE'), ('NC_C02Z', 'LIVE'),
     ('NC_C03D', 'LIVE'), ('NC_C03X', 'LIVE'), ('NC_C03W', 'LIVE'), ('NC_C04', 'LIVE'),
     ('NC_C06C', 'MOVED'), ('NC_C06G', 'MOVED'), ('NC_C06E', 'MOVED'),
-    ('NC_C07', 'LIVE'), ('NC_C07G', 'MOVED'), ('NC_C08', 'LIVE'), ('NC_C08G', 'LIVE'),
+    ('NC_C07', 'LIVE'), ('NC_C07G', 'MOVED'), ('NC_C08', 'YOUNG'), ('YOUNG', 'YOUNG'), ('NC_C08G', 'LIVE'),
     ('NC_C09', 'LIVE'), ('NC_C09D', 'LIVE'), ('NC_C09B', 'MOVED'), ('NC_C09H', 'MOVED'),
     ('NC_C09G', 'MOVED'), ('NC_C11W', 'MOVED'), ('NC_C11K', 'MOVED'), ('CASE', 'CASE'),
     ('NC_C13', 'CASE')]);
@@ -697,7 +742,17 @@ checks AS (
   UNION ALL SELECT 'C06c NEGATIVE CONTROL C06 FIRES: an empty GUARD where decisions are gradable', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C06E' AND chk = 'C06') >= 1, 0, 1)
   UNION ALL SELECT 'C07a NEGATIVE CONTROL C07 FIRES: a family-night graded at 3 days old', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C07' AND chk = 'C07') >= 1, 0, 1)
   UNION ALL SELECT 'C07b NEGATIVE CONTROL C07 FIRES: a guard week whose last window settles tomorrow (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C07G' AND chk = 'C07') >= 1, 0, 1)
-  UNION ALL SELECT 'C08a NEGATIVE CONTROL C08 FIRES: the youth sentence replaced by a count', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C08' AND chk = 'C08') >= 1, 0, 1)
+  -- F1: on the YOUNG clock. PASS needs all three: the doctored copy fires; the undoctored copy at the
+  -- same clock reads 0 on C08 (else the firing proves nothing); and that clock has guard decisions
+  -- written and none gradable, so the youth sentence is what was doctored (emptiness term).
+  UNION ALL SELECT FORMAT('C08a NEGATIVE CONTROL C08 FIRES: the youth sentence replaced by a count, on FN_PLAN_SCORECARD at %t, the day before the first guard decision settles (%d written, %d gradable; the undoctored copy there reads %d on C08)',
+                          d_young, (SELECT n_written FROM clocks WHERE clock = 'YOUNG'),
+                          (SELECT n_gradable FROM clocks WHERE clock = 'YOUNG'),
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'YOUNG' AND chk = 'C08')),
+         IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C08' AND chk = 'C08') >= 1, 0, 1)
+       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'YOUNG' AND chk = 'C08')
+       + IF(COALESCE((SELECT n_gradable = 0 AND n_written > 0 AND next_due IS NOT NULL
+                      FROM clocks WHERE clock = 'YOUNG'), FALSE), 0, 1)
   UNION ALL SELECT 'C08b NEGATIVE CONTROL C08 FIRES: grades present that today\'s clock cannot have', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C08G' AND chk = 'C08') >= 1, 0, 1)
   UNION ALL SELECT 'C09a NEGATIVE CONTROL C09 FIRES: the hint leaves WAIT below 20', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09' AND chk = 'C09') >= 1, 0, 1)
   UNION ALL SELECT 'C09b NEGATIVE CONTROL C09 FIRES: the hint row doubled', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C09D' AND chk = 'C09') >= 1, 0, 1)

@@ -2456,6 +2456,9 @@ one Sunday week) are 14 days old, so GRADE carries one graded week and every REC
 says when the first decision settles. The acceptance does not pass on that emptiness: C04 and C08
 compare what the scorecard grades with what the plan history makes gradable, and C06 also runs on
 the function with the clock moved 30 days forward, where the guard has real decisions to partition.
+C08's own control (C08a) runs on the function at the day before the first guard decision settles
+(read from the plan history), not on today's scorecard: on 2026-10-03, 20 of 136 decisions had become
+gradable, so a control built on today's youth sentence could no longer fire (follow-up F1).
 
 **Deploy and verify.**
 

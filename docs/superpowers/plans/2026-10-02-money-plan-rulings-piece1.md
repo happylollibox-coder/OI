@@ -497,7 +497,7 @@ The proof (workflow `wf_3f633eab-f92`) found every ruling built except the items
 ruling; each restores what the plan or the ruling already says. Same house rules. One commit per fix,
 each with its own check and negative control.
 
-- [ ] **F1 PLAN_SCORECARD C08a.** The control only fired while zero guard decisions were gradable; on
+- [x] **F1 PLAN_SCORECARD C08a.** The control only fired while zero guard decisions were gradable; on
   2026-10-03 20 of 136 became gradable and C08a now FAILs. Rebuild it on a moved-clock copy (grade date
   pinned before the first decision's settle date) so it fires whatever today's date is.
 - [ ] **F2 incumbent seat cost.** Under P-16 an incumbent keeps its seat and its planned price, not last
