@@ -69,6 +69,23 @@
 -- V_PPC_CHANGE_LOG_APPLIED and the readout's CENSORED branch, which reads no FACT_AMAZON_ADS (measured
 -- in the readout's header). Negative controls: HOLDOUT_INTEGRITY_acceptance.sql (H2) runs this file's
 -- hu_gap and c33 text verbatim on doctored copies; the results are in that file's header.
+-- v27.162 follow-up (2026-10-03, review of commit a2e7e1e): the v27.162 c33 read changes from
+-- eligible_from (2026-09-01) only, but the arms were frozen on 2026-08-19 (assigned_at). Listing the
+-- same two sources on HOLDOUT units from 2026-08-19 (HOLDOUT_INTEGRITY_acceptance.sql, statement
+-- `pre`) found 25 rows on 7 HOLDOUT units before the window start, none censored: the 08-21 pauses
+-- of FRESH-SP/PT (Competitors, Blue, A1) 135553284530895 and PILOT-WHITE-PHRASE-birthday-gifts
+-- 39989090923480, the 08-23 reprice book on 279837860088128, 446868628489343 and 75834491759416,
+-- and unlogged observed changes on 200171414843593 (08-25) and 488973733209950 (08-26, 08-31). R9
+-- reads the window only; whether such a change contaminates is a ruling for Ori. So c33 now also
+-- reads the readout's PRE_WINDOW_CHANGE rows: RED when a HOLDOUT unit changed between its assignment
+-- day and its window start and the readout does not publish it from that day, AMBER while any such
+-- change stands (the ruling is pending), and the detail names them. Measured after the deploy
+-- (2026-10-03): the board filtered to this check read AMBER, measured 0, at 99.5 / 143.6 slot-s
+-- (two runs; 10,641,938 bytes, no FACT_AMAZON_ADS: the readout is read twice, CENSORED and
+-- PRE_WINDOW_CHANGE branches only); the full board 33 checks, 3 RED (contradiction_rate,
+-- seat_every_occupant_numbered, seat_past_due_in_future_tense), 4402.4 slot-s. V_DAILY_BRIEF's
+-- SYSTEM line counts RED rows only, so this AMBER is on the board, not in the brief.
+-- Controls: HOLDOUT_INTEGRITY_acceptance.sql (31 rows PASS, its header).
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -720,27 +737,40 @@ c32 AS (  -- ALARM, GENERIC: a step that fails three runs running is a step nobo
 ),
 -- ───────────────────────────────────────────────────────────────────────────────────────────
 -- c33: the holdout's integrity (v27.162, piece-1 plan Task 8, R9 = P-23, audit fix #27; header).
--- hu_asg / hu_led / hu_cens / hu_obs are the four inputs; hu_gap and c33 read nothing else, so
--- HOLDOUT_INTEGRITY_acceptance.sql runs the hu_gap and c33 text verbatim on doctored copies of them.
--- THE TWO MUST CHANGE TOGETHER.
+-- hu_asg / hu_led / hu_pre / hu_cens / hu_pre_ro / hu_obs are the six inputs; hu_gap, hu_pre_gap and
+-- c33 read nothing else, so HOLDOUT_INTEGRITY_acceptance.sql runs the hu_gap, hu_pre_gap and c33 text
+-- verbatim on doctored copies of them. THE TWO MUST CHANGE TOGETHER.
 -- ───────────────────────────────────────────────────────────────────────────────────────────
 hu_asg AS (  -- the trial's units, both arms (V_HOLDOUT_READOUT's trial)
-  SELECT unit_id, unit_name, arm, stratum, eligible_from, trial_end
+  SELECT unit_id, unit_name, arm, stratum, eligible_from, trial_end, assigned_at
   FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
   WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN' AND unit_type = 'CAMPAIGN'
 ),
-hu_led AS (  -- every change on a HOLDOUT unit inside its trial window: logged and applied, or observed on Amazon
+hu_chg AS (  -- a change that reached Amazon: a change-log row that was applied, or a change observed on Amazon
+  SELECT campaign_id, applied_at FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
+  UNION ALL
+  SELECT campaign_id, applied_at FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` WHERE source = 'OBSERVED'
+),
+hu_led AS (  -- every change on a HOLDOUT unit inside its trial window
   SELECT h.unit_id, h.unit_name, h.stratum, DATE(l.applied_at, 'America/Los_Angeles') AS change_day
   FROM hu_asg h
-  JOIN (SELECT campaign_id, applied_at FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
-        UNION ALL
-        SELECT campaign_id, applied_at FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` WHERE source = 'OBSERVED') l
-    ON l.campaign_id = h.unit_id
+  JOIN hu_chg l ON l.campaign_id = h.unit_id
   WHERE h.arm = 'HOLDOUT'
     AND DATE(l.applied_at, 'America/Los_Angeles') BETWEEN h.eligible_from AND h.trial_end
 ),
+hu_pre AS (  -- every change on a HOLDOUT unit from its assignment day to the day before its window start
+  SELECT h.unit_id, h.unit_name, h.stratum, DATE(l.applied_at, 'America/Los_Angeles') AS change_day
+  FROM hu_asg h
+  JOIN hu_chg l ON l.campaign_id = h.unit_id
+  WHERE h.arm = 'HOLDOUT'
+    AND DATE(l.applied_at, 'America/Los_Angeles') >= DATE(h.assigned_at, 'America/Los_Angeles')
+    AND DATE(l.applied_at, 'America/Los_Angeles') < h.eligible_from
+),
 hu_cens AS (  -- what the readout censors: READ from its CENSORED rows, never re-derived here
   SELECT unit_id, censored_from FROM `onyga-482313.OI.V_HOLDOUT_READOUT` WHERE state = 'CENSORED'
+),
+hu_pre_ro AS (  -- what the readout publishes as changed before the window: READ from its PRE_WINDOW_CHANGE rows
+  SELECT unit_id, pre_window_change_on FROM `onyga-482313.OI.V_HOLDOUT_READOUT` WHERE state = 'PRE_WINDOW_CHANGE'
 ),
 hu_obs AS (  -- the observed-change ledger's size: with no row at all, a console change is invisible
   SELECT COUNT(*) AS n FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` WHERE source = 'OBSERVED'
@@ -754,13 +784,22 @@ hu_gap AS (  -- trial units, either arm, that the readout does not censor from a
   WHERE c.censored_from IS NULL OR c.censored_from > t.change_day
   GROUP BY 1, 2, 3, 4
 ),
-c33 AS (  -- R9 / fix #27: no change on a HOLDOUT campaign goes uncensored
+hu_pre_gap AS (  -- HOLDOUT units changed before their window that the readout does not publish from that day on
+  SELECT p.unit_id, p.unit_name, p.stratum,
+         MIN(p.change_day) AS first_change_day, MIN(r.pre_window_change_on) AS published_on
+  FROM hu_pre p
+  LEFT JOIN hu_pre_ro r ON r.unit_id = p.unit_id
+  GROUP BY 1, 2, 3
+  HAVING MIN(r.pre_window_change_on) IS NULL OR MIN(r.pre_window_change_on) > MIN(p.change_day)
+),
+c33 AS (  -- R9 / fix #27: a change on a HOLDOUT campaign inside its window is censored with its stratum; a change between its assignment and its window start is published, and AMBER while Ori has not ruled on it
   SELECT 'holdout_unit_changed',
-    CAST((SELECT COUNT(*) FROM hu_gap) AS FLOAT64),
-    'trial campaigns (either arm) sharing a stratum with a HOLDOUT campaign that changed inside its trial window (a change-log row applied, or a change observed on Amazon), which V_HOLDOUT_READOUT does not censor from that day on · red > 0 (P-23 / R9, audit fix #27); red when no HOLDOUT unit or no observed-change row is read',
+    CAST((SELECT COUNT(*) FROM hu_gap) + (SELECT COUNT(*) FROM hu_pre_gap) AS FLOAT64),
+    'trial campaigns (either arm) sharing a stratum with a HOLDOUT campaign that changed inside its trial window (a change-log row applied, or a change observed on Amazon), which V_HOLDOUT_READOUT does not censor from that day on, + HOLDOUT campaigns changed between their assignment and their window start that the readout does not publish (PRE_WINDOW_CHANGE) · red > 0 (P-23 / R9, audit fix #27); red when no HOLDOUT unit or no observed-change row is read; amber while a HOLDOUT campaign changed between its assignment and its window start, which R9 does not censor (a ruling for Ori, HOLDOUT.md §6)',
     CASE WHEN (SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) = 0 THEN 'RED'
          WHEN (SELECT n FROM hu_obs) = 0 THEN 'RED'
-         WHEN (SELECT COUNT(*) FROM hu_gap) > 0 THEN 'RED'
+         WHEN (SELECT COUNT(*) FROM hu_gap) + (SELECT COUNT(*) FROM hu_pre_gap) > 0 THEN 'RED'
+         WHEN (SELECT COUNT(*) FROM hu_pre) > 0 THEN 'AMBER'
          ELSE 'GREEN' END,
     CONCAT(
       CASE WHEN (SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) = 0 THEN 'no HOLDOUT unit read from DE_HOLDOUT_ASSIGNMENT · '
@@ -772,6 +811,22 @@ c33 AS (  -- R9 / fix #27: no change on a HOLDOUT campaign goes uncensored
                                           unit_name, unit_id, arm, stratum, first_change_day,
                                           IF(censored_from IS NULL, 'never', FORMAT('from %t', censored_from))),
                                    '; ' ORDER BY first_change_day, unit_id) FROM hu_gap),
+                ' · '),
+         ''),
+      IF((SELECT COUNT(*) FROM hu_pre_gap) > 0,
+         CONCAT('NOT PUBLISHED: ',
+                (SELECT STRING_AGG(FORMAT('%s (%s, %s): changed on %t before its window start, the readout publishes it %s',
+                                          unit_name, unit_id, stratum, first_change_day,
+                                          IF(published_on IS NULL, 'never', FORMAT('from %t', published_on))),
+                                   '; ' ORDER BY first_change_day, unit_id) FROM hu_pre_gap),
+                ' · '),
+         ''),
+      IF((SELECT COUNT(*) FROM hu_pre) > 0,
+         CONCAT('A RULING FOR ORI: ', CAST((SELECT COUNT(DISTINCT unit_id) FROM hu_pre) AS STRING), ' of ',
+                CAST((SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) AS STRING),
+                ' HOLDOUT campaign(s) changed between their assignment and their window start, which R9 does not censor, so the readout scores them and their stratum-mates as untouched from the window start (first day): ',
+                (SELECT STRING_AGG(FORMAT('%s %t', unit_name, d), ', ' ORDER BY d, unit_id)
+                 FROM (SELECT unit_id, unit_name, MIN(change_day) AS d FROM hu_pre GROUP BY 1, 2)),
                 ' · '),
          ''),
       CAST((SELECT COUNT(DISTINCT unit_id) FROM hu_led) AS STRING), ' of ',

@@ -75,6 +75,17 @@ rows, which is why the two console pauses of 2026-09-27 were on no surface. Sour
 table, the change log and the readout's `CENSORED` branch — no `FACT_AMAZON_ADS` (filtering the board
 on this check alone: 63.6 slot-s, measured 2026-10-03). Acceptance with negative controls on doctored
 copies, running the board's own text: `scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql`.
+**Follow-up (2026-10-03, review of commit a2e7e1e):** the v27.162 check read changes from
+`eligible_from` (2026-09-01) only, but the arms were frozen on 2026-08-19, and 7 HOLDOUT units changed
+in between (25 ledger rows: two 08-21 campaign pauses, the 08-23 reprice book on three units, and
+unlogged observed changes on two) — none censored, none on any surface. R9 reads the window only;
+whether such a change contaminates is a ruling for Ori (`HOLDOUT.md` §6 "Contamination", both answers
+measured there). The check now also reads the readout's `PRE_WINDOW_CHANGE` rows: RED when a HOLDOUT
+unit changed between its assignment day and its window start and the readout does not publish it
+from that day, AMBER while any such change stands, and the detail names them. Measured after the
+deploy: AMBER, measured 0; the board filtered to this check 99.5 / 143.6 slot-s (two runs, no
+`FACT_AMAZON_ADS`). `V_DAILY_BRIEF`'s SYSTEM line counts RED rows only, so this AMBER shows on the
+board and not in the brief. Acceptance: 31 rows PASS (`HOLDOUT_INTEGRITY_acceptance.sql` header).
 
 First board 2026-08-16: RED contradiction_rate 31.8 (57/179 — the gate WORKS; the signal is that
 the engines structurally overlap a third of their instructions, mostly LAUNCH proposing on

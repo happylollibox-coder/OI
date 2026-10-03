@@ -93,8 +93,8 @@ between its keywords instead of being fooled by it.
 | `DE_HOLDOUT_ASSIGNMENT` | **The arms.** One row per unit, written once, never updated. |
 | `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. |
 | `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. |
-| `V_HOLDOUT_READOUT` | The answer. Silent until 2027-01-05. From v27.162 it also publishes one `CENSORED` row per censored unit (dates and the reason, never a dollar) — §6 "Contamination". |
-| `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day — §6 "Contamination". |
+| `V_HOLDOUT_READOUT` | The answer. Silent until 2027-01-05. From v27.162 it also publishes one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed between its assignment and its window start (dates and the reason, never a dollar) — §6 "Contamination". |
+| `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day, or changed before its window and the readout does not publish it; AMBER while a change before the window stands unruled — §6 "Contamination". |
 
 ### The eligible population — 69 campaigns, $26,377 / 28d
 
@@ -223,17 +223,27 @@ both arms, from the day of the contamination**, so the comparison inside each st
   it.
 - One `CENSORED` row per censored unit names the unit, its arm and stratum, both dates and the change
   that triggered the stratum. The ALL row's sentence (from 2027-01-05) says how many units were cut.
+- **Changes before the window are not censored** (the window, and R9, start on `eligible_from`).
+  One `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed from its assignment day (Los Angeles) to the
+  day before its `eligible_from` names the changes day by day (logged and observed rows counted
+  apart), the days the estimate scores it as untouched, and no number; the ALL row's sentence says
+  how many there are. Whether such a change contaminates the unit is **a ruling for Ori** (below).
 - `V_ENGINE_HEALTH` `holdout_unit_changed` reads those rows (never re-derives them) and is RED when a
-  change on a HOLDOUT unit, or on a stratum-mate's HOLDOUT unit, is not censored from its day; RED
-  as well when no HOLDOUT unit or no observed-change row is read. `SP_RECORD_OBSERVED_CHANGES` (Refresh
-  Task 2.2a) records a console change the night it reaches the DIM tables, and the readout censors it
-  on that read; the check holds the readout to it. Acceptance with negative controls:
-  `scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql` (H1 the censoring, H2 the check, H3 the
-  readout's gate).
+  change on a HOLDOUT unit, or on a stratum-mate's HOLDOUT unit, is not censored from its day, or
+  when a HOLDOUT unit changed before its window and the readout does not publish it from that day;
+  RED as well when no HOLDOUT unit or no observed-change row is read; AMBER while any change before
+  the window stands, until Ori rules. `SP_RECORD_OBSERVED_CHANGES` (Refresh Task 2.2a) records a
+  console change the night it reaches the DIM tables, and the readout censors it on that read; the
+  check holds the readout to it. Acceptance with negative controls:
+  `scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql` (H1 the censoring and the pre-window
+  rows, H2 the check, H3 the readout's gate).
 
-**What the ledger shows — more than the two pauses (measured 2026-10-03; the query is the
-acceptance's `led` statement).** The ledger holds 25 changes on **8 of the 14 HOLDOUT units** inside
-the window, every one an observed change with no log row behind it:
+**What the ledger shows inside the window — more than the two pauses (measured 2026-10-03; the
+query is the acceptance's `led` statement).** The ledger holds 25 changes on **8 of the 14 HOLDOUT
+units inside the window** (from 2026-09-01), every one an observed change with no log row behind it.
+This is not every change since the arms were frozen: 7 HOLDOUT units also changed between the
+assignment and the window start (next table), so **10 of the 14 HOLDOUT units changed since the
+assignment**.
 
 | HOLDOUT campaign | stratum | first change (LA day) | changes |
 |---|---|---|---|
@@ -246,12 +256,53 @@ the window, every one an observed change with no log row behind it:
 | BOX-SP/PHRASE (teen-girl-birthday-gift, White) `75834491759416` | SP\|UNC\|LNC | 2026-09-27 | campaign pause (Ori, confirmed) |
 | BOX-VIDEO/COMPETE (Copycat, Blue) `76054744633802` | SB\|UNC\|LNC | 2026-09-27 | campaign pause (Ori, confirmed) |
 
-So the rule censors 6 of the 7 strata that hold a HOLDOUT unit: **61 of 69 units — 13 of 14 HOLDOUT,
-48 of 55 TREATED** — each keeping 9 observed days (censored from 09-10) to 26 (from 09-27). Only
-SB|CAP|LNC (1 HOLDOUT, 5 TREATED) and SB|CAP|GRD (no HOLDOUT, 2 TREATED) are untouched. **Ori has
-confirmed the two pauses only; the other six units' changes are unconfirmed, and what the trial is
-worth with this censoring is a decision for Ori, not for the readout.** No dollar of the estimate
-was read to measure this: the estimate path was run for unit counts and observed days only.
+So the rule, as ruled (changes inside the window), censors 6 of the 7 strata that hold a HOLDOUT
+unit: **61 of 69 units — 13 of 14 HOLDOUT, 48 of 55 TREATED** — each keeping 9 observed days
+(censored from 09-10) to 26 (from 09-27). Only SB|CAP|LNC (1 HOLDOUT, 5 TREATED) and SB|CAP|GRD (no
+HOLDOUT, 2 TREATED) are untouched. **Ori has confirmed the two pauses only; the other six units'
+changes are unconfirmed, and what the trial is worth with this censoring is a decision for Ori, not
+for the readout.** No dollar of the estimate was read to measure this: the estimate path was run for
+unit counts and observed days only.
+
+**Changes between the assignment and the window start — NOT censored, a ruling for Ori (measured
+2026-10-03, review of commit a2e7e1e; the query is the acceptance's `pre` statement, which is the
+`led` statement with its lower bound at the assignment day, 2026-08-19).** The arms were frozen on
+2026-08-19 (`assigned_at`); the window, R9's censoring and `SP_ENGINE_PREFLIGHT`'s HOLDOUT arm all
+start on 2026-09-01. The ledger holds 25 rows on **7 HOLDOUT units** in between (counts are ledger
+rows; a logged change and the observed row confirming it are two rows):
+
+| HOLDOUT campaign | stratum | changes before 2026-09-01 (LA day) | change inside the window? |
+|---|---|---|---|
+| FRESH-SP/PT (Competitors, Blue, A1) `135553284530895` | SP\|UNC\|LNC | 08-21 CAMPAIGN_PAUSE: 1 logged (`stop-20260821-135553284530895`, MANUAL), 1 observed confirming it | no |
+| PILOT-WHITE-PHRASE-birthday-gifts `39989090923480` | SP\|UNC\|LNC | 08-21 CAMPAIGN_PAUSE: 1 logged (`stop-20260821-39989090923480`, MANUAL), 1 observed confirming it | no |
+| BOTTLE-SP/AUTO `279837860088128` | SP\|UNC\|LNC | 08-23 REDUCE_BID ×2, reprice book `reprice_book_20260823_1527`, logged and observed | yes, from 09-11 |
+| FRESH-VIDEO/ BROAD `446868628489343` | SB\|UNC\|GRD | 08-23 INCREASE_BID ×3, the same reprice book, logged and observed | yes, from 09-27 |
+| BOX-SP/PHRASE (teen-girl-birthday-gift, White) `75834491759416` | SP\|UNC\|LNC | 08-23 INCREASE_BID ×1, the same reprice book, logged and observed | yes, from 09-27 |
+| BOX-SP/BROAD (Hunter, Gift for Girl) `200171414843593` | SP\|CAP\|GRD | 08-25 REDUCE_BID ×1, observed, not logged | yes, from 09-10 |
+| BOX-SP/AUTO (White) `488973733209950` | SP\|UNC\|GRD | 08-26 bid ×5, 08-31 bid ×2 and budget ×1, observed, not logged | yes, from 09-10 |
+
+The two 08-21 pauses are still in force: `V_DIM_CAMPAIGN_CURRENT` reads both campaigns PAUSED
+(serving status CAMPAIGN_PAUSED), `effective_from` 2026-08-21T11:21:01 (read 2026-10-03; the full
+name of the second is PILOT-WHITE-PHRASE-birthday-gifts-for-g (tween-girl-birthday-gift, White)).
+Neither campaign has a change inside the
+window, so neither is a contaminated unit under R9; their stratum SP|UNC|LNC is censored from 09-11
+for another unit, and the estimate scores both as untouched HOLDOUT units for 09-01..09-10.
+
+§6 #2 says one upload contaminates a unit permanently; the plan's R9 rule reads "after
+`eligible_from`". The two disagree on these seven units, so the readout publishes them as
+`PRE_WINDOW_CHANGE` rows and the board reads AMBER until Ori rules. **The two answers, measured on the
+strata (the same ledger, no dollar read):**
+
+- **(a) as built — count changes inside the window only.** 61 of 69 units censored, as above; the
+  seven units' days from 09-01 to their stratum's censoring are scored as untouched.
+- **(b) count changes from the assignment day** (`censored_from = GREATEST(first change since
+  assignment, eligible_from)`): SP|UNC|LNC, SP|UNC|GRD, SP|CAP|GRD and SB|UNC|GRD are censored from
+  09-01 and drop out of the estimate — **43 units, 9 HOLDOUT and 34 TREATED** — leaving **26 units,
+  5 HOLDOUT and 21 TREATED**: SP|CAP|LNC censored from 09-11, SB|UNC|LNC from 09-27, SB|CAP|LNC and
+  SB|CAP|GRD untouched.
+
+Either ruling changes `V_HOLDOUT_READOUT` and `holdout_unit_changed` (for (a), the AMBER becomes a
+recorded ruling; for (b), the PRE_WINDOW_CHANGE days censor), and the acceptance with them.
 
 ### If the BASE/GROWTH reorg has not landed by Sep 1
 
@@ -327,8 +378,9 @@ materially — the largest eligible campaign is 11.2% of the money on its own.
 
 - **First readout: 2027-01-05.** `V_HOLDOUT_READOUT` returns exactly one estimate row before that
   date — state `NOT_YET`, all numerics `NULL`, verdict `not enough data yet — first readout
-  2027-01-05` — and, from v27.162, one `CENSORED` row per censored unit, which carries dates and a
-  reason and no number (§6 "Contamination"; acceptance H3 holds the gate).
+  2027-01-05` — and, from v27.162, one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE`
+  row per HOLDOUT unit changed before its window, which carry dates and a reason and no number (§6
+  "Contamination"; acceptance H3 holds the gate).
 - **READOUT LAG IS NOT OPTIONAL.** Ads spend settles ~D+3 and sales accrue to D+7/D+14. Reading the
   final window before 2027-01-05 systematically **understates the treated arm's sales**, because
   the treated arm has more recent changes by construction. The readout date already contains the

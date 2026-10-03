@@ -26,8 +26,9 @@
 --
 -- ── WHY THE VIEW PRINTS NOTHING UNTIL 2027-01-05 ─────────────────────────────────────────────
 -- Before the first readout date this view returns exactly ONE estimate row, state NOT_YET, every
--- numeric column NULL (v27.162: beside it, one CENSORED row per censored unit, which carries dates
--- and a reason and no number — see "CONTAMINATION AND CENSORING" below). That is deliberate and it
+-- numeric column NULL (v27.162: beside it, one CENSORED row per censored unit and one
+-- PRE_WINDOW_CHANGE row per HOLDOUT unit changed before its window, which carry dates and a reason
+-- and no number — see "CONTAMINATION AND CENSORING" below). That is deliberate and it
 -- is not paternalism:
 --   · Ads spend settles ~D+3 and sales accrue to D+7/D+14 (fact_oi_ads_restatement_settle). The
 --     TREATED arm has more recent changes than the holdout arm by construction, so reading early
@@ -111,19 +112,54 @@
 -- MEASURED BEFORE DEPLOY (2026-10-03 ~08:00 UTC, this body run as a query, CENSORED rows listed):
 -- R9 named two units, Ori's pauses of 2026-09-27 (BOX-SP/PHRASE (teen-girl-birthday-gift, White)
 -- 75834491759416 and BOX-VIDEO/COMPETE (Copycat, Blue) 76054744633802, confirmed by Ori 2026-10-02).
--- The ledger holds changes on 8 of the 14 HOLDOUT units inside the window (25 rows, every one an
+-- INSIDE THE WINDOW the ledger holds changes on 8 of the 14 HOLDOUT units (25 rows, every one an
 -- OBSERVED row with no log row behind it, first days 2026-09-10 .. 2026-09-27), so the rule censors
 -- 6 of the 7 strata that hold a HOLDOUT unit: 61 of 69 units (13 of 14 HOLDOUT, 48 of 55 TREATED).
 -- Untouched: stratum SB|CAP|LNC (1 HOLDOUT, 5 TREATED) and SB|CAP|GRD (no HOLDOUT, 2 TREATED). A
 -- censored unit keeps 9 observed days (censored from 09-10: 09-01..09-09) to 26 (from 09-27). Ori
 -- confirmed the two pauses; the other six units' changes are unconfirmed (HOLDOUT.md §6,
 -- "Contamination"). No dollar was read: the estimate path was run only for unit counts and days.
+-- That is NOT every change since the arms were frozen — see the next section.
+--
+-- ── CHANGES BEFORE THE WINDOW (v27.162 follow-up, 2026-10-03, review of commit a2e7e1e) ────────
+-- The arms were frozen on 2026-08-19 (DE_HOLDOUT_ASSIGNMENT.assigned_at); the window, and R9's
+-- censoring, start on eligible_from (2026-09-01); SP_ENGINE_PREFLIGHT's HOLDOUT arm also bites from
+-- eligible_from only. Changes between the two are NOT censored. The plan's rule reads "after
+-- eligible_from" and HOLDOUT.md §6 #2 says one upload contaminates a unit permanently; which governs
+-- a change before the window start is a ruling for Ori, so this view does not decide it: it publishes
+-- one PRE_WINDOW_CHANGE row per HOLDOUT unit changed from its assignment day (Los Angeles) to the day
+-- before its eligible_from, with the changes day by day (logged and observed rows counted apart), the
+-- days the estimate scores it as untouched, and no number; the ALL row's sentence (from 2027-01-05)
+-- says how many there are. V_ENGINE_HEALTH holdout_unit_changed is AMBER while any stands and RED when
+-- the ledger holds one this view does not publish.
+-- MEASURED (2026-10-03, this body run as a query with state = 'PRE_WINDOW_CHANGE'; the acceptance's
+-- `pre` statement lists the rows): 25 ledger rows on 7 HOLDOUT units before the window start —
+--   FRESH-SP/PT (Competitors, Blue, A1) 135553284530895 and PILOT-WHITE-PHRASE-birthday-gifts
+--     39989090923480, SP|UNC|LNC: CAMPAIGN_PAUSE on 2026-08-21, each 1 logged row (stop-20260821-*)
+--     and 1 observed row confirming it. Neither has a change inside the window, so neither is a
+--     contaminated unit under R9 today; their stratum is censored from 09-11, for another unit.
+--   the 2026-08-23 reprice book (reprice_book_20260823_1527, logged and observed): BOTTLE-SP/AUTO
+--     279837860088128 (SP|UNC|LNC, 2 REDUCE_BID), FRESH-VIDEO/ BROAD 446868628489343 (SB|UNC|GRD,
+--     3 INCREASE_BID) and BOX-SP/PHRASE (teen-girl-birthday-gift, White) 75834491759416 (SP|UNC|LNC,
+--     1 INCREASE_BID);
+--   unlogged observed changes: BOX-SP/BROAD (Hunter, Gift for Girl) 200171414843593 (SP|CAP|GRD,
+--     1 REDUCE_BID 08-25) and BOX-SP/AUTO (White) 488973733209950 (SP|UNC|GRD, 5 bid changes 08-26,
+--     2 bid changes and 1 budget change 08-31).
+-- Since the assignment, then, 10 of the 14 HOLDOUT units changed (7 before the window, 8 inside it,
+-- 5 both). Had the rule counted from the assignment day instead (censored_from = GREATEST(first
+-- change since assignment, eligible_from), measured by the same query on the strata): SP|UNC|LNC,
+-- SP|UNC|GRD, SP|CAP|GRD and SB|UNC|GRD would be censored from 09-01 and drop out — 43 units, 9
+-- HOLDOUT and 34 TREATED — leaving 26 units (5 HOLDOUT, 21 TREATED): SP|CAP|LNC censored from 09-11,
+-- SB|UNC|LNC from 09-27, SB|CAP|LNC and SB|CAP|GRD untouched. That is Ori's call, not this view's.
 -- COST (2026-10-03, each read twice): the CENSORED rows alone 6.5 / 20.2 slot-s (no FACT_AMAZON_ADS: the
 -- estimate branch is gated off before 2027-01-05, and filtering state = 'CENSORED' prunes it after —
 -- dry run with the gate date set to 2027-02-01: 403,245 bytes filtered, 47,636,110 unfiltered). The
 -- estimate path, gate date set to 2027-02-01, counts only: v27.83 16.0 / 56.3 slot-s, this body
 -- 252.0 / 153.8 slot-s, 27,053,628 bytes (FACT_AMAZON_ADS read once, joined to the 69-row cut).
 -- Reproduce: HOLDOUT_INTEGRITY_acceptance.sql, temp tables `led` and `ro`.
+-- COST of the follow-up (2026-10-03, deployed view): state = 'PRE_WINDOW_CHANGE' read twice 50.1 /
+-- 25.6 slot-s, 318,457 bytes; dry runs with the gate date set to 2027-02-01: PRE_WINDOW_CHANGE
+-- 318,457 bytes, CENSORED 403,245, unfiltered 47,687,197 — both unit branches prune FACT_AMAZON_ADS.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_HOLDOUT_READOUT` AS
 WITH
@@ -142,27 +178,52 @@ anchor AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
 -- the frozen arms. Nothing here recomputes an arm; it only reads one.
 asg AS (
   SELECT a.unit_id, a.unit_name, a.arm, a.stratum, a.channel, a.family,
-         a.net_28d_at_assign, a.eligible_from, a.trial_end
+         a.net_28d_at_assign, a.eligible_from, a.trial_end, a.assigned_at
   FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` a, k
   WHERE a.trial_id = k.trial_id AND a.unit_type = 'CAMPAIGN'
 ),
--- R9: every change that reached Amazon on a HOLDOUT unit inside its trial window (header,
--- "CONTAMINATION AND CENSORING").
+-- the two sources of a change that reached Amazon: a change-log row that was applied, or a change
+-- the observed-change ledger saw on Amazon (header, "CONTAMINATION AND CENSORING")
+chg AS (
+  SELECT campaign_id, applied_at, change_id, action, 'LOGGED, applied' AS landed_evidence
+  FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
+  UNION ALL
+  SELECT campaign_id, applied_at, change_id, action,
+         IF(STARTS_WITH(COALESCE(upload_note, ''), 'CONFIRMS '),
+            'OBSERVED on Amazon, confirming a logged row', 'OBSERVED on Amazon, not logged')
+  FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
+  WHERE source = 'OBSERVED'
+),
+-- R9: every change that reached Amazon on a HOLDOUT unit inside its trial window
 touch AS (
   SELECT a.unit_id, a.stratum, DATE(l.applied_at, 'America/Los_Angeles') AS change_day,
          l.change_id, l.action, l.landed_evidence
   FROM asg a
-  JOIN (SELECT campaign_id, applied_at, change_id, action, 'LOGGED, applied' AS landed_evidence
-        FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
-        UNION ALL
-        SELECT campaign_id, applied_at, change_id, action,
-               IF(STARTS_WITH(COALESCE(upload_note, ''), 'CONFIRMS '),
-                  'OBSERVED on Amazon, confirming a logged row', 'OBSERVED on Amazon, not logged')
-        FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
-        WHERE source = 'OBSERVED') l
-    ON l.campaign_id = a.unit_id
+  JOIN chg l ON l.campaign_id = a.unit_id
   WHERE a.arm = 'HOLDOUT'
     AND DATE(l.applied_at, 'America/Los_Angeles') BETWEEN a.eligible_from AND a.trial_end
+),
+-- v27.162 follow-up: every change that reached Amazon on a HOLDOUT unit from its assignment day to
+-- the day before its window start. R9 does not censor these (it reads the window only); they are
+-- published as PRE_WINDOW_CHANGE rows, a ruling for Ori (header, "CHANGES BEFORE THE WINDOW").
+pre_touch AS (
+  SELECT a.unit_id, l.applied_at, DATE(l.applied_at, 'America/Los_Angeles') AS change_day,
+         l.change_id, l.action, STARTS_WITH(l.landed_evidence, 'LOGGED') AS is_logged
+  FROM asg a
+  JOIN chg l ON l.campaign_id = a.unit_id
+  WHERE a.arm = 'HOLDOUT'
+    AND DATE(l.applied_at, 'America/Los_Angeles') >= DATE(a.assigned_at, 'America/Los_Angeles')
+    AND DATE(l.applied_at, 'America/Los_Angeles') < a.eligible_from
+),
+-- per HOLDOUT unit changed before its window: its first day and what changed, day by day
+pre AS (
+  SELECT unit_id, MIN(change_day) AS pre_window_change_on, SUM(n_logged + n_observed) AS n_rows,
+         STRING_AGG(FORMAT('%t %s (%d logged, %d observed)', change_day, action, n_logged, n_observed),
+                    '; ' ORDER BY change_day, first_at, action) AS changes
+  FROM (SELECT unit_id, change_day, action, MIN(applied_at) AS first_at,
+               COUNTIF(is_logged) AS n_logged, COUNTIF(NOT is_logged) AS n_observed
+        FROM pre_touch GROUP BY 1, 2, 3)
+  GROUP BY 1
 ),
 -- per contaminated HOLDOUT unit: its first day, and the first change on it
 contam AS (
@@ -268,9 +329,12 @@ unit AS (
   FROM unit_days
   WHERE n_obs_days >= 1
 ),
--- how many units the censoring touches, for the ALL row's sentence
+-- how many units the censoring touches, and how many HOLDOUT units changed before the window, for
+-- the ALL row's sentence
 ncens AS (
-  SELECT COUNTIF(censored_from IS NOT NULL) AS n_cens, COUNT(*) AS n_all FROM ucens
+  SELECT COUNTIF(censored_from IS NOT NULL) AS n_cens, COUNT(*) AS n_all,
+         (SELECT COUNT(*) FROM pre) AS n_pre
+  FROM ucens
 ),
 -- per (class, arm) moments. The ALL row is the trial; the class rows are exploratory.
 cell AS (
@@ -332,7 +396,9 @@ SELECT
   CAST(NULL AS STRING)  AS arm,
   CAST(NULL AS STRING)  AS stratum,
   CAST(NULL AS DATE)    AS contaminated_on,
-  CAST(NULL AS DATE)    AS censored_from
+  CAST(NULL AS DATE)    AS censored_from,
+  -- v27.162 follow-up: filled on PRE_WINDOW_CHANGE rows only
+  CAST(NULL AS DATE)    AS pre_window_change_on
 FROM k
 WHERE CURRENT_DATE('America/Los_Angeles') < k.first_readout
 
@@ -374,9 +440,13 @@ SELECT
   IF(e.action_class = 'ALL' AND nc.n_cens > 0,
      FORMAT(' CENSORED (R9, HOLDOUT.md §6): %d of %d campaigns, both arms, each rated only on its days before the first change on a HOLDOUT campaign of its stratum; the CENSORED rows of this view name them.',
             nc.n_cens, nc.n_all),
+     ''),
+  IF(e.action_class = 'ALL' AND nc.n_pre > 0,
+     FORMAT(' NOT CENSORED, A RULING FOR ORI: %d HOLDOUT campaign(s) changed on Amazon between their assignment and the window start; R9 censors changes inside the window only, so this estimate scores them, and their stratum-mates, as untouched from the window start; the PRE_WINDOW_CHANGE rows of this view name them.',
+            nc.n_pre),
      '')) AS verdict,
   CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING),
-  CAST(NULL AS DATE), CAST(NULL AS DATE)
+  CAST(NULL AS DATE), CAST(NULL AS DATE), CAST(NULL AS DATE)
 FROM est e
 CROSS JOIN ncens nc
 WHERE CURRENT_DATE('America/Los_Angeles') >= e.first_readout
@@ -399,7 +469,39 @@ SELECT
             ''),
          'the stratum is censored from the first change on any of its HOLDOUT campaigns — ', u.censored_by,
          '. Both arms of the stratum leave the estimate from that day (R9, Ori 2026-10-02; HOLDOUT.md §6).') AS verdict,
-  u.unit_id, u.unit_name, u.arm, u.stratum, u.contaminated_on, u.censored_from
+  u.unit_id, u.unit_name, u.arm, u.stratum, u.contaminated_on, u.censored_from,
+  CAST(NULL AS DATE) AS pre_window_change_on
 FROM ucens u
 WHERE u.censored_from IS NOT NULL
+
+UNION ALL
+
+-- ── v27.162 follow-up: one PRE_WINDOW_CHANGE row per HOLDOUT unit changed between its assignment and
+-- its window start. Dates and the changes, never a dollar, so these rows stand before 2027-01-05 too.
+-- R9 does not censor these changes; whether they contaminate the unit is a ruling for Ori (header,
+-- "CHANGES BEFORE THE WINDOW"). V_ENGINE_HEALTH holdout_unit_changed reads these rows and is AMBER
+-- while any stands.
+SELECT
+  4 AS row_rank,
+  'PRE_WINDOW_CHANGE' AS state,
+  CAST(NULL AS STRING) AS action_class,
+  CAST(NULL AS INT64), CAST(NULL AS INT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64), CAST(NULL AS FLOAT64),
+  CONCAT(FORMAT('NOT CENSORED, A RULING FOR ORI: this HOLDOUT campaign (stratum %s) changed on Amazon between its assignment on %t and its window start on %t, %d ledger row(s): %s. ',
+                u.stratum, DATE(a.assigned_at, 'America/Los_Angeles'), a.eligible_from, p.n_rows, p.changes),
+         CASE WHEN u.censored_from IS NULL
+                THEN FORMAT('R9 censors changes inside the window only, so the estimate scores this campaign and its stratum-mates as untouched from %t to the end of the window',
+                            a.eligible_from)
+              WHEN u.censored_from > a.eligible_from
+                THEN FORMAT('R9 censors changes inside the window only, so the estimate scores this campaign and its stratum-mates as untouched from %t to %t (the stratum is censored from %t)',
+                            a.eligible_from, DATE_SUB(u.censored_from, INTERVAL 1 DAY), u.censored_from)
+              ELSE FORMAT('R9 already censors the stratum from %t, the window start, for a change inside the window', u.censored_from)
+         END,
+         '. HOLDOUT.md §6 #2: one upload contaminates a unit permanently; whether a change before the window start does is a ruling for Ori (HOLDOUT.md §6 "Contamination"). Censoring the stratum from the window start would drop it from the estimate.') AS verdict,
+  u.unit_id, u.unit_name, u.arm, u.stratum, u.contaminated_on, u.censored_from,
+  p.pre_window_change_on
+FROM pre p
+JOIN ucens u USING (unit_id)
+JOIN asg a USING (unit_id)
 ;
