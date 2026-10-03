@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.167 (2026-10-03). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.168 (2026-10-03). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -278,6 +278,22 @@
 -- PICK row's queue_add nulled read both copies NOT EXERCISED and exited 1. The first submission
 -- (bqjob_r64c26b87ea73f966_000001a10196bb35_1) inlined the injected copy and failed at it on BigQuery's
 -- stage limit; the copy is now materialized once (temp table hq, 1.9 slot-seconds).
+--
+-- v27.168 (2026-10-03, piece-1 follow-up G1 — P-16). RESTATED: T1's cost recount (inc_cost) branches
+-- on the KEPT question's basis — the previous partition's request_basis = 'HORIZON_PROBE_GOAL' costs
+-- click_goal_day x kept price, any other basis the kept price on tonight's window — not on tonight's
+-- is_probe (v27.164's form). The eviction test reads the same recount.
+-- RUN 2026-10-03 (Los Angeles and New York both 10-03), judgement snapshot OI._tmp_g1_judge (12:57 UTC;
+-- OI._tmp_g1_judge2, taken with the CALL at 13:03, equal to it to 5.7e-14 on floats):
+--   on the live partition (built 13:04:57 UTC by v27.168, job g1_call_1791032624) and the deployed
+--   view: 37 rows PASS (job g1_acc_live_1791032787, 1,589.0 slot-seconds, 140,893,843 bytes); the
+--   v27.167 form of this file reads T1 1 there, the Fresh incumbent 388620934464557 costed by its window
+--   (job g1_accold_live_1791032833, 805.3 slot-seconds).
+--   on the v27.167 body's dry run of the same snapshot (history = the live table before 10-03 + that
+--   partition, OI._tmp_g1_old): this form reads T1 1 (the same keyword at $1.00 a day), every other
+--   row PASS (job g1_acc_new_on_old_1791032862, 236.9 slot-seconds).
+-- NEGATIVE CONTROLS: see check_plan_seat_controls.py's header (four G1 copies) and the SOP section
+-- "An incumbent is costed by the question it keeps".
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -798,9 +814,14 @@ inc_ord AS (
         WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
           AND p.is_candidate AND COALESCE(p.ladder_state, '') != 'DEAD') x
 ),
+-- RESTATED v27.168 (piece-1 follow-up G1): "a probe" is the KEPT QUESTION's basis — the previous
+-- partition's request_basis = 'HORIZON_PROBE_GOAL', the basis the builder writes on a probe's seat —
+-- not tonight's is_probe (v27.164's form), so an ordinary seat that turned probe the next night keeps
+-- its window cost (P-16 keeps the question; plan B Fresh 388620934464557 on 2026-10-03 was costed
+-- 4 x $0.25 = $1.00 a day against the $0.1067 its question asked).
 inc_cost AS (
   SELECT p.plan, p.campaign_id, p.keyword_id,
-         COALESCE(CASE WHEN p.is_probe
+         COALESCE(CASE WHEN h.request_basis = 'HORIZON_PROBE_GOAL'
                          THEN g.click_goal_day * h.planned_bid
                        WHEN p.w_sp > 0 AND COALESCE(p.current_bid, 0) > 0
                          THEN (p.w_sp / p.window_days) * SAFE_DIVIDE(h.planned_bid, p.current_bid)

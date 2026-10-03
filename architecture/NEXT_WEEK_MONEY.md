@@ -2086,7 +2086,8 @@ ordinary seats ($11.84).
 `w_sp / window_days × kept planned bid / current bid` (0 with no spend or no current bid, P-6), and on
 a keyword that is a probe tonight `click_goal_day × kept price` (P-25's costing of a probe opened at a
 price; the judge costs a probe without a LIFT price by its window or its seat CPC, but an incumbent
-probe's price is the one it opened at). The incumbents' walk charges
+probe's price is the one it opened at). *Restated by v27.168 (G1, below): the branch follows the kept
+question's basis, not tonight's `is_probe`.* The incumbents' walk charges
 it to the allowance, and `planned_spend_per_day`, the direction clause, the campaign need,
 `expected_after_upload_per_day` and `share_closed` read it. The question is unchanged — clicks, due
 date, expected CPC, implied spend and basis are the ones the seat was given — so on an incumbent
@@ -2396,6 +2397,123 @@ The values and costs are in the two acceptance files' headers.
 `check_plan_money_controls.py` still waits for its job synchronously. That job cost 120,513.8
 slot-seconds and ran 396.3 s (11:52:44–11:59:20 UTC), so the run above submitted the same script text
 with `--nosync` through a scratchpad wrapper and polled it with `bq wait`.
+
+### An incumbent is costed by the question it keeps (v27.168, piece-1 follow-up G1 — P-16)
+
+**The defect.** P-16 keeps an incumbent's seat, number, planned price, verdict date and **question**
+(clicks, due date, expected CPC, implied spend and `request_basis`). v27.164 (F2) costed it by
+tonight's `is_probe`, so a keyword seated as an ordinary seat that turned probe the next night was
+costed as a probe — `click_goal_day × kept price` — while its question still asked for its window's
+click rate. On the 2026-10-03 partition (built 12:18 UTC by v27.167): plan B, Fresh, campaign
+`292848303399755`, keyword `388620934464557`, seated 10-02 as `HOLD_AT_PRICE` at $0.25 with the
+question 5 clicks by 2026-10-16 (`HORIZON_WINDOW_RATE`, $0.1067 a day), a LIFT probe nominee on 10-03
+with $0.00 window spend, was costed 4 × $0.25 = **$1.00 a day** (9.4× its question's money) and its
+sentence said "OPEN PROBE at $0.25 for about 0 clicks a day (about $1.00 a day …). That is A RAISE of
+about $1.00 a day in spend" with its price held at its current bid.
+
+**The rule (v27.168).** An incumbent's cost branch follows the **kept question's basis**
+(`prior_seat.held_basis`, the previous partition's `request_basis`): `HORIZON_PROBE_GOAL` — the basis
+the builder writes on a probe's question — costs `click_goal_day × kept price`; any other basis costs
+`(w_sp / window_days) × kept price / current bid` (0 with no spend or no current bid). Tonight's
+`is_probe` still decides the **move** (`OPEN_PROBE` on a seated probe, P-25) and nothing else about an
+incumbent. A seat taken tonight is unchanged (the judge's cost; its question's basis is set from
+tonight's `is_probe`, so the two agree). The same test is in `ranked`.inc_cost, the builder's P-16
+assertion (`cost_tonight`), acceptance `T1` (`inc_cost`) and `check_plan_seat_controls.py`'s copies.
+
+**Checks and controls.** `T1` and the P-16 assertion recount an incumbent's cost from the contract's
+basis (the previous partition's `request_basis`; on a kept incumbent tonight's row carries the same
+one, which `T1` already holds). `check_plan_seat_controls.py`: the incumbent made a probe tonight now
+keeps its window cost (`HC_T1_TURNED_PROBE_KEEPS_WINDOW_COST`, T1 0) and F2's goal cost on it reads
+`T1` 1 (`NC_T1_TURNED_PROBE_COSTED_BY_GOAL`); a contract asked as a probe (`HORIZON_PROBE_GOAL` on both
+nights) costs the goal (`HC_T1_PROBE_BASIS_INCUMBENT`, T1 0), and the same incumbent with its basis
+flipped to `HORIZON_PROBE_GOAL` but costed by its window reads `T1` 1 (`NC_T1_BASIS_FLIPPED`). The
+eviction copies' $1,000,000 contract now asks a probe's question, so it is priced out of any allowance
+whatever the queued row spent.
+
+### Deploy and verify v27.168 (2026-10-03, piece-1 follow-up G1)
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --nosync \
+  "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"          # then bq wait <job> 60 until DONE
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --nosync \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"   # bq wait <job> 60
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit --judge-table <a snapshot of the judgement>
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --collect <the JOB it printed>
+```
+
+```sql
+-- incumbents whose keyword direction clause says "A RAISE" at a price held or cut, by the kept
+-- question's basis: on a window question the spend cannot rise at a held or cut price, so any is a
+-- defect; on a probe's question the spend rises from nothing to the click goal (P-25), listed apart
+SELECT plan, family,
+       COUNTIF(seat_tenure = 'INCUMBENT') AS incumbents,
+       COUNTIF(seat_tenure = 'INCUMBENT' AND is_probe AND request_basis != 'HORIZON_PROBE_GOAL') AS probe_tonight_window_q,
+       COUNTIF(seat_tenure = 'INCUMBENT' AND REGEXP_CONTAINS(sentence, r'That is A RAISE of about')
+               AND planned_bid <= current_bid + 0.005 AND request_basis != 'HORIZON_PROBE_GOAL') AS raise_said_held_or_cut_window_q,
+       COUNTIF(seat_tenure = 'INCUMBENT' AND REGEXP_CONTAINS(sentence, r'That is A RAISE of about')
+               AND planned_bid <= current_bid + 0.005 AND request_basis = 'HORIZON_PROBE_GOAL') AS raise_said_held_or_cut_probe_q,
+       COUNTIF(seat_tenure = 'INCUMBENT' AND REGEXP_CONTAINS(sentence, r'That is A RAISE of about')
+               AND planned_spend_per_day - COALESCE(SAFE_DIVIDE(w_sp, window_days), 0) <= 0.005) AS raise_said_spend_not_up,
+       ROUND(SUM(IF(seat_tenure = 'INCUMBENT', seat_cost_per_day, 0)), 4) AS incumbent_cost,
+       ROUND(MAX(expected_after_upload_per_day), 4) AS expected_after_upload, MAX(share_closed) AS share_closed
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+Measured 2026-10-03 (12:57–13:20 UTC; Los Angeles and New York both 10-03).
+
+- **Dry runs on one judgement snapshot.** `OI._tmp_g1_judge` (taken 12:57 UTC, window 09-29 … 10-01,
+  BOOST, 356 rows, 13 probes; 446.1 slot-seconds). Both bodies ran with the partition write swapped
+  for a scratch table (v27.167 → `OI._tmp_g1_old`, 737.6 slot-seconds; v27.168 → `OI._tmp_g1_new`,
+  530.1); every builder assertion passed on both. Of 712 rows, one keyword's money moved: plan B Fresh
+  `388620934464557` (incumbent, `OPEN_PROBE` at $0.25 = its current bid, $0.00 window spend, question
+  `HORIZON_WINDOW_RATE`) costs $1.00 → $0.00 a day (`seat_cost_per_day`, `planned_spend_per_day`,
+  `planned_spend_delta_per_day`), and its sentence says "That is no change of about $0.00 a day in
+  spend" where it said "That is A RAISE of about $1.00 a day in spend". Downstream, on plan B Fresh only:
+  `expected_after_upload_per_day` $79.5544 → $78.5544 and `share_closed` 0.3733 → 0.3882 on its 56 rows
+  (and the FAMILY clause of their sentences), and the cap of campaign `292848303399755` $72.61 →
+  $72.28 on its 13 rows (and their CAMPAIGN CAP clause; $1.00 less need, a third of it taken
+  tonight — a cut ramps by thirds, R14). No other column of any row changed, plan A included.
+- **The builder's assertion, controlled.** The v27.168 body with `ranked`.inc_cost put back to
+  tonight's `is_probe` was refused by the P-16 assertion on the same snapshot ("an incumbent before its
+  verdict date that is still a candidate keeps its seat and its contract, … (P-16)", job
+  `g1_dry_nc_1791032404`, 645.3 slot-seconds); every assertion before it passed.
+- **Deployed** 13:03:33 UTC (`INFORMATION_SCHEMA.ROUTINES.last_altered`); the deployed body equals the
+  file with comment lines stripped (50,085 characters, whitespace collapsed). One CALL (job
+  `g1_call_1791032624`) rewrote the 10-03 partition at 13:04:57 UTC (`built_at`), 356 rows per plan. It
+  equals the v27.168 dry run on every column of all 712 rows but `built_at` and `rank_no` on two plan-B
+  LolliME rows (`298082381611159` and `562285957639523`, ranks 6 and 7 swapped, both seated with their
+  seat numbers unchanged): their `rank_score` is equal to the last printed digit (5.988753824876158), so
+  the tie falls on float summation order, which varies between runs of the view. A second snapshot
+  taken with the CALL (`OI._tmp_g1_judge2`) equals the first on every row to 5.7e-14 on floats.
+- **The question above on the live partition:** 0 incumbent rows in either plan say "A RAISE" at a
+  held or cut price: 0 of the 111 on a window question and 0 of the 2 on a probe's (Fresh
+  `271226499623994` in each plan, `OPEN_PROBE` at $0.27 over a $0.25 bid, "A RAISE of about $1.08 a day
+  in spend"); 0 say "A RAISE" while their planned spend is not above their window spend. One incumbent is a probe tonight on a window question — the Fresh keyword above. Plan B:
+  Bottle 3 incumbents $0.4622 a day, Fresh 22 $60.4325 (expected after upload $78.5544, share closed
+  0.3882), LolliME 47 $115.9317 ($163.0685, 0.2915), Lollibox 5 $6.9854 ($7.2387).
+- **Acceptance** on the live partition and the deployed view: 37 rows PASS (job
+  `g1_acc_live_1791032787`, 1,589.0 slot-seconds, 140,893,843 bytes). The v27.167 form reads `T1` 1 there
+  (the Fresh keyword costed by its window; job `g1_accold_live_1791032833`, 805.3); this form reads
+  `T1` 1 on the v27.167 dry run's partition (the same keyword at $1.00; history = the live table before
+  10-03 + `OI._tmp_g1_old`, job `g1_acc_new_on_old_1791032862`, 236.9) and PASS on every other row.
+- **The negative controls** (`check_plan_seat_controls.py --judge-table onyga-482313.OI._tmp_g1_judge2`,
+  job `bqjob_r600d3131e7ab6071_000001a101dfb192_1`, 13,018.2 slot-seconds): exit 0, LIVE 50 readings 0,
+  all 37 copies exercised and as expected. The doctored incumbent is plan B LolliME `123153583900193`
+  (seated 10-02 at $0.70, question `HORIZON_WINDOW_RATE`; on tonight's window at $0.70 it costs $1.57,
+  its goal 4 × $0.70 = $2.80): made a probe tonight and costed by its window `T1` 0, costed by its goal
+  `T1` 1; its question asked as a probe's on both nights and costed by its goal `T1` 0; **its basis
+  flipped to `HORIZON_PROBE_GOAL` and costed by its window `T1` 1**. Under the v27.167 form, the same
+  four copies read 1, 0, 1, 0 beyond that form's live reading of 1 (job
+  `bqjob_r69ce5b20553e581e_000001a101dfd8d0_1`, 2,217.9 slot-seconds; it reads 2, 1, 2, 1), so each
+  tells the two forms apart. The queued rows the eviction copies doctor (LolliME `207390974307873` and
+  `273302151474906`) are unserved probes with $0.00 window spend: a $1,000,000 contract on a window
+  question would cost them $0.00, which is why that contract now asks a probe's question;
+  `HC_T1_EVICTION_JUSTIFIED` reads `T1` 0.
 
 ### Four checks that depart from the plan's draft, and why
 

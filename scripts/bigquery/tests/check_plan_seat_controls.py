@@ -38,17 +38,26 @@ HS = 1 when its status is RED)
     NC_T1_COST_KEPT_FROM_CONTRACT (v27.164, follow-up F2) that incumbent carrying its contract's cost,
                                   v27.160's rule: the contract and tonight's row both at tonight's
                                   window cost + $0.50: T1 1.
-    HC_T1_PROBE_INCUMBENT         (v27.164) that incumbent made a probe tonight, costed click_goal_day x
-                                  its kept price: T1 0.
-    NC_T1_PROBE_COSTED_BY_WINDOW  (v27.164) the same probe costed at its price on the window: T1 1.
+    (v27.168, follow-up G1: an incumbent's cost branch follows the KEPT question's basis, the
+    previous partition's request_basis, not tonight's is_probe. These four restate v27.164's
+    HC_T1_PROBE_INCUMBENT / NC_T1_PROBE_COSTED_BY_WINDOW, which held the is_probe rule.)
+    HC_T1_TURNED_PROBE_KEEPS_WINDOW_COST  that incumbent (an ordinary seat) made a probe tonight and
+                                  costed at its kept price on tonight's window: T1 0.
+    NC_T1_TURNED_PROBE_COSTED_BY_GOAL  the same, costed click_goal_day x its kept price (v27.164's
+                                  rule; the live 2026-10-03 defect): T1 1.
+    HC_T1_PROBE_BASIS_INCUMBENT   that incumbent's question asked as a probe's (request_basis
+                                  'HORIZON_PROBE_GOAL' on both nights; not a probe tonight), costed
+                                  click_goal_day x its kept price: T1 0.
+    NC_T1_BASIS_FLIPPED           the same basis flip, costed at its price on the window: T1 1.
     NC_T1_TENURE_WITHOUT_CONTRACT a NEW seat tagged INCUMBENT with no contract behind it: T1 >= 1 (the
                                   tenure term and the sentence term each count it).
     NC_C23_SEAT_DROPPED           the plan's control: the previous partition holds a seat dated
                                   tomorrow, priced $0.00 (so tonight's window costs it nothing;
                                   v27.164 — it was "costing $0.01 a day" while T1 read the contract's
                                   cost), for a keyword tonight's walk queues: C23 1, T1 1.
-    HC_T1_EVICTION_JUSTIFIED      that seat's contract priced $1,000,000 (tonight's window or probe
-                                  goal at that price is above any allowance), and tonight says
+    HC_T1_EVICTION_JUSTIFIED      that seat's contract priced $1,000,000 and asking a probe's
+                                  question (v27.168: its click goal at that price is above any
+                                  allowance whatever the row spent), and tonight says
                                   LEFT_ALLOWANCE_SHRANK and TENURE ENDS EARLY: C23 0, T1 0.
     NC_T1_SHRANK_SILENT           the same without "TENURE ENDS EARLY" in the sentence: C23 0, T1 1
                                   (the sentence term alone).
@@ -113,7 +122,12 @@ USAGE (one BigQuery script job: 121 statements, 8 min 34 s and 5,789.9 slot-seco
 job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1; with the five v27.164 copies, 32 copies, 8,715.2
 slot-seconds on 2026-10-03 09:00–09:09 UTC, job bqjob_r78febaf76288764f_000001a100fdebd9_1; with the
 three v27.167 copies, 35 copies, 10,719.1 slot-seconds on 2026-10-03 11:13–11:22 UTC, job
-bqjob_r7aa7d0f7442a1a18_000001a10177bacd_1; all exit 0. It is submitted asynchronously and polled.)
+bqjob_r7aa7d0f7442a1a18_000001a10177bacd_1; with the four v27.168 copies (two of them restating
+v27.164's probe pair), 37 copies, 13,018.2 slot-seconds on 2026-10-03 13:06–13:17 UTC, job
+bqjob_r600d3131e7ab6071_000001a101dfb192_1, judgement snapshot OI._tmp_g1_judge2, doctored incumbent
+plan B LolliME 123153583900193; all exit 0. The four v27.168 copies under the v27.167 acceptance form
+read T1 1, 0, 1, 0 beyond that form's live reading of 1 (job bqjob_r69ce5b20553e581e_000001a101dfd8d0_1,
+2,217.9 slot-seconds). It is submitted asynchronously and polled.)
     python3 scripts/bigquery/tests/check_plan_seat_controls.py [--judge-table PROJECT.DATASET.TABLE]
         submit, poll with `bq wait JOB 60` (printing the state each minute), collect.
     python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit [--judge-table ...]
@@ -223,6 +237,11 @@ def contract_from_tonight(src_rn_col):
 WINDOW_COST = ("ROUND(IF(w_sp > 0 AND COALESCE(current_bid, 0) > 0, "
                "w_sp / window_days * planned_bid / current_bid, 0), 4)")
 PROBE_COST = "ROUND((SELECT MAX(click_goal_day) FROM jsnap) * planned_bid, 4)"
+# v27.168 (follow-up G1): the branch follows the KEPT question's basis, not tonight's is_probe. The
+# doctored incumbent's contract carries tonight's request_basis (contract_from_tonight), so its
+# coherent cost is the goal on a 'HORIZON_PROBE_GOAL' question and the window on any other.
+BASIS_COST = f"IF(request_basis = 'HORIZON_PROBE_GOAL', {PROBE_COST}, {WINDOW_COST})"
+PROBE_BASIS = "'HORIZON_PROBE_GOAL'"
 
 
 def incumbent_tonight(extra=None):
@@ -232,7 +251,7 @@ def incumbent_tonight(extra=None):
         "verdict_date": "DATE_ADD((SELECT prev_as_of FROM pick), INTERVAL DATE_DIFF(verdict_date, seat_since, DAY) DAY)",
         "clicks_due_date": "DATE_ADD((SELECT prev_as_of FROM pick), INTERVAL DATE_DIFF(verdict_date, seat_since, DAY) DAY)",
         "sentence": "REPLACE(sentence, 'TENURE: seated tonight', 'TENURE: it has held this seat since')",
-        "seat_cost_per_day": WINDOW_COST,
+        "seat_cost_per_day": BASIS_COST,
     }
     d.update(extra or {})
     return d
@@ -264,7 +283,10 @@ QUEUED = ["queued_rn", "queued_prev_rn", "prev_as_of", "mx"]
 # earliest seat date of that family's kept incumbents
 QUEUED2 = QUEUED + ["queued2_rn", "queued2_prev_rn"]
 EARLIER = QUEUED + ["queued_fam_inc_since"]
-DEAR = dict(DROP_PREV, planned_bid="1000000.0")      # costs more than any allowance at that price
+# costs more than any allowance at that price. v27.168 (G1): it asks a probe's question, so T1 costs
+# it click_goal_day x $1,000,000 whatever the queued row spent (on a window question an unserved
+# probe's $0.00 window would cost it nothing)
+DEAR = dict(DROP_PREV, planned_bid="1000000.0", request_basis=PROBE_BASIS)
 CHEAP2 = dict(DROP_PREV, seat_no="998")              # $0.00: fits any room on its own
 EARLIER_DEAR = dict(DEAR, seat_since="DATE_SUB((SELECT queued_fam_inc_since FROM pick), INTERVAL 1 DAY)")
 HORIZON = "DATE_DIFF(clicks_due_date, seat_since, DAY)"
@@ -284,13 +306,26 @@ COPIES = {
     "NC_T1_COST_KEPT_FROM_CONTRACT": (two("inc_rn", "inc_prev_rn", incumbent_tonight({"seat_cost_per_day": STALE_COST}),
                                           dict(contract_from_tonight("inc_rn"), seat_cost_per_day=STALE_COST)),
                                       [("T1", 1)], INC),
-    # v27.164 (F2): a probe tonight costs click_goal_day x its kept price, not its window
-    "HC_T1_PROBE_INCUMBENT": (two("inc_rn", "inc_prev_rn",
-                                  incumbent_tonight({"is_probe": "TRUE", "seat_cost_per_day": PROBE_COST}),
-                                  contract_from_tonight("inc_rn")), [("T1", 0)], INC),
-    "NC_T1_PROBE_COSTED_BY_WINDOW": (two("inc_rn", "inc_prev_rn",
-                                         incumbent_tonight({"is_probe": "TRUE"}),
-                                         contract_from_tonight("inc_rn")), [("T1", 1)], INC),
+    # v27.168 (G1, restating v27.164's two probe copies): the cost follows the KEPT question's basis.
+    # The incumbent (an ordinary seat, its question HORIZON_WINDOW_RATE) made a probe tonight keeps
+    # its window cost; F2's click_goal_day x price on it is the defect G1 retires (plan B Fresh
+    # 388620934464557 on 2026-10-03)
+    "HC_T1_TURNED_PROBE_KEEPS_WINDOW_COST": (two("inc_rn", "inc_prev_rn",
+                                                 incumbent_tonight({"is_probe": "TRUE", "seat_cost_per_day": WINDOW_COST}),
+                                                 contract_from_tonight("inc_rn")), [("T1", 0)], INC),
+    "NC_T1_TURNED_PROBE_COSTED_BY_GOAL": (two("inc_rn", "inc_prev_rn",
+                                              incumbent_tonight({"is_probe": "TRUE", "seat_cost_per_day": PROBE_COST}),
+                                              contract_from_tonight("inc_rn")), [("T1", 1)], INC),
+    # a contract asked as a probe (HORIZON_PROBE_GOAL on both nights) costs the goal, probe tonight or
+    # not; the same incumbent with its basis flipped to the probe's but costed by its window reads 1
+    "HC_T1_PROBE_BASIS_INCUMBENT": (two("inc_rn", "inc_prev_rn",
+                                        incumbent_tonight({"request_basis": PROBE_BASIS, "seat_cost_per_day": PROBE_COST}),
+                                        dict(contract_from_tonight("inc_rn"), request_basis=PROBE_BASIS)),
+                                    [("T1", 0)], INC),
+    "NC_T1_BASIS_FLIPPED": (two("inc_rn", "inc_prev_rn",
+                                incumbent_tonight({"request_basis": PROBE_BASIS, "seat_cost_per_day": WINDOW_COST}),
+                                dict(contract_from_tonight("inc_rn"), request_basis=PROBE_BASIS)),
+                            [("T1", 1)], INC),
     "NC_T1_TENURE_WITHOUT_CONTRACT": (at("new_rn", seat_tenure="'INCUMBENT'"), [("T1", "GE1")], ["new_rn"]),
     "NC_C23_SEAT_DROPPED": (two("queued_rn", "queued_prev_rn", {}, DROP_PREV), [("C23", 1), ("T1", 1)], QUEUED),
     # v27.164 (F2): the eviction test reads the contract's kept price on tonight's window, so the
