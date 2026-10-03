@@ -292,7 +292,7 @@ export function ChangeScorecardPanel() {
                                   : <span className="text-faint">—</span>}
                               </td>
                             )}
-                            <td className="px-2 text-left text-faint whitespace-normal max-w-[32rem]">{r.verdictReason}</td>
+                            <td className="px-2 text-left text-faint whitespace-normal min-w-[24rem] max-w-[32rem]">{r.verdictReason}</td>
                           </tr>
                         ))}
                       </tbody>
