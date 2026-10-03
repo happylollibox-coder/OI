@@ -370,9 +370,10 @@ c05 AS (
 -- C06, RESTATED 2026-10-02. READS guard_released_by AS PUBLISHED; NEVER RE-DERIVES THE GUARD.
 -- A DEMOTION UNDER THE GUARD'S PRECONDITIONS THAT THE JUDGE DID NOT EXPLAIN: a keyword that was
 -- good, served and sits on an unsettled window is put on the not-good side on a reason no ruling
--- names. SP_BUILD_NEXT_WEEK_PLAN's P-14b ASSERT counts the NULL case only (it tests IS NULL --
--- read from the procedure, not run here), so an UNEXPLAINED or unrecognised reason goes red
--- here and nowhere in that ASSERT.
+-- names. Since v27.169 SP_BUILD_NEXT_WEEK_PLAN's P-14b ASSERT accepts the same two reasons and
+-- refuses the partition on any other (until v27.168 it tested IS NULL only, so an UNEXPLAINED or
+-- unrecognised reason went red here and nowhere in that ASSERT). This check reads the judge; the
+-- ASSERT reads the plan rows the builder is about to write.
 -- A HOLD PAST ITS SETTLE-DUE DATE OR ON A WINDOW IT DID NOT SERVE IN: P-4 forbids repricing the
 -- good side, so the hold keeps a keyword's price untouched with no clock left, or with no sales
 -- in flight to wait for. A HELD ROW OFF THE GOOD SIDE: the row says it is protected while its

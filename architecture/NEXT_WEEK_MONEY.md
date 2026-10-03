@@ -714,7 +714,9 @@ one condition** — neither the veto the first build produced nor an uncondition
 Read it on the row: `last_day_sp / last_day_ord / last_day_gp_corrected / last_day_ret`,
 `last_day_strong`, and on every NOT-GOOD row that was good, served and unsettled,
 `guard_released_by` = `LAST_DAY_NOT_STRONG` or `HOLD_EXPIRED`. The builder asserts that column is
-never NULL on such a row and that every HELD row names what keeps it held (`hold_kept_by`, P-18
+one of those two on such a row — NULL, `UNEXPLAINED` (the judge's catch-all) or any other value
+refuses the partition; until v27.168 it asserted only "not NULL", so `UNEXPLAINED` passed — and
+that every HELD row names what keeps it held (`hold_kept_by`, P-18
 below; until v27.156 it asserted `last_day_strong` on every HELD row) — it checks the judgement is
 complete and does not re-derive it (P-11). Acceptance C09 (restated) and C26.
 
