@@ -48,9 +48,11 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_SEAT_REQUEST`
   seat_no             INT64   OPTIONS (description = "The numbered, dollar-sized seat this request occupies."),
 
   -- THE QUESTION (§3.0 step 2) — a click count and a date, which is the only form that can be graded
-  clicks_requested    INT64   OPTIONS (description = "How many clicks this seat is buying. EXACT: an ordinary seat asks for last window's clicks at a repaired price; a probe asks click_goal_day x window_days."),
+  -- v27.159 (2026-10-02, spec P-26): the two descriptions below were restated on the live table by
+  -- scripts/bigquery/migrations/2026-10-02_plan_seat_tenure_columns.sql (ALTER COLUMN SET OPTIONS).
+  clicks_requested    INT64   OPTIONS (description = "How many clicks this seat is buying. Written before v27.159 (2026-10-02): an ordinary seat asked for last window's clicks at a repaired price, a probe click_goal_day x window_days. From v27.159 (spec P-26) the question spans the settle horizon: an ordinary seat asks ROUND(window clicks x settle_days / window_days), a probe click_goal_day x settle_days, due on the verdict date; an incumbent repeats the question it was given on the night it took the seat (P-16)."),
   clicks_due_date     DATE    OPTIONS (description = "The date they are due — the seat's own verdict_date (P-12). NOT the judged window's end, which is in the past."),
-  request_basis       STRING  OPTIONS (description = "WINDOW_CLICKS or PROBE_GOAL — how clicks_requested was derived, so the row explains its own arithmetic."),
+  request_basis       STRING  OPTIONS (description = "How clicks_requested was derived, so the row explains its own arithmetic. Written before v27.159 (2026-10-02): WINDOW_CLICKS (an ordinary seat asking for exactly last window's clicks, implied_daily_spend = clicks x expected_cpc / window_days) or PROBE_GOAL (click_goal_day x window_days). From v27.159 (spec P-26): HORIZON_WINDOW_RATE (the window's click rate x the settle horizon, due on the verdict date) or HORIZON_PROBE_GOAL (click_goal_day x the settle horizon); implied_daily_spend = clicks x expected_cpc / the settle horizon (SP 7 days, SB 14)."),
   expected_cpc        FLOAT64 OPTIONS (description = "The price the seat expects to pay per click."),
   implied_daily_spend FLOAT64 OPTIONS (description = "What this seat demands of its campaign's budget each day."),
   window_days         INT64,

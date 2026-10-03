@@ -46,6 +46,11 @@
 -- unruled reading (a) under a "(P-2)" label. The detail now prints each family's not-good side,
 -- the expected spend after the upload and the share of the gap it closes (P-22). Only the pot_rec
 -- and c24 CTEs changed.
+-- v27.159 (2026-10-02, piece-1 plan Task 5, P-25, audit fix #19): plan_one_move_per_notgood reads the
+-- two probe moves — a seated probe is OPEN_PROBE, an unseated probe NONE (nothing uploaded) — and
+-- counts a candidate's NONE on anything but an unseated probe, or an OPEN_PROBE on anything but a
+-- seated one (reads FACT_PLAN_NEXT_WEEK.is_probe, migration 2026-10-02_plan_seat_tenure_columns.sql).
+-- Only that CTE changed.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -486,14 +491,18 @@ c25 AS (  -- one move per CANDIDATE, none on the good side, none where there is 
   -- repair and carries NONE by spec §9 (v27.135). This is the acceptance's C06 (v27.147).
   SELECT 'plan_one_move_per_notgood',
     CAST(COUNTIF(side = 'GOOD' AND move != 'NONE')
-       + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'PARK', 'HOLD_AT_PARK', 'PAUSE'))
+       + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'OPEN_PROBE', 'PARK', 'HOLD_AT_PARK', 'PAUSE', 'NONE'))
+       + COUNTIF(is_candidate AND move = 'NONE' AND NOT (COALESCE(is_probe, FALSE) AND seat_no IS NULL))
+       + COUNTIF(move = 'OPEN_PROBE' AND NOT (is_candidate AND COALESCE(is_probe, FALSE) AND seat_no IS NOT NULL))
        + COUNTIF(NOT is_candidate AND COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE_HOLDOUT')
        + COUNTIF(NOT is_candidate AND NOT COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE')
        + COUNTIF(move IS NULL) AS FLOAT64),
-    'live-plan rows: good side carrying a move, candidates carrying none of the five, non-candidates carrying one, rows with no move · red > 0 (P-4, §9); red when the live plan is empty',
+    'live-plan rows: good side carrying a move, candidates carrying none of the seven (an unseated probe NONE, a seated probe OPEN_PROBE, P-25), non-candidates carrying one, rows with no move · red > 0 (P-4, §9); red when the live plan is empty',
     CASE WHEN COUNT(*) = 0 THEN 'RED'
          WHEN COUNTIF(side = 'GOOD' AND move != 'NONE')
-            + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'PARK', 'HOLD_AT_PARK', 'PAUSE'))
+            + COUNTIF(is_candidate AND move NOT IN ('REPRICE', 'HOLD_AT_PRICE', 'OPEN_PROBE', 'PARK', 'HOLD_AT_PARK', 'PAUSE', 'NONE'))
+       + COUNTIF(is_candidate AND move = 'NONE' AND NOT (COALESCE(is_probe, FALSE) AND seat_no IS NULL))
+       + COUNTIF(move = 'OPEN_PROBE' AND NOT (is_candidate AND COALESCE(is_probe, FALSE) AND seat_no IS NOT NULL))
             + COUNTIF(NOT is_candidate AND COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE_HOLDOUT')
             + COUNTIF(NOT is_candidate AND NOT COALESCE(holdout, FALSE) AND side = 'NOT_GOOD' AND move != 'NONE')
             + COUNTIF(move IS NULL) > 0 THEN 'RED'

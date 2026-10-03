@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.138 (2026-08-24). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.159 (2026-10-02). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -87,6 +87,44 @@
 --   NC_C16_SENTENCE (a no-upload row saying "Ramp: step 1"): C16 1.
 --   HC_C16_UPLOADS_LANDED (Bottle given 2 landed uploads, step 2 and "Ramp: step 2 of 3" in both
 --     plans): C16 0.
+--
+-- v27.159 (2026-10-02, piece-1 plan Task 5 — Ori's rulings R2 / R6 / R12 / R13 / R15 = spec P-16 /
+-- P-20 / P-25 / P-26 / P-28, audit fix #19). RESTATED: C06 and C14 (a seated probe's OPEN_PROBE, an
+-- unseated probe's NONE, and a candidate's NONE on nothing else), C12 (OPEN_PROBE under the price
+-- ceiling), C17 (the live plan: the register registers plan B's seats), C19 (NONE is a queue move),
+-- C23 (number AND occupancy: an incumbent before its date keeps its seat or leaves with
+-- LEFT_ALLOWANCE_SHRANK). NEW: T1 (an incumbent keeps its whole contract, or leaves only when the
+-- allowance cannot carry it), T2 (seat numbers sticky across an absence), T3 (the question spans the
+-- settle horizon), T4 (probes open or take no move, and say so; no row that bought nothing keeps
+-- buying clicks), T5 (the builder ranks as the judge orders). Each new check has an emptiness term.
+-- The tenure terms are vacuous on the first v27.159 partition by the builder's cutover (no seat
+-- written before it carries seat_since); the controls exercise them.
+-- RUN 2026-10-02 (Los Angeles) on the live partition written by v27.159 and the deployed view: 34
+-- rows PASS (job t5_acc_live_1790990459, 1,513.2 slot-seconds). On the v27.158 partition of the same
+-- night (17:03 UTC, judgement snapshot OI._tmp_t5_judge): C14 140, T1 118, T2 1, T3 118, T4 22, T5 61,
+-- every other row 0.
+-- NEGATIVE CONTROLS, run 2026-10-02 (Los Angeles) by scripts/bigquery/tests/check_plan_seat_controls.py
+-- (this file's and PLAN_SEAT_REQUEST_acceptance.sql's own text on doctored, materialized copies of
+-- every partition, the judgement read from OI._tmp_t5_judge, which equals the deployed view's output
+-- the CALL wrote from row for row; exit 0; 3,642.6 slot-seconds):
+--   LIVE: 45 checks (34 here, 11 there), every one 0.
+--   NC_EMPTY: C23 1, T1 1, T2 1, T3 1, T4 1, T5 1.
+--   HC_T1_INCUMBENT (a continuing live seat given a coherent contract seated the night before): T1 0,
+--     C23 0, T3 0.  NC_T1_PRICE_MOVED (+$0.10): T1 1.  NC_T1_QUESTION_MOVED (+1 click): T1 1.
+--   NC_T1_TENURE_WITHOUT_CONTRACT (a NEW seat tagged INCUMBENT): T1 2 (tenure term + sentence term).
+--   NC_C23_SEAT_DROPPED (the plan's control: the previous partition holds a seat dated tomorrow for a
+--     keyword tonight's walk queues): C23 1, T1 1.
+--   HC_T1_EVICTION_JUSTIFIED (that seat's contract at $1,000 a day, tonight LEFT_ALLOWANCE_SHRANK):
+--     C23 0, T1 0.  NC_T1_EVICTION_UNJUSTIFIED (the same at $0.01 a day): C23 0, T1 1.
+--   NC_C23_RENUMBERED (a continuing occupant given number 900): C23 1, T2 1.
+--   NC_T2_RETURN_RENUMBERED (a seat back after an absence, its old number honoured, given 901): T2 1.
+--   HC_C17_PLAN_A (a plan-A seat given a number the register holds for another keyword): C17 0 (C23
+--     and T2 read 1, as they must).  NC_C17_PLAN_B (the same on the live plan): C17 2.
+--   NC_T3_CLICKS_DOUBLED (the plan's control): T3 1, S03 1.
+--   NC_T4_PROBE_PARKED (an unseated probe parked with the v27.158 words): T4 1, C14 1.
+--   NC_T4_OPEN_PROBE_SILENT: T4 1.  NC_C14_PROBE_REPRICED: C14 1.  NC_C06_NONE_ON_SEAT: C06 1.
+--   NC_T5_RANK_SWAPPED (ranks 1 and 2 of one family): T5 2.
+--   NC_S06_HORIZON (a new ordinary seat asking w_clk under HORIZON_WINDOW_RATE): S06 1, T3 1.
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -100,6 +138,22 @@ led AS (
   FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER`
   WHERE closed_on IS NULL
   GROUP BY 1, 2, 3
+),
+-- v27.159: the partition before the latest (C23, T1), and each keyword's most recent seat in any
+-- partition before the latest (T2) — the builder's own memory (P-16, P-28)
+prev AS (
+  SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                 WHERE as_of < (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`))
+),
+claims AS (
+  SELECT plan, family, CAST(campaign_id AS STRING) AS campaign_id,
+         CAST(keyword_id AS STRING) AS keyword_id, seat_no AS claim_no, as_of AS claim_as_of
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+  WHERE as_of < (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`) AND seat_no IS NOT NULL
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY plan, family, CAST(campaign_id AS STRING),
+                                          CAST(keyword_id AS STRING)
+                             ORDER BY as_of DESC) = 1
 ),
 c01 AS (
   SELECT 'C01 window is complete days only and fenced to age 2 (P-10, P-14a)' AS check_name,
@@ -151,10 +205,14 @@ c05 AS (
        + (SELECT COUNTIF(seat_no IS NOT NULL AND NOT is_candidate) FROM p)
        + (SELECT COUNTIF(seat_no IS NOT NULL AND seat_no < 1) FROM p)
 ),
+-- C06 EXTENDED v27.159 (P-25, audit fix #19): a seated probe's move is OPEN_PROBE and an unseated
+-- probe's is NONE, so both join the candidate move list — and a candidate's NONE is an unseated
+-- probe's and nobody else's.
 c06 AS (
-  SELECT 'C06 one move per CANDIDATE, none on the good side, none where there is nothing to repair (P-4, §9)',
+  SELECT 'C06 one move per CANDIDATE, none on the good side, none where there is nothing to repair (P-4, §9, P-25)',
          COUNTIF(side = 'GOOD' AND move != 'NONE')
-       + COUNTIF(is_candidate AND move NOT IN ('REPRICE','HOLD_AT_PRICE','PARK','HOLD_AT_PARK','PAUSE'))
+       + COUNTIF(is_candidate AND move NOT IN ('REPRICE','HOLD_AT_PRICE','OPEN_PROBE','PARK','HOLD_AT_PARK','PAUSE','NONE'))
+       + COUNTIF(is_candidate AND move = 'NONE' AND NOT (COALESCE(is_probe, FALSE) AND seat_no IS NULL))
        -- v27.147: scoped to the NOT-GOOD side. The builder tests `side = GOOD -> NONE` before
        -- `holdout -> NONE_HOLDOUT`, and its own assertion (and this check's first term) demand
        -- NONE on every good-side row -- so a GOOD keyword inside a holdout campaign satisfied term
@@ -247,7 +305,7 @@ c12 AS (
   SELECT 'C12 prices: no planned bid below the row floor or above the house ceiling; NONE on the good side (P-4)',
          (SELECT COUNTIF(planned_bid < bid_floor - 0.005
                          OR (planned_bid > current_bid + 0.005 AND planned_bid > 2.005))
-          FROM p WHERE move = 'REPRICE')
+          FROM p WHERE move IN ('REPRICE', 'OPEN_PROBE'))   -- v27.159: a probe opens under the same ceiling
        + (SELECT COUNTIF(planned_bid IS NOT NULL OR seat_cost_per_day IS NOT NULL)
           FROM p WHERE side = 'GOOD')
 ),
@@ -259,11 +317,20 @@ c13 AS (
              OR b.side != j.side_b OR b.verdict != j.verdict
              OR b.is_candidate != j.is_candidate)
 ),
+-- C14 EXTENDED v27.159 (P-25): a seat's move is REPRICE / HOLD_AT_PRICE, or OPEN_PROBE on a probe;
+-- a queue position's is PARK / HOLD_AT_PARK / PAUSE, or NONE on an unseated probe; a probe that is
+-- not closed takes exactly the probe move for where it stands; and every candidate carries is_probe.
 c14 AS (
-  SELECT 'C14 every candidate has exactly ONE of a seat or a queue position (§9)',
-         COUNTIF(is_candidate AND seat_no IS NULL AND move NOT IN ('PARK','HOLD_AT_PARK','PAUSE'))
-       + COUNTIF(is_candidate AND seat_no IS NOT NULL AND move NOT IN ('REPRICE','HOLD_AT_PRICE'))
+  SELECT 'C14 every candidate has exactly ONE of a seat or a queue position; a probe opens on a seat and takes no move without one (§9, P-25)',
+         COUNTIF(is_candidate AND seat_no IS NULL AND move NOT IN ('PARK','HOLD_AT_PARK','PAUSE','NONE'))
+       + COUNTIF(is_candidate AND seat_no IS NOT NULL AND move NOT IN ('REPRICE','HOLD_AT_PRICE','OPEN_PROBE'))
        + COUNTIF(is_candidate AND rank_no IS NULL)
+       + COUNTIF(is_candidate AND is_probe AND COALESCE(ladder_state, '') != 'DEAD'
+                 AND seat_no IS NOT NULL AND move != 'OPEN_PROBE')
+       + COUNTIF(is_candidate AND is_probe AND COALESCE(ladder_state, '') != 'DEAD'
+                 AND seat_no IS NULL AND move != 'NONE')
+       + COUNTIF(move = 'OPEN_PROBE' AND NOT (is_candidate AND COALESCE(is_probe, FALSE) AND seat_no IS NOT NULL))
+       + COUNTIF(is_candidate AND is_probe IS NULL)
   FROM p
 ),
 -- C15 RESTATED v27.158 (P-15): pot (every GOOD row, holdout included) + not-good (holdout excluded)
@@ -294,15 +361,19 @@ c16 AS (
           FROM (SELECT family, COUNT(DISTINCT plan_uploads_landed) n FROM p GROUP BY 1))
        + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
+-- C17 RESTATED v27.159: on the LIVE plan. DE_FAMILY_SEAT_LEDGER registers plan B's seats only
+-- (SP_MAINTAIN_FAMILY_SEATS reads plan A for agreement_tier, never for numbers), and the shadow plan
+-- now numbers its own seats; until v27.158 the register's numbers also bound plan A, and a plan-A
+-- seat renumbered by the register is what refused the builder on 2026-09-29 (SOP §3, "Seat numbers").
 c17 AS (
-  SELECT 'C17 no seat number the register still holds OPEN for another keyword is reissued (§9)',
+  SELECT 'C17 no seat number the register still holds OPEN for another keyword is reissued on the live plan, and a keyword it holds carries its number (§9)',
          (SELECT COUNT(*)
-          FROM p JOIN led l ON l.family = p.family AND l.seat_no = p.seat_no
-          WHERE p.seat_no IS NOT NULL AND l.keyword_id != p.keyword_id)
+          FROM b JOIN led l ON l.family = b.family AND l.seat_no = b.seat_no
+          WHERE b.seat_no IS NOT NULL AND l.keyword_id != b.keyword_id)
        + (SELECT COUNT(*)
-          FROM p JOIN led l ON l.family = p.family
-                           AND l.campaign_id = p.campaign_id AND l.keyword_id = p.keyword_id
-          WHERE p.seat_no IS NOT NULL AND l.seat_no != p.seat_no)
+          FROM b JOIN led l ON l.family = b.family
+                           AND l.campaign_id = b.campaign_id AND l.keyword_id = b.keyword_id
+          WHERE b.seat_no IS NOT NULL AND l.seat_no != b.seat_no)
 ),
 c18 AS (
   SELECT 'C18 the seat walk is a FIT TEST: no queued candidate fits the allowance left over (§4.4)',
@@ -325,7 +396,7 @@ c19 AS (
                               planned_spend_per_day, 0)) AS notgood_planned,
                        SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)) AS seat_cost
                 FROM p GROUP BY 1, 2))
-       + (SELECT COUNTIF(is_candidate AND (seat_no IS NOT NULL) = (move IN ('PARK','HOLD_AT_PARK','PAUSE')))
+       + (SELECT COUNTIF(is_candidate AND (seat_no IS NOT NULL) = (move IN ('PARK','HOLD_AT_PARK','PAUSE','NONE')))
           FROM p)
 ),
 c20 AS (
@@ -357,26 +428,34 @@ c22 AS (
 -- C23: §9's "seat numbers stable across days for continuing occupants". C05 checks uniqueness
 -- inside ONE partition and C17 checks non-collision with the register; neither can see a seat
 -- being re-numbered from one night to the next, which is what happened to every seat the register
--- does not hold an open row for — and the register only admits LADDER occupant states, so the
--- plan's AT_BAR and DEAD seats can never acquire one. Trivially green while only one partition
--- exists; it is the check that goes red the first night a number moves.
+-- does not hold an open row for. The exception is narrow: the register holds the OLD number open for
+-- a DIFFERENT keyword (the register wins, §9).
+-- EXTENDED v27.159 (P-16, Ori 2026-10-02, R2): FROM NUMBER TO OCCUPANCY. A seat of the previous
+-- partition written under P-16 (seat_since), whose verdict date is after the latest as_of and whose
+-- keyword is still a candidate (not closed), holds a seat on the latest partition — or carries
+-- seat_tenure LEFT_ALLOWANCE_SHRANK (T1 checks that the allowance really could not carry it). Seats
+-- written before v27.159 carry no seat_since and are not contracts (the builder's cutover), so on the
+-- first v27.159 partition this term is vacuous by construction; the negative controls exercise it.
 c23 AS (
-  SELECT 'C23 §9: a continuing occupant keeps its seat number from one night to the next',
+  SELECT 'C23 §9 + P-16: a continuing occupant keeps its seat number from one night to the next, and an incumbent before its date keeps the seat',
          (SELECT COUNT(*)
           FROM p JOIN (
             SELECT plan, family, CAST(campaign_id AS STRING) campaign_id,
                    CAST(keyword_id AS STRING) keyword_id, MIN(seat_no) seat_no
-            FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+            FROM prev
             WHERE seat_no IS NOT NULL
-              AND as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
-                           WHERE as_of < (SELECT MAX(as_of)
-                                          FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`))
             GROUP BY 1, 2, 3, 4) h
             USING (plan, family, campaign_id, keyword_id)
           WHERE p.seat_no IS NOT NULL AND h.seat_no != p.seat_no
             AND NOT EXISTS (SELECT 1 FROM led l
                             WHERE l.family = p.family AND l.seat_no = h.seat_no
                               AND l.keyword_id != p.keyword_id))
+       + (SELECT COUNT(*)
+          FROM prev h JOIN p USING (plan, family, campaign_id, keyword_id)
+          WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
+            AND p.is_candidate AND COALESCE(p.ladder_state, '') != 'DEAD'
+            AND p.seat_no IS NULL AND COALESCE(p.seat_tenure, '') != 'LEFT_ALLOWANCE_SHRANK')
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),
 -- C24: the two house rules the budget step broke. "Unmeasured never reads as bad" and "brand
 -- defense is never judged on profit" (spec §8). On the v27.137 partition 19 campaigns whose every
@@ -517,6 +596,138 @@ m3 AS (
                                                        100 * share_closed))) = 0)
           FROM p)
        + (SELECT IF(COUNT(*) = 0, 1, 0) FROM fam_m)
+),
+-- ---- v27.159 (2026-10-02, piece-1 plan Task 5): the builder's seats ----
+-- T1 (P-16): an incumbent keeps its WHOLE contract — number (C23), price, cost, verdict date, the
+-- night it took the seat, the question — or leaves only when the allowance cannot carry it: its cost
+-- is above what the allowance leaves after every incumbent that kept its seat (the walk tests
+-- incumbents in seat order, so one that left found less room than that). No other row claims
+-- tenure; a seat is INCUMBENT or NEW and carries seat_since (as_of on a NEW seat); and each tenure
+-- says itself in the sentence. Vacuous on the first v27.159 partition (no contract written before
+-- it); the controls exercise it.
+t1 AS (
+  SELECT 'T1 P-16: an incumbent keeps its whole contract, or leaves only when tonight allowance cannot carry it; tenure is written and said',
+         (SELECT COUNTIF(p.seat_tenure = 'INCUMBENT'
+                         AND (p.seat_no IS NULL
+                              OR p.seat_since IS DISTINCT FROM h.seat_since
+                              OR p.verdict_date IS DISTINCT FROM h.verdict_date
+                              OR ABS(COALESCE(p.planned_bid, -1) - COALESCE(h.planned_bid, -1)) > 0.005
+                              OR ABS(COALESCE(p.seat_cost_per_day, -1) - COALESCE(h.seat_cost_per_day, -1)) > 0.0001
+                              OR p.clicks_requested IS DISTINCT FROM h.clicks_requested
+                              OR p.clicks_due_date IS DISTINCT FROM h.clicks_due_date
+                              OR p.expected_cpc IS DISTINCT FROM h.expected_cpc
+                              OR p.request_basis IS DISTINCT FROM h.request_basis))
+                + COUNTIF(COALESCE(p.seat_tenure, '') != 'INCUMBENT'
+                          AND NOT (COALESCE(h.seat_cost_per_day, 0) > fa.allow - fa.kept + 0.0001))
+          FROM prev h
+          JOIN p USING (plan, family, campaign_id, keyword_id)
+          JOIN (SELECT plan, family, MAX(allowance_ramped_per_day) allow,
+                       SUM(IF(seat_tenure = 'INCUMBENT', seat_cost_per_day, 0)) kept
+                FROM p GROUP BY 1, 2) fa USING (plan, family)
+          WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
+            AND p.is_candidate AND COALESCE(p.ladder_state, '') != 'DEAD')
+       + (SELECT COUNT(*)
+          FROM p LEFT JOIN prev h USING (plan, family, campaign_id, keyword_id)
+          WHERE p.seat_tenure IN ('INCUMBENT', 'LEFT_ALLOWANCE_SHRANK')
+            AND NOT COALESCE(h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL
+                             AND h.verdict_date > p.as_of AND p.is_candidate
+                             AND COALESCE(p.ladder_state, '') != 'DEAD', FALSE))
+       + (SELECT COUNTIF((seat_no IS NOT NULL) != (COALESCE(seat_tenure, '') IN ('INCUMBENT', 'NEW'))
+                         OR (seat_no IS NOT NULL) != (seat_since IS NOT NULL)
+                         OR (seat_tenure = 'NEW' AND seat_since != as_of)
+                         OR (seat_tenure = 'INCUMBENT' AND STRPOS(sentence, 'TENURE: it has held this seat since') = 0)
+                         OR (seat_tenure = 'NEW' AND STRPOS(sentence, 'TENURE: seated tonight') = 0)
+                         OR (seat_tenure = 'LEFT_ALLOWANCE_SHRANK' AND STRPOS(sentence, 'TENURE ENDS EARLY') = 0))
+          FROM p)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
+),
+-- T2 (P-28): a seat number is sticky ACROSS AN ABSENCE TOO, by the precedence the builder numbers
+-- with: a keyword the register holds open (live plan) carries the register's number; any other
+-- seated keyword carries the number it held most recently in any earlier partition, unless the
+-- register holds that number open for a different keyword (live plan) or another keyword seated on
+-- the latest partition held it more recently. Vacuous only when no seated keyword ever held a seat.
+t2 AS (
+  SELECT 'T2 P-28: a seat number is sticky: the register number it holds (live plan), else the number it held most recently, across an absence too',
+         (SELECT COUNT(*)
+          FROM (SELECT p.plan, p.family, p.keyword_id, p.is_live_plan,
+                       IF(p.is_live_plan, l0.seat_no, NULL) AS own_led, c.claim_no, c.claim_as_of
+                FROM p
+                LEFT JOIN led l0 ON l0.family = p.family AND l0.campaign_id = p.campaign_id
+                                AND l0.keyword_id = p.keyword_id
+                LEFT JOIN claims c ON c.plan = p.plan AND c.family = p.family
+                                  AND c.campaign_id = p.campaign_id AND c.keyword_id = p.keyword_id
+                WHERE p.seat_no IS NOT NULL
+                  AND p.seat_no != COALESCE(IF(p.is_live_plan, l0.seat_no, NULL), c.claim_no)) x
+          LEFT JOIN led l ON x.own_led IS NULL AND x.is_live_plan AND l.family = x.family
+                         AND l.seat_no = x.claim_no AND l.keyword_id != x.keyword_id
+          LEFT JOIN (SELECT g.plan, g.family, g.keyword_id, g.seat_no, c2.claim_as_of
+                     FROM p g
+                     JOIN claims c2 ON c2.plan = g.plan AND c2.family = g.family
+                                   AND c2.campaign_id = g.campaign_id AND c2.keyword_id = g.keyword_id
+                     WHERE g.seat_no IS NOT NULL AND g.seat_no = c2.claim_no) y
+            ON x.own_led IS NULL AND y.plan = x.plan AND y.family = x.family AND y.seat_no = x.claim_no
+           AND y.keyword_id != x.keyword_id AND y.claim_as_of > x.claim_as_of
+          WHERE l.family IS NULL AND y.family IS NULL)
+       + (SELECT IF(COUNTIF(seat_no IS NOT NULL) = 0, 1, 0) FROM p)
+),
+-- T3 (P-26): THE SEAT'S QUESTION SPANS ITS SETTLE HORIZON. Every seat: a positive click count, a
+-- price per click, due on its verdict date; its horizon (due date - the night it took the seat) is
+-- the channel's settle horizon (settle_due_on - window_to); clicks x expected CPC / horizon =
+-- implied spend = the seat's cost, to the cent; the basis is one of P-26's. A NEW seat asks the
+-- window's click rate over the horizon (ROUND(w_clk x horizon / window_days)), a probe a whole number
+-- of days at its goal, and the basis says which. An incumbent repeats the question it was given (T1).
+t3 AS (
+  SELECT 'T3 P-26: every seat question spans its settle horizon: clicks x expected CPC / horizon = implied spend = seat cost',
+         (SELECT COUNTIF(clicks_requested IS NULL OR clicks_requested <= 0 OR expected_cpc IS NULL
+                         OR clicks_due_date IS DISTINCT FROM verdict_date
+                         OR DATE_DIFF(clicks_due_date, seat_since, DAY) != DATE_DIFF(settle_due_on, window_to, DAY)
+                         OR ABS(clicks_requested * expected_cpc / DATE_DIFF(clicks_due_date, seat_since, DAY)
+                                - implied_daily_spend) > 0.01
+                         OR ABS(implied_daily_spend - seat_cost_per_day) > 0.01
+                         OR request_basis IS NULL
+                         OR request_basis NOT IN ('HORIZON_WINDOW_RATE', 'HORIZON_PROBE_GOAL')
+                         OR (seat_tenure = 'NEW' AND (request_basis = 'HORIZON_PROBE_GOAL') != COALESCE(is_probe, FALSE))
+                         OR (seat_tenure = 'NEW' AND request_basis = 'HORIZON_WINDOW_RATE'
+                             AND clicks_requested != CAST(ROUND(w_clk * DATE_DIFF(clicks_due_date, seat_since, DAY)
+                                                                / window_days) AS INT64))
+                         OR (request_basis = 'HORIZON_PROBE_GOAL'
+                             AND MOD(clicks_requested, DATE_DIFF(clicks_due_date, seat_since, DAY)) != 0))
+          FROM p WHERE seat_no IS NOT NULL)
+       + (SELECT IF(COUNTIF(seat_no IS NOT NULL) = 0, 1, 0) FROM p)
+),
+-- T4 (P-25, audit fix #19): a seated probe OPENS at a price and its sentence says "OPEN PROBE at $";
+-- an unseated probe carries no price and its sentence says "PROBE NOT OPENED TONIGHT; NOTHING
+-- UPLOADED"; and no queued candidate that bought nothing says it "keeps buying clicks" (the v27.158
+-- PARK sentence said so on every unserved probe it parked: 9 LolliME, 1 Lollibox and a Fresh
+-- HOLD_AT_PARK on the 2026-10-02 v27.158 partition).
+t4 AS (
+  SELECT 'T4 P-25 / fix #19: a seated probe opens and says so, an unseated probe has no move and no price and says so, and no row that bought nothing keeps buying clicks',
+         COUNTIF(move = 'OPEN_PROBE' AND (planned_bid IS NULL OR STRPOS(sentence, 'OPEN PROBE at $') = 0))
+       + COUNTIF(is_candidate AND move = 'NONE'
+                 AND (planned_bid IS NOT NULL OR STRPOS(sentence, 'PROBE NOT OPENED TONIGHT; NOTHING UPLOADED') = 0))
+       -- the row's own move clause ("this keyword keeps buying clicks" on PARK, "it keeps buying clicks"
+       -- on HOLD_AT_PARK and a served probe's NONE) — not the CAMPAIGN CAP clause, whose "the queue
+       -- that keeps buying clicks" is about the campaign (a first draft matched it: 224 rows)
+       + COUNTIF(is_candidate AND NOT served AND move IN ('PARK', 'HOLD_AT_PARK', 'NONE')
+                 AND REGEXP_CONTAINS(sentence, r'(this keyword|it) keeps buying clicks'))
+       + IF(COUNT(*) = 0, 1, 0)
+  FROM p
+),
+-- T5 (P-20): the builder ranks the candidates as the judgement view orders them — P-7's score for
+-- the candidates it scores above zero, then money burned with no return (window spend per day x
+-- GREATEST(0, 1 - return / bar)), then clicks, then the keys. Recounted from the row's own columns.
+t5 AS (
+  SELECT 'T5 P-20: candidates rank by P-7 score, then money burned with no return, then clicks (the judge order)',
+         (SELECT COUNTIF(rank_no IS DISTINCT FROM rn)
+          FROM (SELECT rank_no,
+                       ROW_NUMBER() OVER (
+                         PARTITION BY plan, family
+                         ORDER BY GREATEST(rank_score, 0) DESC,
+                                  (w_sp / window_days)
+                                  * GREATEST(0, 1 - COALESCE(ret_corrected, 0) / NULLIF(family_bar, 0)) DESC,
+                                  w_clk DESC, campaign_id, keyword_id) AS rn
+                FROM p WHERE is_candidate))
+       + (SELECT IF(COUNTIF(is_candidate) = 0, 1, 0) FROM p)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -528,5 +739,7 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c19 UNION ALL SELECT * FROM c20 UNION ALL SELECT * FROM c21
       UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM c24
       UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM m1
-      UNION ALL SELECT * FROM m2 UNION ALL SELECT * FROM m3)
+      UNION ALL SELECT * FROM m2 UNION ALL SELECT * FROM m3 UNION ALL SELECT * FROM t1
+      UNION ALL SELECT * FROM t2 UNION ALL SELECT * FROM t3 UNION ALL SELECT * FROM t4
+      UNION ALL SELECT * FROM t5)
 ORDER BY check_name;

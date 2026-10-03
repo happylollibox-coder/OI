@@ -832,15 +832,17 @@ the seat sentences moved.
   then every candidate with **no positive score** — zero, or the rare negative one (2 of 978 live
   candidate-nights 08-23 … 10-02) — by money burned. `GREATEST(…, 0)` is Ori's "among candidates
   with no positive score": ordering on `rank_score` itself would put a keyword that sold at a loss
-  below every zero-sale one whatever it burned. **The builder still walks seats in click order until
-  piece-1 Task 5 changes its `ranked` CTE to the same key.**
+  below every zero-sale one whatever it burned. **Since v27.159 (piece-1 Task 5) the builder's
+  `ranked` CTE orders on the same key** (acceptance `T5` recounts it from the row's columns).
 - **P-25 — the probe price (the judge's half).** `probe_start_bid` = LIFT's latest single
   `PROBE_START` `suggested_bid` (`FACT_ENGINE_PROPOSALS`, latest snapshot, one distinct price per
   keyword or none). A probe with one is priced at it, capped at `GREATEST(2.00, current bid)`, and
   costed at `click_goal_day` × that price — the seat funds the clicks it asks for. A probe without
   one keeps P-6's price and its sentence says LIFT holds no single `PROBE_START` bid. P-19 does not
-  apply to a probe. Whether an **unseated** probe is parked or left alone is the builder's half
-  (Task 5); the judge's queue clause is unchanged until then.
+  apply to a probe. **The builder's half, v27.159 (Task 5):** a seated probe's move is
+  `OPEN_PROBE`; an unseated probe gets move `NONE` and nothing is uploaded — its sentence says
+  "PROBE NOT OPENED TONIGHT; NOTHING UPLOADED" and that the park price this view's queue clause names
+  is not applied (the judge's clause itself is unchanged; §3, "Probes").
 
 **Measured before deploy, 2026-10-02 (Los Angeles), same data both sides** (window 09-28 … 09-30,
 BOOST, 361 rows): the deployed v27.156 judge snapshotted against the v27.157 body run as a query (the
@@ -1129,7 +1131,7 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
   not cancel and which scores a no-sale keyword at its full spend instead of at zero, answering
   both questions in one line. **Ruled 2026-10-02 (R6, spec P-20):** that shortfall, floored at 0,
   is `rank_money_burned`, and it orders every candidate with no positive score — built in the judge
-  v27.157; `SP_BUILD_NEXT_WEEK_PLAN`'s walk keeps the click order until piece-1 Task 5.
+  v27.157; `SP_BUILD_NEXT_WEEK_PLAN`'s walk orders the same way from v27.159 (piece-1 Task 5).
 - **The holdout is named in words, not only in a column** (v27.134). `holdout` is TRUE only from the
   campaign's `eligible_from`, so a holdout campaign judged *before* that date is a candidate today
   and silent tomorrow. The sentence used to promise those rows a seat with no mention of the
@@ -1221,18 +1223,23 @@ maintains and the judgement reads the snapshot 20.8 writes.
 | 1 POT | the **GOOD side's** window spend per day, per family — **every GOOD keyword of the family, holdout included** (P-15, built v27.158). Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2, P-15 |
 | 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
 | 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. As built (the builder's own comment in `fam2`): the ramp term alone closes one third of the gap in whichever direction it runs, and the `GREATEST` removes the downward half for a family already inside its allowance — instead of being ramped up one third at a time, it is handed **the whole allowance target on night one**, so a family whose target exceeds its not-good side gets a bigger loss budget immediately (audit 2026-10-02: Lollibox on 09-30, $3.43 a day above its not-good spend; 13 of 24 August family-nights). **Ruled 2026-10-02 (P-21), built v27.158:** the ramped allowance is capped at today's not-good spend, `LEAST(notgood_today, GREATEST(target, notgood_today − (notgood_today − target) / ramp_steps))`, so it never raises a family's loser spend above what it spends tonight (acceptance `M1`, `C04`). The ramp is re-anchored on tonight's actual not-good spend, so it descends only as uploads cut that spend: with no upload, each night re-takes the same one-third step from a base that drifts with the window. `ramp_step` counts the plan uploads that **landed** for the family since its first plan night (`plan_uploads_landed`, capped at `ramp_steps`; 0 prints "no step taken yet") — until v27.157 it was a calendar count of windows and read 3 of 3 on every live row although no plan batch had landed since 2026-08-25 (audit fix #15). | P-8, P-21 |
-| 4 SEATS | candidates ranked, each costing its spend **at the repaired price**, walked in rank order: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. The walk is a recursive rank walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, §4.4 |
-| 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`). Since v27.158 the family's **expected spend after the upload** (seats + the queue at the price the plan leaves it at) and the **share of the gap it closes** are published beside the allowance (P-22). | §4.5, P-22 |
-| 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. | P-4, §4.6 |
+| 4 SEATS | **incumbents first** (v27.159, P-16): last partition's seats written under P-16, before their verdict date and still candidates, keep their seat, number, price, cost, verdict date and question, walked in the order they took their seats. Then candidates ranked (P-7's score, then money burned with no return, P-20), each costing its spend **at the repaired price**, walked in rank order into what the incumbents left: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. Each walk is a recursive walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, P-16, P-20, §4.4 |
+| 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`); an **unseated probe gets no move** and nothing is uploaded (v27.159, P-25). Since v27.158 the family's **expected spend after the upload** (seats + the queue at the price the plan leaves it at) and the **share of the gap it closes** are published beside the allowance (P-22). | §4.5, P-22, P-25 |
+| 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. A seated probe is `OPEN_PROBE` (v27.159). Every seat names its question over its settle horizon (P-26). | P-4, §4.6, P-25, P-26 |
 | 7 BUDGETS | `GREATEST(current + (need − current) / ramp_steps, need, good side, $1.00)` — **need** being the good side + the seats + the queue at today's rate — snapped out of the forbidden $20.01–$31.99 band. No move on a brand-defense, an unmeasured or (v27.158) a **holdout** campaign. `campaign_budget_basis` names what bound the cap (v27.158): `RAMPED` (the one-third number), `FLOORED_AT_NEED`, `BAND_SNAPPED_UP` / `_DOWN`, `FLOORED_AT_MINIMUM`, `NO_MOVE_*`. | §4.7, P-27 |
 
 **Seat numbers are the ledger's, not the plan's — and a number is FREE only when the ledger has
-freed it.** A continuing occupant keeps the number `DE_FAMILY_SEAT_LEDGER` holds for it; a new
-occupant takes the family's lowest number **no open ledger row is holding** (`closed_on IS NULL`
-means occupied, whether or not tonight's plan seats that occupant). If two open ledger rows ever
-claim one number, the better-ranked keyword keeps it and the other is admitted as new — so "numbered
-exactly once" cannot be broken by a ledger inconsistency. `C17` compares the plan's numbering with
-the register's, and the builder asserts it before it writes; read the two side by side with:
+freed it.** On the live plan, a keyword `DE_FAMILY_SEAT_LEDGER` holds open keeps the register's
+number; any other seated keyword keeps **the number it held most recently in any earlier partition**
+(P-28, v27.159 — until v27.158 only last night's, so a one-night absence reissued it), unless the
+register holds that number open for another keyword; a new occupant takes the family's lowest number
+**no open ledger row is holding** (`closed_on IS NULL` means occupied, whether or not tonight's plan
+seats that occupant). If two seated keywords claim one number, the register's claimant keeps it,
+then the more recent claim, then the better rank, and the other is numbered as new — so "numbered
+exactly once" cannot be broken by a ledger inconsistency. **The register is the live plan's**
+(v27.159): the shadow plan numbers its own seats from its own history. `C17` compares the live plan's
+numbering with the register's, `C23` (last night) and `T2` (across an absence) check stickiness, and
+the builder asserts both before it writes; read the two side by side with:
 
 ```sql
 SELECT p.family, p.seat_no, p.target_text AS plan_occupant, l.keyword_id AS ledger_occupant
@@ -1529,6 +1536,175 @@ FROM (SELECT as_of, campaign_id, LOGICAL_OR(holdout) h, MAX(campaign_planned_bud
 GROUP BY 1 ORDER BY 1;
 ```
 
+### Tenure, probes, the question and the numbers (v27.159, piece-1 Task 5 — P-16, P-20, P-25, P-26, P-28)
+
+**A seat is held until its verdict date (P-16, Ori 2026-10-02, R2).** An *incumbent* is a keyword
+seated in the previous partition whose seat was written under P-16 (`seat_since` is set), whose
+`verdict_date` is after tonight, and that is still a candidate tonight (not GOOD, not holdout, ladder
+not `DEAD`). It keeps its seat, its number, its planned price, its cost, its verdict date, the night
+it took the seat (`seat_since`) and its question; its cost comes off the allowance first. The
+builder walks the incumbents in the order they took their seats (earliest first, tonight's rank
+breaking a tie) with the same fit test as newcomers, then walks every other candidate in rank order
+into what is left. `seat_tenure` says which: `INCUMBENT`, `NEW`, or `LEFT_ALLOWANCE_SHRANK` on an
+incumbent tonight's allowance could not carry; each sentence says it in words ("TENURE: …",
+"TENURE ENDS EARLY: …"). The previous partition is the latest one **before** tonight's `as_of`, so a
+rewrite of the same night derives the same incumbents from the same rows.
+
+Three readings the builder had to make, recorded for Ori:
+
+1. **The cutover.** Only a seat written with `seat_since` (every seat from v27.159) is an incumbent.
+   The seats of the 2026-10-01 partition were priced before P-19 / P-25 and asked before P-26: 11 of
+   the 28 live seats that were still candidates on the 2026-10-02 judgement carried a price above
+   their current bid on a keyword whose corrected return was under the bar (P-19 forbids that raise),
+   and no plan batch has landed since 2026-08-25, so no such contract was in force on Amazon. Tenure
+   therefore starts with the 2026-10-02 partition and is first honoured by the 2026-10-03 one.
+   *To overrule:* drop `AND seat_since IS NOT NULL` from `prior_seat` (and re-price the old seats
+   under P-19 first, or the raises come back).
+2. **"Those seated latest leave first" is a fit test in seat order.** When the allowance cannot carry
+   every incumbent, the walk keeps each incumbent whose cost fits what the incumbents seated before it
+   left. The latest seated are the ones that find no room, except that a senior seat whose cost alone
+   exceeds the room left leaves and a cheaper junior one that fits stays — the §4.4 fit test, not a
+   prefix stop (the v27.136 defect). On a doctored judgement with LolliME's allowance share halved
+   (allowance $136.03 → $118.83 a day), the simulated 2026-10-03 night kept 25 incumbents of 49
+   ($118.82 a day) and released 24 ($13.57 a day); all 49 took their seats the same night, so
+   tonight's rank decided the order.
+3. **An incumbent keeps its price** even when tonight's window would price it differently: settle
+   discipline at the new price is the point of the verdict date. P-19 was applied the night the
+   price was set; the sentence prints tonight's price beside the kept one when they differ.
+
+**Probes (P-25, audit fix #19).** A probe that wins a seat gets move `OPEN_PROBE` at the price the
+judge set (LIFT's `PROBE_START` bid, capped; P-6's where LIFT holds none) with its own sentence ("OPEN
+PROBE at $X for about N clicks a day (about $Y a day) …, judged after <clicks> clicks or on <date>").
+An unseated probe gets move `NONE`, no price, and "PROBE NOT OPENED TONIGHT; NOTHING UPLOADED" — no
+PARK on a keyword that bought no clicks (the v27.158 builder parked 9 LolliME and 1 Lollibox probes and
+held a Fresh one at park on the 2026-10-02 partition). The PARK and HOLD_AT_PARK sentences branch on
+service: an unserved row reads "not serving: … the park price is a floor it already does not reach, and
+it adds nothing to the family's not-good spend". Since every unserved candidate is a probe, that branch
+is unreachable by construction tonight; acceptance `T4` checks that no queued candidate that bought
+nothing says it "keeps buying clicks". `is_probe` is copied onto the row.
+
+**The question spans the settle horizon (P-26).** On a seat taken tonight `clicks_requested` =
+`ROUND(w_clk × settle_days / window_days)` (probes `click_goal_day × settle_days`), due on the verdict
+date (`as_of + settle_days`); `implied_daily_spend` = the seat's cost per day; `expected_cpc` = that
+cost × the horizon ÷ the clicks, so clicks × CPC ÷ horizon = implied spend to the rounding of the CPC
+(`T3`). Integer clicks move `expected_cpc` off the window's own CPC at the new price by at most half a
+click's share of the horizon (one BOOST seat with 1 window click asks 2 clicks: $0.43 a click against
+$0.37). `request_basis` is `HORIZON_WINDOW_RATE` or `HORIZON_PROBE_GOAL`. An incumbent repeats its own
+question, so `FACT_SEAT_REQUEST` holds one promise per seat and `V_SEAT_REQUEST_OUTCOME` grades the
+clicks delivered since the night it was asked. `PLAN_SEAT_REQUEST_acceptance.sql` S03 / S06 / S07 /
+S11 and `SEAT_REQUEST_acceptance.sql` R04 / R11 read the new bases; rows written before keep theirs.
+
+**Seat numbers (P-28).** See "Seat numbers are the ledger's" above. Two defects made the builder's
+continuity assertion refuse 4 passes from 2026-09-29 16:53 to 2026-10-02 05:34 UTC. Replayed with
+BigQuery time travel (the ledger as of each refused pass, against the partition the same night's
+first pass wrote): **(a)** the register's numbers bound the shadow plan — every refusal names plan-A
+seats renumbered by the register (09-29: Fresh 340057616788625 16 → 5, LolliME 123153583900193 7 → 6
+and 546572942561610 13 → 18; 10-01: LolliME 23713700698206 24 → 30); **(b)** `SP_MAINTAIN_FAMILY_SEATS`
+re-opened a row closed earlier the same `run_day` at its OLD number — the 2026-10-01 05:47 UTC pass
+re-opened LolliME 420345733116531 at 24 and 417323360351451 at 28 (the plan of 09-30 had them at 25 and
+30), so the plan's numbers of two other keywords were taken and the admission walk fell back to 18 and
+20 for 485639729786108 and 359460728874259 (the plan had them at 24 and 28). Fixes: the shadow plan
+numbers its own seats; the register re-opens a row only at the plan's number (v27.159), else admits a
+new row at it. Replaying that 05:47 pass on a time-travel copy of the ledger: the old body leaves 4 open
+rows off the plan's number (exactly the live ledger's 4), the new body 0 (98 open rows, 98 distinct
+numbers, no repeated occupancy key). The builder's assertion now reads the precedence itself: a key the
+register holds keeps the register's number, any other its most recent claim — on the first v27.159 dry
+run 24 live seats returning after an absence held a register number the v27.158 partition of 10-02 had
+given them, not their older claim.
+
+```sql
+-- seat tenure on the latest partition, per plan and family
+SELECT plan, family, COUNTIF(seat_tenure = 'INCUMBENT') AS kept, COUNTIF(seat_tenure = 'NEW') AS new_seats,
+       COUNTIF(seat_tenure = 'LEFT_ALLOWANCE_SHRANK') AS left_allowance_shrank,
+       COUNTIF(move = 'OPEN_PROBE') AS probes_opened, COUNTIF(is_candidate AND move = 'NONE') AS probes_not_opened
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+GROUP BY 1, 2 ORDER BY 1, 2;
+-- the 11 of 28: the 2026-10-01 seats still candidates on a judgement, priced above their current bid
+-- under the bar (run against the judgement of the night after)
+WITH j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
+prev AS (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = '2026-10-01' AND is_live_plan AND seat_no IS NOT NULL)
+SELECT COUNT(*) AS still_candidates,
+       COUNTIF(NOT j.is_probe AND p.planned_bid > j.current_bid + 0.005 AND COALESCE(j.ret_corrected, 0) < j.family_bar) AS p19_raise
+FROM prev p JOIN j USING (campaign_id, keyword_id)
+WHERE p.verdict_date > DATE '2026-10-02' AND j.is_candidate AND j.ladder_state != 'DEAD';
+```
+
+### Deploy and verify v27.159 (2026-10-02, piece-1 Task 5)
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/migrations/2026-10-02_plan_seat_tenure_columns.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_MAINTAIN_FAMILY_SEATS.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"          # a long job: submit with --nosync and poll
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
+# the negative controls of C06 C12 C14 C17 C19 C23 T1..T5 and S03 S06 (exit 0 = every control as expected)
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --judge-table <a snapshot of the judgement>
+```
+
+Measured at deploy (2026-10-02 Los Angeles, 01:14–01:22 UTC 10-03): the migration added three columns
+and restated two `FACT_SEAT_REQUEST` column descriptions; the deployed bodies of both procedures and
+the view equal their files. Three CALLs (jobs `t5_call1_1790990069`, `t5_call2_1790990207`,
+`t5_call3_1790990324`; 1,820.8 / 1,323.3 / 1,755.5 slot-seconds) each wrote the 2026-10-02 partition
+(722 rows, 118 seats) with no refusal, and the three partitions have one fingerprint; the first equals
+the dry run on the judgement snapshot `OI._tmp_t5_judge` row for row. Plan acceptance 34 rows PASS
+(job `t5_acc_live_1790990459`, 1,513.2 slot-seconds); `PLAN_SEAT_REQUEST` 11 PASS; `SEAT_REQUEST` 11
+PASS and R12 1 (it read 1 before this change: `V_SEAT_REQUEST_OUTCOME` reads the table);
+`PLAN_HEALTH_acceptance.sql` 22 PASS (41,189.7 slot-seconds). Nothing new reads `FACT_AMAZON_ADS`.
+On the v27.158 partition of the same night the new checks read C14 140, T1 118, T2 1, T3 118, T4 22,
+T5 61 (red before; C14 and T1 count, among others, the `is_probe` and `seat_tenure` columns that
+builder did not write).
+
+### What v27.159 moved, measured at deploy (2026-10-02)
+
+Same judgement on both sides (window 09-28 … 09-30, BOOST): the v27.158 partition written at 17:03 UTC
+against the v27.159 partition, live plan B. Seats and seat cost did not move (every not-good candidate
+that fitted before fits now; 0 incumbents tonight, by the cutover).
+
+| family | seats | seat cost $/day | probes opened | probe moves PARK / HOLD_AT_PARK → NONE | ranks changed | clicks requested | implied $ to the due date / clicks × CPC |
+|---|---|---|---|---|---|---|---|
+| Bottle | 3 → 3 | 0.70 | 0 | 0 | 0 | 4 → 9 | 4.93 / 2.11 → 4.93 / 4.93 |
+| Fresh | 22 → 22 | 57.06 | 0 → 1 (REPRICE → OPEN_PROBE) | 1 | 15 | 351 → 1,464 | 628.31 / 171.17 → 628.31 / 628.31 |
+| LolliME | 49 → 49 | 132.39 | 0 | 9 | 34 | 620 → 2,220 | 1,327.00 / 397.18 → 1,327.00 / 1,327.00 |
+| Lollibox | 8 → 8 | 36.76 | 0 | 1 | 2 | 292 → 1,193 | 472.49 / 110.30 → 472.49 / 472.53 |
+
+- **P-26**: the question now prices the clicks it asks for: implied spend to the due date equals clicks
+  × expected CPC (to $0.04 on 1,193 Lollibox clicks, the rounding of the CPC); v27.158 overstated the
+  clicks' cost 2.3–4.3× per family.
+- **P-25 / fix #19**: 11 unserved probes no longer get a PARK or a park hold; Fresh's seated probe opens
+  at LIFT's $0.27 for 28 clicks by 10-09.
+- **P-20**: 51 live candidates changed rank; none changed seat.
+- **P-28**: the shadow plan renumbered 3 seats (Fresh 1, LolliME 2) it had taken from the register's
+  numbering; the live plan renumbered none.
+- **P-16** (simulated: the builder body with `as_of` 2026-10-03 on a history whose 10-02 partition is
+  the v27.159 one, same judgement): all 118 seats were incumbents and kept their contracts unchanged
+  (0 renumbered, 0 changed price, date or question), 0 newcomers seated (the allowance was full). With
+  LolliME's allowance share halved: 25 kept and 24 released in plan B (above), 12 kept and 4 released
+  in plan A; every builder assertion passed in both.
+
+```sql
+-- after, per family, on the latest partition. The v27.158 side was read before the first v27.159
+-- CALL rewrote 2026-10-02; within seven days it is readable again by time travel: replace the FROM
+-- with FACT_PLAN_NEXT_WEEK FOR SYSTEM_TIME AS OF TIMESTAMP('2026-10-03 01:10:00+00') and as_of = '2026-10-02'.
+SELECT plan, family, COUNTIF(seat_no IS NOT NULL) AS seats,
+       ROUND(SUM(IF(seat_no IS NOT NULL, seat_cost_per_day, 0)), 2) AS seat_cost,
+       COUNTIF(move = 'OPEN_PROBE') AS opened, COUNTIF(is_candidate AND move = 'NONE') AS probes_none,
+       SUM(IF(seat_no IS NOT NULL, clicks_requested, 0)) AS clicks,
+       ROUND(SUM(IF(seat_no IS NOT NULL, implied_daily_spend * DATE_DIFF(clicks_due_date, as_of, DAY), 0)), 2) AS implied_to_due,
+       ROUND(SUM(IF(seat_no IS NOT NULL, clicks_requested * expected_cpc, 0)), 2) AS clicks_x_cpc
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
@@ -1644,9 +1820,9 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
    bid; built in the judge v27.157 (§2, "No raise below the bar…"). Raises that remain: rows at or
    above the bar (P-6's price) and probes opening at LIFT's bid (P-25).
 3. **P-7's degenerate rank** — **ruled 2026-10-02 (P-20):** candidates with no positive score rank
-   by money burned with no return (`rank_money_burned`), not by clicks. Built in the judge v27.157;
-   this builder's `ranked` CTE still orders `rank_score DESC, w_clk DESC` until piece-1 Task 5, so
-   tonight's seats still follow the click order among them.
+   by money burned with no return (`rank_money_burned`), not by clicks. Built in the judge v27.157
+   and in this builder's `ranked` CTE in v27.159 (`GREATEST(rank_score, 0) DESC, rank_money_burned
+   DESC, w_clk DESC`, keys; acceptance `T5`).
 4. **P-14b IS NOW A DELAY WITH A CLOCK, AND THAT IS A READING, NOT A RULING ORI MADE.** The guard
    was a permanent veto: `was_good` reads last night's SIDE, a held row's side is GOOD, and the
    window rolls so `settled` is never true — so the protected side was a one-way door, the ladder

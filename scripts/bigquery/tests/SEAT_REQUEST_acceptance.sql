@@ -3,6 +3,18 @@
 -- Every check returns a VIOLATION COUNT; every row must read PASS.
 -- Run: bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 --
+-- v27.159 (2026-10-02, piece-1 plan Task 5, spec P-26): R04 accepts the two bases written from
+-- v27.159 (HORIZON_WINDOW_RATE, HORIZON_PROBE_GOAL) and R11 divides each row by the horizon its basis
+-- was written with — window_days for WINDOW_CLICKS / PROBE_GOAL, the settle horizon for the new two:
+-- SP 7 days, SB 14 (the judge's settle_days: IF(channel = 'SB', 14, 7)), since a seat's due date
+-- is the night it took the seat plus settle_days and an incumbent repeats that question (P-16).
+-- R12 read 1 before this change (V_SEAT_REQUEST_OUTCOME reads the table); not touched here.
+-- RUN 2026-10-02 (Los Angeles): R01..R11 0, R12 1. NEGATIVE CONTROLS on doctored copies of the ledger
+-- (this file's own text with FACT_SEAT_REQUEST swapped for the copy; the doctored row is the latest
+-- WINDOW_CLICKS row, SP, w_clk 4 in 3 days): LIVE R04 0 R11 0; that row restated under
+-- HORIZON_WINDOW_RATE with coherent arithmetic (9 clicks, CPC = implied x 7 / 9): R04 0, R11 0; its
+-- implied spend doubled: R11 1; the coherent row labelled WINDOW_CLICKS: R11 1; basis 'BOGUS': R04 1.
+--
 -- NOTE ON R02: the ledger is expected to go RED if the plan is rebuilt without the append. That is
 -- a true staleness alarm, not a false one, and the fix is CALL SP_APPEND_SEAT_REQUEST(), which is
 -- safe at any time.
@@ -32,7 +44,8 @@ r03 AS (SELECT COUNTIF(n > 1) AS v
 --     and a due date — the ledger exists to be graded and an ungradeable row is dead weight.
 r04 AS (SELECT COUNTIF(seat_no IS NULL OR clicks_requested IS NULL OR clicks_requested <= 0
                        OR clicks_due_date IS NULL OR request_basis IS NULL
-                       OR request_basis NOT IN ('WINDOW_CLICKS','PROBE_GOAL')) AS v FROM led),
+                       OR request_basis NOT IN ('WINDOW_CLICKS','PROBE_GOAL',
+                                                'HORIZON_WINDOW_RATE','HORIZON_PROBE_GOAL')) AS v FROM led),
 
 -- R05 NO ROW IS EVER MUTATED: an earlier partition can never be rewritten by a later pass, so its
 --     captured_at must not be newer than the newest partition's.
@@ -68,7 +81,9 @@ r10 AS (SELECT COUNTIF(family_bar IS NULL) AS v FROM led),
 
 -- R11 THE ARITHMETIC SURVIVES THE COPY: implied_daily_spend still equals clicks x cpc / days.
 r11 AS (SELECT COUNTIF(ABS(implied_daily_spend
-                           - SAFE_DIVIDE(clicks_requested * expected_cpc, window_days)) > 0.01) AS v
+                           - SAFE_DIVIDE(clicks_requested * expected_cpc,
+                                         IF(request_basis IN ('WINDOW_CLICKS', 'PROBE_GOAL'), window_days,
+                                            IF(channel = 'SB', 14, 7)))) > 0.01) AS v
         FROM led WHERE expected_cpc IS NOT NULL),
 
 -- R12 READ-ONLY BY CONSTRUCTION: nothing in the warehouse reads this table yet, and the day it

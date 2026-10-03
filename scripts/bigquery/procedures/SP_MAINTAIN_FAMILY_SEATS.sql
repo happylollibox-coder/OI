@@ -1,5 +1,11 @@
 -- =============================================
 -- SP_MAINTAIN_FAMILY_SEATS — keeps DE_FAMILY_SEAT_LEDGER honest, once per keyword-state snapshot.
+-- v27.159 (2026-10-02, piece-1 plan Task 5, Ori's ruling R15 = spec P-28 — the register adopts the
+-- plan's number): REOPEN (step 3) no longer re-opens a row at an old number the plan has since
+-- given to another keyword. It re-opens a row closed on run_day only at the plan's number for the
+-- keyword (in place when the row already carries it, or when the row was opened and closed on
+-- run_day itself); otherwise ADMIT opens a new row at the plan's number. The log line counts
+-- admissions at a number that is not the plan's. The rest of this header is unchanged; see step 3.
 -- v27.139 (2026-08-24): UNIFIED WITH THE PLAN, AGREEMENT-TIER AWARE. Before this pass the ledger
 -- derived its occupant set independently from FACT_KEYWORD_STATE (the 90-day ladder verdict
 -- alone) while FACT_PLAN_NEXT_WEEK (SP_BUILD_NEXT_WEEK_PLAN, shipped 2026-08-23/24) derives its
@@ -210,7 +216,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_MAINTAIN_FAMILY_SEATS`()
 OPTIONS (
-  description = "v27.142 (2026-08-24, Defect 2 fix, ruling R-r): maintains DE_FAMILY_SEAT_LEDGER from FACT_PLAN_NEXT_WEEK plan='B' (the live plan)'s own SEATED keywords (seat_no IS NOT NULL, its own budget-rationed decision, not re-derived) at the most recent available as_of (one pass of lag by construction, since SP_BUILD_NEXT_WEEK_PLAN writes today's partition AFTER this procedure runs in the same orchestrator pass — mirrors the existing T_LIFT_PROBES lag). Joined to plan='A' (the ladder-driven shadow) on (family, campaign_id, keyword_id): agreement_tier = CONFIRMED when plan A's side is also NOT_GOOD (side_a: GOOD only for WINNER / PACED_WINNER / AT_BAR / TRIAL / PENDING_SETTLE / REVIVED_SETTLING), else DISPUTED (plan A says GOOD, or carries no row for the key). occupant_kind is read from today's FACT_KEYWORD_STATE snapshot by the existing probe test (engine-listed T_LIFT_PROBES / at-floor-with-spend / stalled standing raise, rulings R-a/R-b), with a fallback value 'disputed' for a ladder state the old CASE never covered (WINNER / PACED_WINNER / AT_BAR / DEAD / no snapshot row) — occurring only on a DISPUTED occupant by construction. CLOSURE is agreement-tier gated (P-4/P-5 spirit): a key leaving the occupant set closes through the unchanged first-match reason ladder (KILLED > PAUSED > PARK_LAPSED > LEFT_FAMILY > DEFENSE_EXEMPT > TO_GOOD_SIDE > TO_WAITING > STATE_CHANGED) ONLY when plan A also no longer says NOT_GOOD (both judges agree it left); when plan A still says NOT_GOOD the seat is HELD OPEN instead — held_reason='HELD_DISPUTED' / held_reason_text (never an overload of closed_reason) — and an existing occupant is never evicted for turning disputed. ADMISSION (v27.142 FIX) ranks a family's fresh admissions in ONE total order (CONFIRMED before DISPUTED, then rank_score DESC, then keyword_id, then campaign_id) and walks them SEQUENTIALLY, each taking FACT_PLAN_NEXT_WEEK plan='B''s own seat_no where offered and not already claimed by an earlier-ranked admission THIS RUN, otherwise the lowest number free against BOTH the pre-run open set and every number already claimed earlier in this same pass — closing the intra-run collision window v27.141's fallback (which checked only the pre-run open set) left open. An already-open continuing occupant's seat_no is still never touched (D01 stability unchanged) — the walk applies only at first admission. REOPEN and OBSERVE are unchanged. Brand-defense filtering is inherited from the plan's own universe (the ladder's is_brand_defense flag only, via V_PLAN_WINDOW_JUDGMENT), not re-derived with the three-way test here, so the ledger's admissions reconcile exactly with the plan's; the three-way test still runs as a standing acceptance safety check (A10), not a filter. Idempotent on the same snapshot and the same plan partitions. Orchestrator Task 20.8b, before SP_BUILD_NEXT_WEEK_PLAN (20.8c). Spec: architecture/FAMILY_SEAT_REGISTER.md (rulings R-o, R-p, R-r)."
+  description = "v27.159 (2026-10-02, piece-1 plan Task 5, ruling R15 = spec P-28): REOPEN re-opens a row closed on run_day only at the plan's seat_no for the keyword (in place when the row carries it or was opened on run_day), else ADMIT opens a new row at the plan's number -- until v27.158 a re-opened row kept an old number the plan had given to another keyword and two admissions fell back to invented numbers (the second call of the 2026-10-01 05:42 UTC pass); the log counts admissions at a number that is not the plan's. v27.142 (2026-08-24, Defect 2 fix, ruling R-r): maintains DE_FAMILY_SEAT_LEDGER from FACT_PLAN_NEXT_WEEK plan='B' (the live plan)'s own SEATED keywords (seat_no IS NOT NULL, its own budget-rationed decision, not re-derived) at the most recent available as_of (one pass of lag by construction, since SP_BUILD_NEXT_WEEK_PLAN writes today's partition AFTER this procedure runs in the same orchestrator pass — mirrors the existing T_LIFT_PROBES lag). Joined to plan='A' (the ladder-driven shadow) on (family, campaign_id, keyword_id): agreement_tier = CONFIRMED when plan A's side is also NOT_GOOD (side_a: GOOD only for WINNER / PACED_WINNER / AT_BAR / TRIAL / PENDING_SETTLE / REVIVED_SETTLING), else DISPUTED (plan A says GOOD, or carries no row for the key). occupant_kind is read from today's FACT_KEYWORD_STATE snapshot by the existing probe test (engine-listed T_LIFT_PROBES / at-floor-with-spend / stalled standing raise, rulings R-a/R-b), with a fallback value 'disputed' for a ladder state the old CASE never covered (WINNER / PACED_WINNER / AT_BAR / DEAD / no snapshot row) — occurring only on a DISPUTED occupant by construction. CLOSURE is agreement-tier gated (P-4/P-5 spirit): a key leaving the occupant set closes through the unchanged first-match reason ladder (KILLED > PAUSED > PARK_LAPSED > LEFT_FAMILY > DEFENSE_EXEMPT > TO_GOOD_SIDE > TO_WAITING > STATE_CHANGED) ONLY when plan A also no longer says NOT_GOOD (both judges agree it left); when plan A still says NOT_GOOD the seat is HELD OPEN instead — held_reason='HELD_DISPUTED' / held_reason_text (never an overload of closed_reason) — and an existing occupant is never evicted for turning disputed. ADMISSION (v27.142 FIX) ranks a family's fresh admissions in ONE total order (CONFIRMED before DISPUTED, then rank_score DESC, then keyword_id, then campaign_id) and walks them SEQUENTIALLY, each taking FACT_PLAN_NEXT_WEEK plan='B''s own seat_no where offered and not already claimed by an earlier-ranked admission THIS RUN, otherwise the lowest number free against BOTH the pre-run open set and every number already claimed earlier in this same pass — closing the intra-run collision window v27.141's fallback (which checked only the pre-run open set) left open. An already-open continuing occupant's seat_no is still never touched (D01 stability unchanged) — the walk applies only at first admission. REOPEN and OBSERVE are unchanged. Brand-defense filtering is inherited from the plan's own universe (the ladder's is_brand_defense flag only, via V_PLAN_WINDOW_JUDGMENT), not re-derived with the three-way test here, so the ledger's admissions reconcile exactly with the plan's; the three-way test still runs as a standing acceptance safety check (A10), not a filter. Idempotent on the same snapshot and the same plan partitions. Orchestrator Task 20.8b, before SP_BUILD_NEXT_WEEK_PLAN (20.8c). Spec: architecture/FAMILY_SEAT_REGISTER.md (rulings R-o, R-p, R-r)."
 )
 BEGIN
   DECLARE run_day DATE;      -- today's FACT_KEYWORD_STATE snapshot — freshest ground truth for occupant_kind and closure reason wording
@@ -412,16 +418,38 @@ BEGIN
   WHERE l.family = x.family AND l.campaign_id = x.campaign_id AND l.keyword_id = x.keyword_id
     AND l.opened_on = x.opened_on AND l.closed_on IS NULL;
 
-  -- ── 3. REOPEN (same-day flip keeps its number and keeps the key unique) ──────────────────
+  -- ── 3. REOPEN (same-day flip keeps the key unique) — AT THE PLAN'S NUMBER (v27.159) ────────
+  -- v27.159 (2026-10-02, piece-1 plan Task 5, Ori's ruling R15 = spec P-28: the register adopts
+  -- the plan's number). Until v27.158 a row closed earlier on run_day was re-opened at its OLD
+  -- number whatever number the plan had since given the keyword, and the admission walk below then
+  -- found the plan's numbers of two OTHER keywords already claimed and handed them fallback
+  -- numbers. Found with BigQuery time travel: the second call of this procedure in the orchestrator
+  -- pass that began 2026-10-01 05:42 UTC (its ledger writes at 05:47-05:49 UTC, reading the 09-30
+  -- partition the 05:43 build had just written) re-opened LolliME 420345733116531 at 24 and
+  -- 417323360351451 at 28 (the plan had them at 25 and 30) and admitted 485639729786108 at 18 and
+  -- 359460728874259 at 20 (the plan had them at 24 and 28); the builder's continuity assertion then
+  -- refused the 10-01 16:58 and 10-02 05:34 UTC passes. Replayed on a time-travel copy of the ledger
+  -- as of 05:46:30 UTC: the v27.158 body leaves those 4 open rows off the plan's number (the live
+  -- ledger's 4), this body 0 (98 open rows, 98 distinct numbers, no repeated occupancy key).
+  -- Now a closed row is re-opened only when its number IS the plan's number for the keyword, or —
+  -- for a row opened and closed on run_day itself, which has no history but today — re-opened AT
+  -- the plan's number (a fresh row would repeat the occupancy key, A08). Otherwise it stays closed
+  -- and ADMIT (step 4) opens a new row at the plan's number. Never when another open row holds the
+  -- plan's number (the admission walk's collision fallback stays the only place that may invent one).
   UPDATE `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` l
   SET closed_on = NULL, closed_reason = NULL, closed_reason_text = NULL,
-      held_reason = NULL, held_reason_text = NULL
+      held_reason = NULL, held_reason_text = NULL,
+      seat_no = o.plan_seat_no
   FROM occupants o
   WHERE l.family = o.family AND l.campaign_id = o.campaign_id AND l.keyword_id = o.keyword_id
     AND l.closed_on = run_day
+    AND (l.seat_no = o.plan_seat_no OR l.opened_on = run_day)
     AND NOT EXISTS (SELECT 1 FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` z
                     WHERE z.family = l.family AND z.campaign_id = l.campaign_id
-                      AND z.keyword_id = l.keyword_id AND z.closed_on IS NULL);
+                      AND z.keyword_id = l.keyword_id AND z.closed_on IS NULL)
+    AND NOT EXISTS (SELECT 1 FROM `onyga-482313.OI.DE_FAMILY_SEAT_LEDGER` z2
+                    WHERE z2.family = l.family AND z2.closed_on IS NULL
+                      AND z2.seat_no = o.plan_seat_no);
 
   -- ── 4. ADMIT — one deterministic per-family numbering PASS, intra-run collision-safe ───────
   -- (v27.142, Defect 2 fix, closes the collision window v27.141 left open.) v27.141 adopted the
@@ -557,9 +585,15 @@ BEGIN
          OR l.agreement_tier IS DISTINCT FROM o.agreement_tier
          OR l.held_reason IS NOT NULL);
 
-  SELECT FORMAT('SP_MAINTAIN_FAMILY_SEATS: snapshot %s, plan as_of %s — %d occupants (plan B seated) — %d closed, %d held (disputed)',
+  -- v27.159: the log names every admission whose number is not the plan's (the collision
+  -- fallback) — 0 in normal operation, now that REOPEN adopts the plan's number.
+  SELECT FORMAT('SP_MAINTAIN_FAMILY_SEATS: snapshot %s, plan as_of %s — %d occupants (plan B seated) — %d closed, %d held (disputed), %d admitted, %d of them at a number that is not the plan\'s',
                 CAST(run_day AS STRING), CAST(plan_as_of AS STRING),
                 (SELECT COUNT(*) FROM occupants),
                 (SELECT COUNT(*) FROM leaving),
-                (SELECT COUNT(*) FROM leaving_keys WHERE ladder_disagrees)) AS log_message;
+                (SELECT COUNT(*) FROM leaving_keys WHERE ladder_disagrees),
+                (SELECT COUNT(*) FROM assigned),
+                (SELECT COUNT(*) FROM assigned a JOIN occupants o
+                   ON o.family = a.family AND o.campaign_id = a.campaign_id AND o.keyword_id = a.keyword_id
+                 WHERE a.seat_no != o.plan_seat_no)) AS log_message;
 END;

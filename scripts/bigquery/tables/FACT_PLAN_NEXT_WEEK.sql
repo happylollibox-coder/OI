@@ -160,7 +160,13 @@ CREATE TABLE IF NOT EXISTS `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   -- family's first plan night (ramp_step = LEAST(ramp_steps, plan_uploads_landed))
   expected_after_upload_per_day FLOAT64,
   share_closed               FLOAT64,
-  plan_uploads_landed        INT64
+  plan_uploads_landed        INT64,
+  -- v27.159 (P-16, P-25): the seat's tenure and the probe flag — seat_since (the night the keyword
+  -- took the seat it holds; carried for an incumbent), seat_tenure (INCUMBENT | NEW |
+  -- LEFT_ALLOWANCE_SHRANK | NULL) and is_probe (the judge's LIFT nomination flag)
+  seat_since                 DATE,
+  seat_tenure                STRING,
+  is_probe                   BOOL
 )
 PARTITION BY as_of
 CLUSTER BY plan, family, campaign_id
@@ -255,3 +261,15 @@ ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS memor
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS expected_after_upload_per_day FLOAT64;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS share_closed FLOAT64;
 ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS plan_uploads_landed INT64;
+
+-- v27.159 (2026-10-02) — THE SEAT'S TENURE AND THE PROBE FLAG. Shipped as
+-- scripts/bigquery/migrations/2026-10-02_plan_seat_tenure_columns.sql; mirrored here. Piece-1
+-- plan Task 5, Ori's rulings R2 / R12 of 2026-10-02 = spec P-16 / P-25: seat_since (the night the
+-- keyword took the seat it holds — as_of for a new seat, carried for an incumbent; the builder
+-- reads it back, and only a seat written with it is an incumbent the next night), seat_tenure
+-- (INCUMBENT | NEW | LEFT_ALLOWANCE_SHRANK | NULL) and is_probe (the judge's LIFT nomination flag,
+-- so OPEN_PROBE and an unseated probe's NONE are checked without re-deriving who is a probe).
+-- NULL on the partitions written before the columns existed; no existing row is updated.
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS seat_since DATE;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS seat_tenure STRING;
+ALTER TABLE `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` ADD COLUMN IF NOT EXISTS is_probe BOOL;
