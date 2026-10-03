@@ -19,6 +19,15 @@
 -- more than a whole number of days, its CPC restated so clicks x CPC / horizon still equals its
 -- implied spend: S07 1, S03 0; one seat's request_basis 'BOGUS': S11 1. Results also in
 -- FACT_PLAN_NEXT_WEEK_acceptance.sql.
+--
+-- v27.164 (2026-10-03, piece-1 follow-up F2): S04 RESTATED to the seats taken tonight. An incumbent
+-- keeps the question it was given (P-16) but is costed at its kept price on tonight's window, so its
+-- implied spend and its cost differ whenever the window moved: on the 2026-10-03 partition
+-- SP_BUILD_NEXT_WEEK_PLAN v27.164 wrote, 96 of 113 incumbents by more than a cent, and the v27.159
+-- form of S04 read 96 on the v27.164 dry run of that partition (job f2_reqH_new_1791017656; every
+-- other check 0; the CALL's partition equals the dry run in every non-float column). The restated
+-- form reads 0 on the live partition (job f2_req_live_1791017982), and S04 gains an emptiness term
+-- (no seat reads 1).
 -- =============================================================================================
 WITH latest AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -44,10 +53,17 @@ s03 AS (SELECT COUNTIF(ABS(implied_daily_spend
                        OR (request_basis NOT IN ('WINDOW_CLICKS', 'PROBE_GOAL') AND seat_since IS NULL)) AS v
         FROM seated WHERE expected_cpc IS NOT NULL),
 
--- S04 the seat's own dollars and the request's dollars are the same money. If these ever diverge
---     the request is describing a seat the Brain did not actually fund.
-s04 AS (SELECT COUNTIF(ABS(implied_daily_spend - seat_cost_per_day) > 0.01) AS v
-        FROM seated WHERE seat_cost_per_day IS NOT NULL),
+-- S04 the seat's own dollars and the request's dollars are the same money ON THE NIGHT THE QUESTION
+--     IS ASKED. If these ever diverge the request is describing a seat the Brain did not fund.
+--     RESTATED v27.164 (piece-1 follow-up F2): on a seat taken tonight (not INCUMBENT). An incumbent
+--     repeats the question it was given (P-16, FACT_PLAN_NEXT_WEEK_acceptance.sql T1), so its implied
+--     spend is the money of that night, while its cost is its kept price on tonight's window. The
+--     second term is the emptiness term: a partition with no seat reads 1.
+s04 AS (SELECT COUNTIF(COALESCE(seat_tenure, '') != 'INCUMBENT'
+                       AND seat_cost_per_day IS NOT NULL
+                       AND ABS(implied_daily_spend - seat_cost_per_day) > 0.01)
+               + IF(COUNT(*) = 0, 1, 0) AS v
+        FROM seated),
 
 -- S05 NO REQUEST WITHOUT A SEAT. A row that took no seat asked no question, and publishing a click
 --     target on it would invent an intention the Brain never had.

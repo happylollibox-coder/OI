@@ -25,24 +25,36 @@ WHY THIS EXISTS
 THE COPIES (check: expected value on that copy; HM = plan_one_move_per_notgood's measured value,
 HS = 1 when its status is RED)
     LIVE                          every check 0, HM 0, HS 0.
-    NC_EMPTY                      no rows: C23 T1 T2 T3 T4 T5 1 (emptiness terms), HS 1 (the board
-                                  reads an empty live plan RED).
+    NC_EMPTY                      no rows: C23 T1 T2 T3 T4 T5 1 (emptiness terms), S04 1 (its
+                                  emptiness term, v27.164), HS 1 (the board reads an empty live plan
+                                  RED).
     HC_T1_INCUMBENT               a continuing live seat made an incumbent with a coherent contract
                                   (the previous partition's row carries tonight's contract, seated
                                   the night before with a verdict date a settle horizon later;
-                                  tonight tagged INCUMBENT with that date): T1 0, C23 0, T3 0.
+                                  tonight tagged INCUMBENT with that date, and costed at its price on
+                                  tonight's window, v27.164): T1 0, C23 0, T3 0, S04 0.
     NC_T1_PRICE_MOVED             that incumbent's price +$0.10 tonight: T1 1.
     NC_T1_QUESTION_MOVED          that incumbent's clicks_requested +1 tonight: T1 1.
+    NC_T1_COST_KEPT_FROM_CONTRACT (v27.164, follow-up F2) that incumbent carrying its contract's cost,
+                                  v27.160's rule: the contract and tonight's row both at tonight's
+                                  window cost + $0.50: T1 1.
+    HC_T1_PROBE_INCUMBENT         (v27.164) that incumbent made a probe tonight, costed click_goal_day x
+                                  its kept price: T1 0.
+    NC_T1_PROBE_COSTED_BY_WINDOW  (v27.164) the same probe costed at its price on the window: T1 1.
     NC_T1_TENURE_WITHOUT_CONTRACT a NEW seat tagged INCUMBENT with no contract behind it: T1 >= 1 (the
                                   tenure term and the sentence term each count it).
     NC_C23_SEAT_DROPPED           the plan's control: the previous partition holds a seat dated
-                                  tomorrow, costing $0.01 a day, for a keyword tonight's walk queues:
-                                  C23 1, T1 1.
-    HC_T1_EVICTION_JUSTIFIED      that seat's contract costs $1,000 a day (above any allowance), and
-                                  tonight says LEFT_ALLOWANCE_SHRANK and TENURE ENDS EARLY: C23 0, T1 0.
+                                  tomorrow, priced $0.00 (so tonight's window costs it nothing;
+                                  v27.164 — it was "costing $0.01 a day" while T1 read the contract's
+                                  cost), for a keyword tonight's walk queues: C23 1, T1 1.
+    HC_T1_EVICTION_JUSTIFIED      that seat's contract priced $1,000,000 (tonight's window or probe
+                                  goal at that price is above any allowance), and tonight says
+                                  LEFT_ALLOWANCE_SHRANK and TENURE ENDS EARLY: C23 0, T1 0.
     NC_T1_SHRANK_SILENT           the same without "TENURE ENDS EARLY" in the sentence: C23 0, T1 1
                                   (the sentence term alone).
-    NC_T1_EVICTION_UNJUSTIFIED    the justified copy with a contract costing $0.01: C23 0, T1 1.
+    NC_T1_EVICTION_UNJUSTIFIED    the justified copy with the contract priced $0.00: C23 0, T1 1.
+    NC_S04_NEW_SEAT_COST_OFF      (v27.164) a NEW seat's cost + $0.50 off its implied spend: S04 1,
+                                  T3 1 (both now compare the two on seats taken tonight only).
     NC_C23_RENUMBERED             a continuing occupant (same number both nights; the register holds
                                   that number for no other keyword) given number 900: C23 1, T2 1.
     NC_T2_RETURN_RENUMBERED       a seated keyword absent the night before whose most recent seat
@@ -85,8 +97,10 @@ EXIT CODES
        the c25 text this script runs (each is printed)
     2  the check could not run (bq failed, or a file did not parse)
 
-USAGE (one BigQuery script job of 121 statements: 8 min 34 s and 5,789.9 slot-seconds on 2026-10-03,
-job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1, exit 0. It is submitted asynchronously and polled.)
+USAGE (one BigQuery script job: 121 statements, 8 min 34 s and 5,789.9 slot-seconds on 2026-10-03,
+job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1; with the five v27.164 copies, 32 copies, 8,715.2
+slot-seconds on 2026-10-03 09:00–09:09 UTC, job bqjob_r78febaf76288764f_000001a100fdebd9_1; both exit
+0. It is submitted asynchronously and polled.)
     python3 scripts/bigquery/tests/check_plan_seat_controls.py [--judge-table PROJECT.DATASET.TABLE]
         submit, poll with `bq wait JOB 60` (printing the state each minute), collect.
     python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit [--judge-table ...]
@@ -183,6 +197,16 @@ def contract_from_tonight(src_rn_col):
     }
 
 
+# v27.164 (follow-up F2): an incumbent's cost is its kept price on TONIGHT's window, as the builder
+# and T1 recount it: w_sp / window_days x price / current bid (0 with no spend or no current bid),
+# and click_goal_day x price on a probe (the goal read from the judgement snapshot). The doctored
+# incumbent keeps tonight's planned_bid, which contract_from_tonight writes into the previous
+# partition, so its coherent cost is this recount on tonight's own price.
+WINDOW_COST = ("ROUND(IF(w_sp > 0 AND COALESCE(current_bid, 0) > 0, "
+               "w_sp / window_days * planned_bid / current_bid, 0), 4)")
+PROBE_COST = "ROUND((SELECT MAX(click_goal_day) FROM jsnap) * planned_bid, 4)"
+
+
 def incumbent_tonight(extra=None):
     d = {
         "seat_tenure": "'INCUMBENT'",
@@ -190,13 +214,19 @@ def incumbent_tonight(extra=None):
         "verdict_date": "DATE_ADD((SELECT prev_as_of FROM pick), INTERVAL DATE_DIFF(verdict_date, seat_since, DAY) DAY)",
         "clicks_due_date": "DATE_ADD((SELECT prev_as_of FROM pick), INTERVAL DATE_DIFF(verdict_date, seat_since, DAY) DAY)",
         "sentence": "REPLACE(sentence, 'TENURE: seated tonight', 'TENURE: it has held this seat since')",
+        "seat_cost_per_day": WINDOW_COST,
     }
     d.update(extra or {})
     return d
 
 
-DROP_PREV = {  # a seat dated tomorrow in the previous partition, for a keyword tonight queues
-    "seat_no": "999", "planned_bid": "current_bid", "seat_cost_per_day": "0.01",
+# the v27.160 rule F2 retired: the incumbent carries the cost its contract was granted at, here
+# tonight's window cost + $0.50 written both into the contract and onto tonight's row
+STALE_COST = f"{WINDOW_COST} + 0.50"
+
+DROP_PREV = {  # a seat dated tomorrow in the previous partition, for a keyword tonight queues; its
+    # kept price $0.00, so tonight's window costs it nothing and nothing justifies its eviction
+    "seat_no": "999", "planned_bid": "0.0", "seat_cost_per_day": "0.01",
     "seat_since": "(SELECT prev_as_of FROM pick)",
     "verdict_date": "DATE_ADD((SELECT mx FROM pick), INTERVAL 1 DAY)",
     "clicks_requested": "7", "clicks_due_date": "DATE_ADD((SELECT mx FROM pick), INTERVAL 1 DAY)",
@@ -214,24 +244,40 @@ HORIZON = "DATE_DIFF(clicks_due_date, seat_since, DAY)"
 COPIES = {
     "LIVE": (LIVE, None, []),
     "NC_EMPTY": (f"{LIVE} WHERE FALSE",
-                 [("C23", 1), ("T1", 1), ("T2", 1), ("T3", 1), ("T4", 1), ("T5", 1), ("HS", 1)], []),
+                 [("C23", 1), ("T1", 1), ("T2", 1), ("T3", 1), ("T4", 1), ("T5", 1), ("S04", 1), ("HS", 1)], []),
     "HC_T1_INCUMBENT": (two("inc_rn", "inc_prev_rn", incumbent_tonight(), contract_from_tonight("inc_rn")),
-                        [("T1", 0), ("C23", 0), ("T3", 0)], INC),
+                        [("T1", 0), ("C23", 0), ("T3", 0), ("S04", 0)], INC),
     "NC_T1_PRICE_MOVED": (two("inc_rn", "inc_prev_rn", incumbent_tonight({"planned_bid": "planned_bid + 0.10"}),
                               contract_from_tonight("inc_rn")), [("T1", 1)], INC),
     "NC_T1_QUESTION_MOVED": (two("inc_rn", "inc_prev_rn", incumbent_tonight({"clicks_requested": "clicks_requested + 1"}),
                                  contract_from_tonight("inc_rn")), [("T1", 1)], INC),
+    # v27.164 (F2): the incumbent costed by its contract, v27.160's rule
+    "NC_T1_COST_KEPT_FROM_CONTRACT": (two("inc_rn", "inc_prev_rn", incumbent_tonight({"seat_cost_per_day": STALE_COST}),
+                                          dict(contract_from_tonight("inc_rn"), seat_cost_per_day=STALE_COST)),
+                                      [("T1", 1)], INC),
+    # v27.164 (F2): a probe tonight costs click_goal_day x its kept price, not its window
+    "HC_T1_PROBE_INCUMBENT": (two("inc_rn", "inc_prev_rn",
+                                  incumbent_tonight({"is_probe": "TRUE", "seat_cost_per_day": PROBE_COST}),
+                                  contract_from_tonight("inc_rn")), [("T1", 0)], INC),
+    "NC_T1_PROBE_COSTED_BY_WINDOW": (two("inc_rn", "inc_prev_rn",
+                                         incumbent_tonight({"is_probe": "TRUE"}),
+                                         contract_from_tonight("inc_rn")), [("T1", 1)], INC),
     "NC_T1_TENURE_WITHOUT_CONTRACT": (at("new_rn", seat_tenure="'INCUMBENT'"), [("T1", "GE1")], ["new_rn"]),
     "NC_C23_SEAT_DROPPED": (two("queued_rn", "queued_prev_rn", {}, DROP_PREV), [("C23", 1), ("T1", 1)], QUEUED),
+    # v27.164 (F2): the eviction test reads the contract's kept price on tonight's window, so the
+    # justified copy prices the contract at $1,000,000 (any spend or probe goal costs more than any
+    # allowance at it) and the unjustified one at $0.00
     "HC_T1_EVICTION_JUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID,
-                                     dict(DROP_PREV, seat_cost_per_day="1000.0")),
+                                     dict(DROP_PREV, planned_bid="1000000.0")),
                                  [("C23", 0), ("T1", 0)], QUEUED),
     "NC_T1_SHRANK_SILENT": (two("queued_rn", "queued_prev_rn", SHRANK_SILENT,
-                                dict(DROP_PREV, seat_cost_per_day="1000.0")),
+                                dict(DROP_PREV, planned_bid="1000000.0")),
                             [("C23", 0), ("T1", 1)], QUEUED),
-    "NC_T1_EVICTION_UNJUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID,
-                                       dict(DROP_PREV, seat_cost_per_day="0.01")),
+    "NC_T1_EVICTION_UNJUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID, DROP_PREV),
                                    [("C23", 0), ("T1", 1)], QUEUED),
+    # v27.164 (F2): S04 and T3 hold implied spend = seat cost on a seat taken tonight
+    "NC_S04_NEW_SEAT_COST_OFF": (at("new_rn", seat_cost_per_day="seat_cost_per_day + 0.50"),
+                                 [("S04", 1), ("T3", 1)], ["new_rn"]),
     "NC_C23_RENUMBERED": (at("cont_rn", seat_no="900"), [("C23", 1), ("T2", 1)], ["cont_rn"]),
     "NC_T2_RETURN_RENUMBERED": (at("ret_rn", seat_no="901"), [("T2", 1)], ["ret_rn"]),
     "HC_C17_PLAN_A": (at("a_rn", seat_no="(SELECT reg_no FROM pick)"), [("C17", 0)], ["a_rn", "reg_no"]),

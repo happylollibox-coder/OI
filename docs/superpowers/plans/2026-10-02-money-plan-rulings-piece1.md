@@ -500,7 +500,7 @@ each with its own check and negative control.
 - [x] **F1 PLAN_SCORECARD C08a.** The control only fired while zero guard decisions were gradable; on
   2026-10-03 20 of 136 became gradable and C08a now FAILs. Rebuild it on a moved-clock copy (grade date
   pinned before the first decision's settle date) so it fires whatever today's date is.
-- [ ] **F2 incumbent seat cost.** Under P-16 an incumbent keeps its seat and its planned price, not last
+- [x] **F2 incumbent seat cost.** Under P-16 an incumbent keeps its seat and its planned price, not last
   window's cost. Recompute an incumbent's seat cost tonight as `(w_sp / window_days) × planned_bid /
   current_bid` on tonight's window (probes: `click_goal_day × probe price`), so the direction clause
   ("A RAISE / a cut / no change") and `expected_after_upload` / `share_closed` read tonight's money.

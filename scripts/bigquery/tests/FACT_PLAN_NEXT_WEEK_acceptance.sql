@@ -193,6 +193,39 @@
 -- it raised "partition 2026-10-02 was written under OFF_PEAK; tonight reads BOOST; refusing to
 -- rewrite (P-24 / R11: ...)" and the OFF_PEAK partition stood, 722 rows, built_at unchanged (job
 -- bqjob_r2bb92973bce26f6f_000001a0ffa7a4c2_1, 1,070.2 slot-seconds).
+--
+-- v27.164 (2026-10-03, piece-1 follow-up F2 — P-16). RESTATED: T1 (an incumbent's cost is its kept
+-- price on tonight's window, recounted from the row with click_goal_day read from the judgement; the
+-- eviction test reads the same recount) and T3 (implied spend = seat cost on a seat taken tonight
+-- only). The file now reads the judgement in two places (C13 and T1's click goal).
+-- RUN 2026-10-03, one judgement snapshot OI._tmp_f2_judge (08:48 UTC) under both builder bodies'
+-- dry runs (history = the live table before 10-03 + the dry run's 10-03 partition): on the v27.160
+-- partition the new T1 reads 99 (69 plan B + 30 plan A incumbents costed by their contract), every
+-- other row 0 (job f2_acc_old_1791017575); on the v27.164 partition 37 rows PASS (job
+-- f2_acc_new_1791017575), while this file's v27.160 form reads T1 101 and T3 96 there (job
+-- f2_accH_new_1791017656). After the v27.164 CALL (job f2_call_1791017831, 08:58 UTC), on the live
+-- partition and the deployed view: 37 rows PASS (job f2_acc_live_1791017982, 617.4 slot-seconds,
+-- 140,894,039 bytes; the v27.160 form, job f2_accH_live_1791018032: T1 101, T3 96, 5,414.7
+-- slot-seconds and the same bytes).
+-- NEGATIVE CONTROLS, run 2026-10-03 09:00–09:09 UTC by scripts/bigquery/tests/check_plan_seat_controls.py
+-- --judge-table onyga-482313.OI._tmp_f2_judge on every partition, the latest the 10-03 partition of that
+-- CALL (job bqjob_r78febaf76288764f_000001a100fdebd9_1, 8,715.2 slot-seconds; exit 0, all 32 copies
+-- exercised): LIVE 50 readings 0 (37 here, 11 PLAN_SEAT_REQUEST, HM, HS). The doctored incumbent is
+-- LolliME 123153583900193 (plan B), seated 10-02 at $0.70 for $1.3333 a day; on tonight's window at
+-- $0.70 it costs $1.57 (a probe's 4 x $0.70 would be $2.80):
+--   HC_T1_INCUMBENT (its contract carried on the previous partition, tonight's cost = the recount):
+--     T1 0, C23 0, T3 0, S04 0.  NC_T1_PRICE_MOVED: T1 1.  NC_T1_QUESTION_MOVED: T1 1.
+--   NC_T1_COST_KEPT_FROM_CONTRACT (contract and tonight's row both at the recount + $0.50, v27.160's
+--     rule): T1 1.
+--   HC_T1_PROBE_INCUMBENT (made a probe tonight, costed 4 x its kept price): T1 0.
+--   NC_T1_PROBE_COSTED_BY_WINDOW (made a probe, costed at its price on the window): T1 1.
+--   NC_C23_SEAT_DROPPED (the previous partition seats the queued LolliME probe 207390974307873, dated
+--     tomorrow, priced $0.00; tonight queues it): C23 1, T1 1.  HC_T1_EVICTION_JUSTIFIED (priced
+--     $1,000,000, tonight LEFT_ALLOWANCE_SHRANK and "TENURE ENDS EARLY"): C23 0, T1 0.
+--     NC_T1_SHRANK_SILENT: C23 0, T1 1.  NC_T1_EVICTION_UNJUSTIFIED (priced $0.00): C23 0, T1 1.
+--   NC_S04_NEW_SEAT_COST_OFF (a NEW seat's cost + $0.50, LolliME 174400329814141): S04 1, T3 1.
+--   NC_EMPTY: S04 1 (its new emptiness term) with C23 T1 T2 T3 T4 T5 HS 1. Every other copy read its
+--   expected value (listed above).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -675,29 +708,51 @@ m3 AS (
        + (SELECT IF(COUNT(*) = 0, 1, 0) FROM fam_m)
 ),
 -- ---- v27.159 (2026-10-02, piece-1 plan Task 5): the builder's seats ----
--- T1 (P-16): an incumbent keeps its WHOLE contract — number (C23), price, cost, verdict date, the
--- night it took the seat, the question — or leaves only when the allowance cannot carry it: its cost
--- is above what the allowance leaves after every incumbent that kept its seat (the walk tests
--- incumbents in seat order, so one that left found less room than that). No other row claims
--- tenure; a seat is INCUMBENT or NEW and carries seat_since (as_of on a NEW seat); and each tenure
--- says itself in the sentence. Vacuous on the first v27.159 partition (no contract written before
--- it); the controls exercise it.
+-- T1 (P-16): an incumbent keeps its contract — number (C23), price, verdict date, the night it took
+-- the seat, the question — or leaves only when the allowance cannot carry it: its cost is above what
+-- the allowance leaves after every incumbent that kept its seat (the walk tests incumbents in seat
+-- order, so one that left found less room than that). No other row claims tenure; a seat is
+-- INCUMBENT or NEW and carries seat_since (as_of on a NEW seat); and each tenure says itself in the
+-- sentence. Vacuous on the first v27.159 partition (no contract written before it); the controls
+-- exercise it.
+-- RESTATED v27.164 (piece-1 follow-up F2): THE COST IS NOT PART OF THE CONTRACT. An incumbent's cost
+-- is its kept price (the previous partition's planned_bid) on TONIGHT's window, recounted here from
+-- the row as the builder costs it: a probe tonight click_goal_day x kept price (click_goal_day read
+-- from the judgement, the one place it is declared), any other row w_sp / window_days x kept price /
+-- current bid, and 0 with no spend or no current bid. The eviction test reads the same recount. The
+-- v27.159 form compared the cost with the previous partition's, which is the rule F2 retired: on the
+-- 2026-10-03 partition built 08:12 UTC by v27.160 it held 30 live incumbents that printed "A RAISE"
+-- ($15.24 a day) while their price was held or cut.
+inc_goal AS (SELECT campaign_id, keyword_id, click_goal_day FROM j),
+inc_cost AS (
+  SELECT p.plan, p.campaign_id, p.keyword_id,
+         COALESCE(CASE WHEN p.is_probe
+                         THEN g.click_goal_day * h.planned_bid
+                       WHEN p.w_sp > 0 AND COALESCE(p.current_bid, 0) > 0
+                         THEN (p.w_sp / p.window_days) * SAFE_DIVIDE(h.planned_bid, p.current_bid)
+                       ELSE 0 END, 0) AS cost_tonight
+  FROM prev h
+  JOIN p USING (plan, family, campaign_id, keyword_id)
+  LEFT JOIN inc_goal g ON g.campaign_id = p.campaign_id AND g.keyword_id = p.keyword_id
+  WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
+),
 t1 AS (
-  SELECT 'T1 P-16: an incumbent keeps its whole contract, or leaves only when tonight allowance cannot carry it; tenure is written and said',
+  SELECT 'T1 P-16: an incumbent keeps its contract and costs its kept price tonight, or leaves only when tonight allowance cannot carry it; tenure is written and said',
          (SELECT COUNTIF(p.seat_tenure = 'INCUMBENT'
                          AND (p.seat_no IS NULL
                               OR p.seat_since IS DISTINCT FROM h.seat_since
                               OR p.verdict_date IS DISTINCT FROM h.verdict_date
                               OR ABS(COALESCE(p.planned_bid, -1) - COALESCE(h.planned_bid, -1)) > 0.005
-                              OR ABS(COALESCE(p.seat_cost_per_day, -1) - COALESCE(h.seat_cost_per_day, -1)) > 0.0001
+                              OR ABS(COALESCE(p.seat_cost_per_day, -1) - ROUND(c.cost_tonight, 4)) > 0.0001
                               OR p.clicks_requested IS DISTINCT FROM h.clicks_requested
                               OR p.clicks_due_date IS DISTINCT FROM h.clicks_due_date
                               OR p.expected_cpc IS DISTINCT FROM h.expected_cpc
                               OR p.request_basis IS DISTINCT FROM h.request_basis))
                 + COUNTIF(COALESCE(p.seat_tenure, '') != 'INCUMBENT'
-                          AND NOT (COALESCE(h.seat_cost_per_day, 0) > fa.allow - fa.kept + 0.0001))
+                          AND NOT (c.cost_tonight > fa.allow - fa.kept + 0.0001))
           FROM prev h
           JOIN p USING (plan, family, campaign_id, keyword_id)
+          JOIN inc_cost c USING (plan, campaign_id, keyword_id)
           JOIN (SELECT plan, family, MAX(allowance_ramped_per_day) allow,
                        SUM(IF(seat_tenure = 'INCUMBENT', seat_cost_per_day, 0)) kept
                 FROM p GROUP BY 1, 2) fa USING (plan, family)
@@ -753,14 +808,19 @@ t2 AS (
 -- implied spend = the seat's cost, to the cent; the basis is one of P-26's. A NEW seat asks the
 -- window's click rate over the horizon (ROUND(w_clk x horizon / window_days)), a probe a whole number
 -- of days at its goal, and the basis says which. An incumbent repeats the question it was given (T1).
+-- RESTATED v27.164 (piece-1 follow-up F2): implied spend = seat cost on a seat taken tonight only.
+-- An incumbent's question is the one it was given, so its implied spend is the money of the night it
+-- was asked, while its cost is its kept price on tonight's window (T1 recounts it); the two differ
+-- whenever the window moved.
 t3 AS (
-  SELECT 'T3 P-26: every seat question spans its settle horizon: clicks x expected CPC / horizon = implied spend = seat cost',
+  SELECT 'T3 P-26: every seat question spans its settle horizon: clicks x expected CPC / horizon = implied spend, = seat cost on a seat taken tonight',
          (SELECT COUNTIF(clicks_requested IS NULL OR clicks_requested <= 0 OR expected_cpc IS NULL
                          OR clicks_due_date IS DISTINCT FROM verdict_date
                          OR DATE_DIFF(clicks_due_date, seat_since, DAY) != DATE_DIFF(settle_due_on, window_to, DAY)
                          OR ABS(clicks_requested * expected_cpc / DATE_DIFF(clicks_due_date, seat_since, DAY)
                                 - implied_daily_spend) > 0.01
-                         OR ABS(implied_daily_spend - seat_cost_per_day) > 0.01
+                         OR (COALESCE(seat_tenure, '') != 'INCUMBENT'
+                             AND ABS(implied_daily_spend - seat_cost_per_day) > 0.01)
                          OR request_basis IS NULL
                          OR request_basis NOT IN ('HORIZON_WINDOW_RATE', 'HORIZON_PROBE_GOAL')
                          OR (seat_tenure = 'NEW' AND (request_basis = 'HORIZON_PROBE_GOAL') != COALESCE(is_probe, FALSE))
