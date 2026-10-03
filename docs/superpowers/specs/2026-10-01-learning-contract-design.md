@@ -142,7 +142,7 @@ expected_orders  = DO_NOTHING orders           × r^ε     -- w_ord / settle_fac
 expected_gp      = DO_NOTHING gross profit     × r^ε
 expected_net     = expected_gp − expected_spend
 PAUSE            = all five zero
-campaign budget  = OPEN for Ori, to rule before piece-2 Task 4 (below; §14.1, E8). As first written:
+campaign budget  = RULED 2026-10-03: the recommended form below (§14.1, E8). As first written:
                    where the plan CUTS a campaign's budget, every ACT row of the campaign is scaled by
                    LEAST(1, Σ DO_NOTHING spend × planned / current ÷ Σ ACT spend) over its rows;
                    a raise has no effect in v1 (a stated limitation)
@@ -158,7 +158,7 @@ can only come from a move. The seat's spend stays a separate column, `alloc_spen
 allocation `FN_PLAN_SCORECARD` grades, not a forecast. The catalog's `cvr_hat` and `gp_per_order`
 are not read (§14 D3, D6).
 
-**Open 2026-10-03 — the budget clause (§14.1, E8; Ori rules before piece-2 Task 4).** The clause as
+**Ruled 2026-10-03 — the budget clause (§14.1, E8): the recommended form.** The clause as
 first written is the proportional cut D3 names, and it cuts `ACT` on campaigns whose new budget
 cannot bind: `Σ DO_NOTHING spend × planned / current` can sit below `Σ ACT spend` while the `ACT`
 run rate (`Σ ACT spend ÷ H`, H = the horizon's days) is already at or below the new budget, and the
@@ -177,11 +177,12 @@ the cap falls back to the proportional cut. The algebra: when `Σ DO_NOTHING ÷ 
 `LEAST(1, planned × H ÷ Σ ACT spend)`, the plain cap at the new budget. On the stored nights GREATEST
 takes the cap term on 367 of the 369 cut campaign-nights, and the factor equals the plain cap's on all
 369; on the two that overdeliver, all three forms give the same factor (E8). It is therefore a cap,
-not the proportional cut D3's words name, which is why Ori rules it. The argument
+not the proportional cut D3's words name, which is why it was Ori's to rule. The argument
 against a cap (E5: `DO_NOTHING` already runs above the current budget in some campaigns, and a cap
 would cut those whether or not the plan moved them) applies only to a cap on campaigns the plan does
 not cut. This clause never runs there, and on a cut campaign that overdelivers GREATEST keeps the
-proportional cut. Until Ori rules, the ledger is not built.
+proportional cut. Piece-2 Task 4 built the recommended form (`V_PREDICTION_LEDGER` v27.172), reading
+Ori's "all recommended" as covering this clause; `architecture/LEARNING.md` §3 records it.
 
 *Corrected 2026-10-03 (§14 D3): was the literal form — `expected_cpc = new_bid × bid_to_cpc_ratio`
 with an account fallback of 1.17, clicks capped so spend ≤ campaign budget × horizon, orders from
@@ -439,7 +440,7 @@ numbers, each beside the query that produced it (§14.3), re-run before this sec
 Also recorded 2026-10-03: a seated keyword that later becomes a probe keeps the question it was
 seated with (builder v27.168, confirmed by Ori); Ori made no change on Amazon after 2026-09-27.
 
-**Open — D3's budget clause (raised 2026-10-03 by the Task-1 review; Ori rules before Task 4).** D3
+**D3's budget clause (raised 2026-10-03 by the Task-1 review) — ruled: the recommended form.** D3
 ruled "a campaign budget cut applied proportionally", and §6 first wrote it as `LEAST(1, Σ DO_NOTHING
 spend × planned / current ÷ Σ ACT spend)`. That form also cuts campaigns whose `ACT` run rate is
 already at or below the new budget, where the budget cannot bind (E8). Recommended: `LEAST(1,
@@ -451,7 +452,8 @@ on all 369 (E8). It is a cap, not the proportional cut D3's words name, so the c
 first form (proportional, as D3 reads) or the recommended one (a cap where the plan cuts). E5's
 argument against a cap holds only for a cap on campaigns the plan does not cut, where neither form
 runs. The clause scales every `ACT` number of a cut campaign, so it reaches the brief's "upload the
-plan $Y" line and the report card's `pred_lift`; piece-2 Task 4 does not start until it is ruled.
+plan $Y" line and the report card's `pred_lift`. Piece-2 Task 4 built the recommended form under
+Ori's "all recommended" (`architecture/LEARNING.md` §3, §10 "Task 4").
 
 The brief's corrections that are not a ruling, made in place above: `UNGRADABLE` means an archived
 keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG` are defined (§7);
@@ -567,8 +569,8 @@ them.
 controls in the same query, `FACT_PLAN_NEXT_WEEK` and `SP_BUILD_NEXT_WEEK_PLAN`, read `true`.
 `DE_COACH_THRESHOLDS` holds no `strategy_id = 'LEARNING'` row (Q6b); piece-2 Task 2 seeds them.
 
-**E8 — the budget clause as first written cuts where the new budget cannot bind (D3, §6; open,
-§14.1). Query Q7.** Added 2026-10-03 after the Task-1 review; run at 16:35 UTC and again from this
+**E8 — the budget clause as first written cuts where the new budget cannot bind (D3, §6; ruled
+2026-10-03, §14.1). Query Q7.** Added 2026-10-03 after the Task-1 review; run at 16:35 UTC and again from this
 file's text at 16:40 UTC, identical, on the 10-03 partition as rebuilt at 16:34:13 UTC (the query
 prints it). Plan B, all twelve stored nights, per
 campaign and night, `ACT` spend before the budget clause priced as §6 prices it (window spend × r²

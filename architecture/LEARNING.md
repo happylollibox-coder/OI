@@ -8,9 +8,10 @@ the ledger)
 **Status:** Task 1 (2026-10-03) wrote this SOP before any code. Task 2 (2026-10-03) seeded the
 LEARNING settings (§3; §10 "Task 2"). Task 3 (2026-10-03) deployed the freeze and `builder_version`
 (§1 "The freeze"; §10 "Task 3"), and its follow-up 2 the judgement each night was built on, which C13
-reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Nothing else below is deployed yet: the ledger is Task 4, the
-grader and the report card Task 5, the schedule and the health checks Task 6, the contract suite
-Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
+reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Task 4 (2026-10-03) deployed the ledger,
+`V_PREDICTION_LEDGER` v27.172, with the campaign-budget clause in its recommended form (§3; §10
+"Task 4"). Nothing else below is deployed yet: the grader and the report card are Task 5, the
+schedule and the health checks Task 6, the rest of the contract suite Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
 sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
@@ -46,7 +47,7 @@ night, so `PLAN_A` against `PLAN_B` is a paired comparison (the query that check
 | `predictor`, `variant` | `'PLAN_' ‖ plan`, `plan` |
 | `as_of`, `built_at`, `builder_version` | as the builder stored them (`builder_version` from Task 3 on; NULL before) |
 | `horizon_from` | `GREATEST(as_of, DATE(built_at, 'America/Los_Angeles') + 1)` — the first full Los Angeles day after the night was final (D2) |
-| `horizon_to` | `horizon_from + window_days − 1` |
+| `horizon_to` | `horizon_from + window_days − 1` (`window_days` is carried too) |
 | `family`, `campaign_id`, `keyword_id`, `channel`, `calendar_state`, `is_live_plan`, `holdout`, `family_bar` | as stored |
 | `min_orders` | the `DE_PLAN_CONFIG` row for the night's `calendar_state` in force at `built_at`, read from the config history |
 | `current_bid`, `planned_bid`, `campaign_current_budget`, `campaign_planned_budget` | as stored |
@@ -54,10 +55,11 @@ night, so `PLAN_A` against `PLAN_B` is a paired comparison (the query that check
 | `alloc_spend` | `planned_spend_per_day × window_days` — the seat's spend, the plan's ALLOCATION (what `FN_PLAN_SCORECARD` grades). Not a forecast |
 | `act_is_noop` | TRUE when the move has no bid component, no state component and no budget component (§4 step 4 defines the three) |
 | `pred_side` | `IF(side = 'GOOD', 1, 0)`, the same on both scenarios |
-| `basis_clicks`, `basis_spend` | `w_clk`, `w_sp`: the window the prediction stood on |
+| `basis_clicks`, `basis_spend` | `w_clk`, `w_sp`: the window the prediction stood on; `settle_factor_eff` beside them |
 | `pred_clicks`, `pred_spend`, `pred_orders`, `pred_gp`, `pred_net` | the five predicted numbers over the horizon (§2, §3) |
-| `rule_version` | the `history_id` of the `DE_PLAN_CONFIG` row for the row's `calendar_state` in force at `built_at`, `‖ ':' ‖ builder_version` (`'pre-v27.170'` where the row has none) |
-| `response_model_version` | `'RUN_RATE'` on `DO_NOTHING`; `'RM1:'` + the history ids of the LEARNING settings in force on `ACT` |
+| `rule_version` | the `history_id` of the `DE_PLAN_CONFIG` row for the row's `calendar_state` in force at `built_at`, `‖ ':' ‖ builder_version` (`'pre-v27.170'` where the row has none). In force: each config row's latest history event at `built_at` is active and not `REMOVED`, and of those rows for the state the latest; an event counts from its `snapshot_at`, a `SEEDED` one from its `source_updated_at` (the history began 2026-10-02; the seed rows took force on their `updated_at`, 2026-08-23) |
+| `response_model_version` | `'RUN_RATE'` on `DO_NOTHING`; on `ACT`, `'RM1:'` + the history ids, comma-separated in key order, of the four settings that price it (`BID_TO_CPC_RATIO_FALLBACK`, `CLICK_BID_ELASTICITY`, `CPC_BID_EXPONENT`, `OWN_CVR_MIN_CLICKS`), as §3 picks them |
+| `act_bid_ratio`, `act_budget_factor`, `act_basis` | `ACT` rows only (NULL on `DO_NOTHING`): r, the campaign-budget factor (§3), and how the row was priced — `ANCHORED`, `PAUSE`, `ZERO_BASIS`, `SEAT_PROBE_OWN`, `SEAT_PROBE_POOLED` |
 
 **Why the horizon starts the day after the write (D2).** A forecast must exist before any day it
 forecasts. Every night stored before piece 2 was written after Los Angeles midnight of its own
@@ -135,9 +137,12 @@ deployed by Task 3).**
   `--build-judge-table` to read a copy of the record a simulated pass wrote.
 
 **Why a ledger row never changes after its night is final.** The view reads only stored columns of
-a night that is no longer rewritten, the settings history (append-only, `FACT_THRESHOLD_HISTORY`)
-and the keyword-state history (append-only, `FACT_KEYWORD_STATE_HISTORY`, the snapshot latest at
-`built_at`). It reads no catalog table (D3, D6) and no `FACT_AMAZON_ADS`. The DO_NOTHING orders and
+a night that is no longer rewritten, the settings history (append-only, `FACT_THRESHOLD_HISTORY`:
+a new event is stamped with the pass that saw it, after every night already final, so it never
+reaches one — §3) and the keyword-state history (`FACT_KEYWORD_STATE_HISTORY`, the latest
+`snapshot_date` *before* the Los Angeles date of `built_at` — §3: a `snapshot_date` is re-captured,
+and its earlier copy pruned, by every pass on that Los Angeles date, so only an earlier date is
+final when the night is written). It reads no catalog table (D3, D6) and no `FACT_AMAZON_ADS`. The DO_NOTHING orders and
 gross profit are settle-corrected by the factor the builder stored with the night
 (`settle_factor_eff`, `w_gp_corrected`), not by re-reading `V_PLAN_SETTLE_COMPLETION`. The grader
 still copies the five predicted numbers and `built_at` into each grade row, and the contract suite
@@ -170,8 +175,8 @@ short of final.
 
 **`ACT` — upload the plan's move.** The same keyword at the price and budget the plan asks for:
 clicks, orders and gross profit move with the bid change, spend moves further than clicks (more or
-fewer clicks, each at a higher or lower price), a campaign whose budget the plan cuts is trimmed
-(how, exactly, is open for Ori: §3), and a paused keyword does nothing. Where the plan moves
+fewer clicks, each at a higher or lower price), a campaign whose budget the plan cuts is capped at
+its new budget (§3), and a paused keyword does nothing. Where the plan moves
 nothing, `ACT` is `DO_NOTHING` to the cent — the response model is anchored on it, so a predicted
 lift can only come from a move (§3).
 
@@ -193,8 +198,11 @@ pred_net    = pred_gp − pred_spend
 PAUSE       → all five 0
 ```
 
-**The campaign budget — open for Ori, to rule before Task 4** (spec §6, §14.1, §14 E8). A budget
-is set per campaign, so it acts on the sum of the campaign's keywords: where
+**The campaign budget — ruled 2026-10-03: the recommended form** (spec §6, §14.1, §14 E8). The
+clause was raised by the Task-1 review after D1–D6 and held open for Ori; the request that runs
+piece 2 is Ori's "all recommended", and Task 4 read it as covering this clause too and built the
+recommended form (the first form is a one-line change in the view's `camp` CTE if Ori rules
+otherwise). A budget is set per campaign, so it acts on the sum of the campaign's keywords: where
 `campaign_planned_budget < campaign_current_budget`, every `ACT` row of the campaign is multiplied by
 one factor over the campaign's rows of that night and plan (net follows as gross profit − spend). A
 raise has no effect in v1. H is the horizon's days (`window_days`). Two forms of the factor:
@@ -216,12 +224,25 @@ current), the cap falls back to the proportional cut. The algebra: when Σ DO_NO
 `LEAST(1, planned × H ÷ Σ ACT spend)`, the plain cap at the new budget. On the stored nights GREATEST
 takes the cap term on 367 of the 369 cut campaign-nights and the factor equals the plain cap's on all
 369 (spec §14 E8, Q7's `alt_takes_cap_term` and `alt_eq_cap`). It is not the proportional cut D3's
-words name, which is why Ori rules it.
+words name, which is why it was Ori's to rule.
 
 The argument against a cap (spec §14 E5: `DO_NOTHING` already runs above the current budget in some
 campaigns, and a cap would cut those whether or not the plan moved them) applies only to a cap on
 campaigns the plan does not cut. Neither form runs there, and on a cut campaign that overdelivers
-the recommended form keeps the proportional cut. Task 4 builds the form Ori rules and records it here.
+the recommended form keeps the proportional cut.
+
+**As built** (`V_PREDICTION_LEDGER`, CTE `camp`): per (`as_of`, `plan`, `campaign_id`), where
+`MAX(campaign_planned_budget) < MAX(campaign_current_budget)`,
+
+```
+factor = COALESCE(LEAST(1, SAFE_DIVIDE(GREATEST(planned × H, SAFE_DIVIDE(Σ w_sp × planned, current)),
+                                      Σ ACT spend before the clause)), 1)
+```
+
+and 1 on every other campaign; the factor multiplies all four of an `ACT` row's clicks, spend,
+orders and gross profit (net = gross profit − spend), the seat-priced probes included. It is 1 where
+the campaign's `ACT` spend is 0 (nothing to cut). §10 "Task 4" records what it removes on the
+stored nights, against spec §14 E8.
 
 **A keyword with no window clicks** (`w_clk = 0`) has `DO_NOTHING` all zero, and `ACT` all zero —
 except `OPEN_PROBE`, which the plan seats to buy clicks it has never had. It is priced from the seat:
@@ -237,7 +258,21 @@ pred_gp     = pred_orders × GP per order
                       otherwise the family × channel pooled settled rate
 ```
 
-(How the pooled rate is pooled — which snapshot, which keywords — is Task 4's to fix and record here.)
+**Which snapshot, and the pool (fixed by Task 4).** One snapshot per night: the latest
+`snapshot_date` of `FACT_KEYWORD_STATE_HISTORY` *before* the Los Angeles date of `built_at`, among
+copies captured at or before `built_at`. Not the latest copy captured before `built_at`, which the
+brief named: a `snapshot_date` is the Los Angeles date of the pass that captures it, every later
+pass on that date re-captures it and prunes the earlier copy, so a night written at 16:34 UTC on
+2026-10-03 would read the 10-03 copy until the 05:00 UTC pass of 10-04 replaced it, and then fall
+back to 10-02 — a stored night's prediction changing after the fact (§10 "Task 4" measures the
+two copies on that night). An earlier date is final when the night is written. The cost is up to a day of freshness
+in a 90-day settled rate. The **own** rate is the keyword's row in that snapshot when its
+`settled_clk90 ≥ OWN_CVR_MIN_CLICKS`; the **pool** is Σ `settled_ord90` ÷ Σ `settled_clk90` (CVR) and
+Σ `settled_gp90` ÷ Σ `settled_ord90` (GP per order) over the night's plan keywords of the same
+family and channel in that snapshot (the plan's own universe, not every keyword the catalog holds).
+Gross profit is 0 where the CVR is 0. A night with no such snapshot (the 08-23 night: the history's
+first copy was captured after it was written) has no own or pooled rate, and a zero-click
+`OPEN_PROBE` on it would read NULL (acceptance L1); §10 "Task 4" lists the stored zero-click probes.
 
 **The settings.** All in `DE_COACH_THRESHOLDS` under `strategy_id = 'LEARNING'`, `coach_mode =
 'GUARDIAN'`, `product_family = NULL`, seeded by `scripts/bigquery/migrations/2026-10-03_learning_settings.sql`
@@ -254,17 +289,24 @@ constants (Ori's rulings of 2026-10-03); where one came from a measurement, the 
 | `OWN_CVR_MIN_CLICKS` | — | 30 | ledger | settled clicks a probe needs before its own rate is used |
 | `SETTLE_HORIZON_DAYS` | — | 14 | grader, health | settled days after `horizon_to` before a row is graded |
 | `MATCH_WINDOW_DAYS` | — | 3 | grader | days after `as_of` in which a change can count as the plan's |
-| `MATCH_BID_TOL` | — | 0.005 | grader | a bid matches the plan within this |
-| `MATCH_BUDGET_TOL` | — | 0.01 | grader | a budget matches the plan within this |
+| `MATCH_BID_TOL` | — | 0.005 | ledger, grader | a bid matches the plan within this; a plan row has a bid component when its bid moves by at least this (`act_is_noop`) |
+| `MATCH_BUDGET_TOL` | — | 0.01 | ledger, grader | a budget matches the plan within this; a budget component when the campaign budget moves by at least this (`act_is_noop`) |
 | `MIN_INVEST_SIDE_ACCURACY` | — | 0.80 | grader | the side accuracy a click bucket must clear to set the line (D4) |
 | `MIN_INVEST_MIN_ROWS` | — | 20 | grader | rows a bucket needs behind it before it can set the line (D4) |
 | `MIN_GRADED_WINDOWS` | — | 3 | health | windows per side of the regression comparison |
 | `REGRESSION_MAX` | — | 0.10 | health | how much worse is RED |
 
 Which value priced a row is on the row: `response_model_version` names the history ids in force.
-**Open for Task 4:** all twelve nights stored on 2026-10-03 were built before the LEARNING settings
-existed, so none has a setting "in force at `built_at`". The ledger must still price them, from a
-value that can never change afterwards; Task 4 decides how and records it here.
+**How the ledger reads them (Task 4).** From `FACT_THRESHOLD_HISTORY` (the LEARNING scope), never
+from `DE_COACH_THRESHOLDS` directly, which holds only today's value: per night and key, the latest
+event with `snapshot_at ≤ built_at`. All twelve nights stored on 2026-10-03 were built before the
+settings existed (first recorded 2026-10-03 17:05:15 UTC), so none has a value in force; **a night
+built before a key's first event takes that first event** — the seed. The history is append-only and
+each new event is stamped with the pass that saw it, so a later event is never in force at a stored
+night's `built_at`, and a key's first event never changes: the value that priced a night never
+changes (proved on copies in §10 "Task 4"). The limit: a
+setting changed by hand and a builder CALLed by hand before the next pass's snapshot is recorded
+under the previous value (the orchestrator snapshots at Refresh Task 10.1, before the plan step).
 
 **What the plan row supplies.** `w_clk`, `w_sp`, `w_ord`, `w_gp_corrected`, `settle_factor_eff`,
 `window_days`, `move`, `current_bid`, `planned_bid`, `bid_park`, `bid_floor`, `seat_cost_per_day`,
@@ -428,7 +470,8 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    judgement), then `FACT_PLAN_NEXT_WEEK_acceptance.sql` (C13 reads "not on record" and F1 and F2
    their emptiness terms until the first night written after the deploy) and
    `check_plan_clock_controls.py` on a simulated pass.
-3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`.
+3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`, then
+   `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql` (L1–L4; `--nosync`, polled).
 4. **The grader** (Task 5): `tables/FACT_PREDICTION_GRADE.sql`, `tables/T_PREDICTION_SCORECARD.sql`,
    then `procedures/SP_GRADE_PREDICTIONS.sql`, then its first CALL (the August nights grade).
 5. **The schedule and the board** (Task 6): the orchestrator's new step — after diffing the deployed
@@ -462,8 +505,13 @@ and confirms the column names in §5.
 - **`ACT` is graded only where someone acted.** Until a plan is uploaded (piece 3) no `ACT` scenario
   applies; every non-no-op `ACT` row is an `ACT_NO_MATCHING_ACTION` honesty count, lift is ungraded,
   and `lift_control` is the DO_NOTHING prediction.
-- **A budget raise has no effect in RM1**, and how a budget cut acts is open for Ori (§3); the
+- **A budget raise has no effect in RM1**, and a cut caps `ACT` spend at the new budget (§3); the
   response model is a first guess, written down so it can be wrong in a measurable way.
+- **A probe opened at its own current price.** A zero-click `OPEN_PROBE` is priced from its seat
+  even when its planned bid equals its current bid. In a campaign whose budget also stays put that
+  row is `act_is_noop` and its `ACT` differs from `DO_NOTHING`, so acceptance L2 would fire on it —
+  the anchoring rule and the seat rule disagree there, and the check says so rather than hiding it.
+  §10 "Task 4" says whether a stored night holds one.
 - **The grading clock is one date for the whole ads table** (§4 step 1). It waits for
   `FACT_AMAZON_ADS`'s newest day, not for every day or every channel: a day missing below the newest,
   or one channel stalled while the other loads, grades as zero clicks.
@@ -840,4 +888,89 @@ SELECT as_of, built_at, builder_version, COUNT(*) AS saved_rows,
        MIN(window_from) AS window_from, MAX(window_to) AS window_to
 FROM `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`
 GROUP BY 1, 2, 3 ORDER BY as_of DESC;
+```
+
+### Task 4 — the ledger, `V_PREDICTION_LEDGER` v27.172 (2026-10-03)
+
+**Deployed.** `scripts/bigquery/views/V_PREDICTION_LEDGER.sql` at 19:49:05 UTC (job
+`t4_deploy_view_1791056943`), comment lines stripped: 39 columns. It reads `FACT_PLAN_NEXT_WEEK`,
+`FACT_THRESHOLD_HISTORY` and `FACT_KEYWORD_STATE_HISTORY` only. `config.yaml`: `V_PREDICTION_LEDGER`
+(views), and the `DE_COACH_THRESHOLDS` entry now says the ledger reads `MATCH_BID_TOL` and
+`MATCH_BUDGET_TOL` (for `act_is_noop`). The campaign-budget clause is the recommended form (§3), on
+Ori's "all recommended".
+
+**What it reads now.** 17,588 rows: the twelve stored nights' 8,794 plan rows, each twice. Per
+night one `rule_version` — PEAK `962467a7…` on 08-23 … 08-28, OFF_PEAK `e8feebb8…` on 09-28 and
+09-29, BOOST `005e56fd…` on 09-30 … 10-03, all `:pre-v27.170` (no night has been written by
+v27.170 or later yet) — `min_orders` 2 on every row, and one `response_model_version` on every `ACT`
+row, the four seed events (`RM1:a97e300d…,3da72b3b…,a1eed604…,eb5b095b…`), because every night was
+built before them (job `t4_ver_1791057085`). Six zero-click `OPEN_PROBE` plan rows — one keyword in both plans on 10-02, the same
+keyword in plan A on 10-03, and three in plan B on 10-03 — all priced from the pool (`SEAT_PROBE_POOLED`; none of them
+has 30 settled clicks of its own); the 10-03 plan-B probes' seat spend sums to $15.84, the brief's
+figure. One of them (388620934464557) opens at its own current price, $0.25 → $0.25 — §9's case —
+but in a campaign the plan cuts ($75.00 → $72.28), so it has a budget component, is not
+`act_is_noop`, and its seat costs $0; no stored night holds an `act_is_noop` probe (L2 reads 0).
+
+**Cost.** `SELECT *` over the view: 4,349,693 bytes processed (31,457,280 billed, the minimum),
+106.5 slot-seconds, 3.2 s (job `t4_cost_1791056953`). Most of it is the per-stage overhead of a
+plan with ~70 stages over small inputs, not data.
+
+**Reproductions** (each a run of the deployed view or of its own body):
+
+- *The worked examples.* The view's body run on the 10-03 night as written at 13:04:57 UTC (BigQuery
+  time travel to 13:10 UTC, `builder_version` supplied as NULL since the column did not exist yet;
+  job `t4_tt_ex_1791057063`, 172.7 slot-seconds) gives the brief's numbers exactly: 305171316086021
+  `DO_NOTHING` 84 clicks / $75.71 / 4.4554 orders / $56.8067 GP / −$18.9033 net, `ACT` 79.52 /
+  $67.8496 / 4.2178 / $53.777 / −$14.0726, seat $72.0843; 439648864838275 `ACT` 19.565 clicks /
+  $4.6295, seat $0. The night stored now is the 16:34:13 UTC rewrite, whose `w_gp_corrected` is
+  55.1582 for the first keyword (`FACT_AMAZON_ADS` restated `GROSS_PROFIT` at 16:08 UTC in
+  between, spec §14.2 E6), so the live view reads `DO_NOTHING` $55.16 / −$20.55 and `ACT` $52.22 /
+  −$15.63 there, seat $71.40, with clicks, spend and orders unchanged. Acceptance L3 holds the live
+  values; the two nights are frozen.
+- *Spec §14 E3*, 09-28 plan B, `ACT` spend by move (job `t4_e3_1791057079`): NONE 3,132.01,
+  NONE_HOLDOUT 1,634.38, HOLD_AT_PRICE 0.74, HOLD_AT_PARK 28.25, PARK 42.34, REPRICE 1,470.95 —
+  equal to E3's anchored column on every move (no budget factor binds on that night); PAUSE 0
+  against $1.86 of window spend.
+- *Spec §14 E8, the budget clause* (job `t4_meas_1791057281`): plan B 369 cut campaign-nights, the
+  factor binds on 3 and removes $6.17 of horizon spend — E8's recommended-form figures; plan A 369
+  cut, 0 bind.
+
+**Checked.** `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql` (new; Task 7 completes it),
+run 19:49:47 UTC as written (`--nosync`, polled; job `t4_acc_1791056985`, 235.9 slot-seconds,
+108,751,862 bytes, 22 s): 22 rows, every one PASS. LIVE L1a, L1b, L1c, L1d, L2, L3, L4 0. L2's
+population is 1,142 `ACT` rows (`act_is_noop`, campaign budget not cut), 96 of them with window
+clicks (job `t4_meas_1791057281`). Controls, each FIRED: NC_EMPTY L1a 8,794, L1b 1, L1c 1, L1d 1, L2 1,
+L3 16, L4 1; NC_L1_ONE_SCENARIO L1a 1; NC_L1_NULL_NUMBER L1b 1; NC_L1_NEG_BASIS L1c 1; NC_L1_NO_RULE L1d
+1; NC_L2_R_09 (the plan's control: one no-op row with window clicks priced at r = 0.9) L2 1;
+NC_L3_SPEND_R1 (example 1's `ACT` spend at r¹) L3 1; NC_L3_SEAT (example 2's `ACT` spend at the seat's
+$0) L3 1; NC_L4_DRIFT (the second read: one `pred_net` + 0.01 and one row missing) L4 2.
+
+**Proved on copies: a stored night never moves** (job `t4_immut_1791057132`, 221.1 slot-seconds;
+TEMP copies only). The view's body over three TEMP tables: the plan table plus a future night (the
+10-03 night re-keyed 10-05, `built_at` 2026-10-05 05:36 UTC); the threshold history plus a
+`CHANGED` event moving `CLICK_BID_ELASTICITY` to 1.1 at 2026-10-04 05:10 UTC; the keyword-state
+history with the 10-03 snapshot re-captured at 2026-10-04 05:30 UTC (what the 05:00 UTC pass of 10-04
+does). Against the deployed view: 0 of the 17,588 stored rows differ in any predicted number,
+`response_model_version`, `rule_version` or `act_basis`; the future night's 330 anchored `ACT` rows
+are priced at ε = 1.1 (0 not), under a version no stored row carries. Negative control, the same
+event dated 2026-10-03 16:00 UTC (before the 10-03 night's write, and before the first recorded
+event, so the earliest event of the key and the one every stored night takes): 8,794 stored rows
+differ. A pass cannot stamp an event earlier than one already recorded, so the control's case cannot
+arise from the snapshot; it shows the comparison sees a repricing.
+
+**The snapshot rule, measured** (job `t4_snapcmp_1791057175`): the 10-03 night's Fresh plan keywords
+pooled from the 10-02 copy (captured 2026-10-03 05:34:01 UTC) and from the 10-03 copy (16:31:47 UTC):
+CVR equal (SB 0.023764, SP 0.03613), GP per order SB 18.9507 / 18.9106 and SP 19.7348 / 19.6967. Under
+the brief's "latest copy captured by `built_at`" the night would read the 10-03 copy until the 05:00
+UTC pass of 10-04 re-captured it, then the 10-02 copy; under the rule built it reads 10-02 throughout.
+
+```sql
+-- the ledger by night and scenario
+SELECT as_of, scenario, COUNT(*) AS n, ANY_VALUE(rule_version) AS rule_version,
+       COUNT(DISTINCT response_model_version) AS n_rm, ROUND(SUM(pred_spend), 2) AS pred_spend,
+       ROUND(SUM(pred_net), 2) AS pred_net, ROUND(SUM(alloc_spend), 2) AS alloc_spend,
+       COUNTIF(act_budget_factor < 1) AS budget_binds, MIN(horizon_from) AS horizon_from,
+       MAX(horizon_to) AS horizon_to
+FROM `onyga-482313.OI.V_PREDICTION_LEDGER`
+GROUP BY as_of, scenario ORDER BY as_of, scenario;
 ```
