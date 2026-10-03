@@ -400,6 +400,22 @@ Published columns (v27.104, beside the v27.103 set): `ad_group_id`, `creative_ty
 `probation_bid`, `nf_collapse_forecast_date`, `prior_state`. `state_reason` is one plain sentence per
 state on the numbers the verdict used (guard-cleaned where the guard fired).
 
+**`is_brand_defense` is read from the campaign (v27.161, 2026-10-02, money-plan piece-1 Task 7, audit
+fix #18).** TRUE when "BRAND DEFENSE" is in the campaign's name (`FACT_PANEL_OWNERSHIP`'s or
+`V_DIM_CAMPAIGN_CURRENT`'s), OR the campaign sits in a `DIM_EXPERIMENT` whose `strategy_id` is
+`BRAND_DEFENSE` (through `DIM_EXPERIMENT_CAMPAIGN`; `DIM_EXPERIMENT` has no `campaign_id`), OR
+`V_BID_CPC_TRANSFER` flags it. Until v27.161 it was that view's flag alone, and the view keeps only
+campaigns with clicks in its placement window, so a dormant defense campaign read "not defense":
+BOTTLE-VIDEO/PHRASE (Brand Defense) 92805659761140, five keywords, entered the money plan's universe
+(`V_PLAN_WINDOW_JUDGMENT` filters on this flag). No state reads the flag; it is published for the
+plan's universe, the seat register and the book. `PRODUCT_DEFENSE` campaigns are not brand defense
+(extending the flag to them is a ruling). The name is read from the dimension as well because
+`FACT_PANEL_OWNERSHIP` names no campaign on 352 of the 818 rows of the 2026-10-02 snapshot:
+
+```sql
+SELECT COUNT(*) AS n, COUNTIF(campaign_name IS NULL) AS no_name FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+```
+
 #### v27.104 transition matrix (live v27.103 state → floor-corrected state, 855 tracked keys)
 
 | v27.103 \ v27.104 | AT_BAR | FLOOR_PROBATION | REPRICE | WINNER | (unchanged) |

@@ -1929,6 +1929,102 @@ Nothing new reads `FACT_AMAZON_ADS`; the judge's one scan is unchanged in bytes.
 (both dates 10-02; job `bqjob_r50cef6748812af44_000001a0ffbb3ea6_1`, 7,661.3 slot-seconds): exit 0,
 LIVE 30 checks 0, all 34 copies as expected — the restated night clocks keep their controls.
 
+### Brand defense is read from the campaign (v27.161, piece-1 Task 7 — audit fix #18)
+
+§8 keeps brand defense out of the plan: it is never judged on profit. The judgement view enforces
+that with the ladder's flag (`V_PLAN_WINDOW_JUDGMENT`'s `ks` CTE: `NOT COALESCE(s.is_brand_defense,
+FALSE)`), and until v27.161 `SP_SNAPSHOT_KEYWORD_STATE` took that flag from `V_BID_CPC_TRANSFER`
+alone — a view that keeps only campaigns with clicks in its placement window. BOTTLE-VIDEO/PHRASE
+(Brand Defense) `92805659761140` had none, so its five keywords (the house's own "happy lolli truth
+or dare" terms) read "not defense" and sat in the universe: 5 rows a night in each plan, 2026-09-28 …
+10-02, side NOT_GOOD on plan B, verdict NOT_SERVING, no candidate, move NONE, cap basis
+`NO_MOVE_BRAND_DEFENSE` (the builder's name gate; item 5 of "What Ori rules from this pass" below).
+The audit (2026-10-02) read that its first served window would have made it a candidate: the keyword
+path has no defense test, and the move CASE then yields PARK, HOLD_AT_PARK, REPRICE or HOLD_AT_PRICE.
+
+**The rule (v27.161).** `is_brand_defense` = "BRAND DEFENSE" in the campaign's name (the name
+`FACT_PANEL_OWNERSHIP` gives it, or `V_DIM_CAMPAIGN_CURRENT`'s) **or** the campaign sits in a
+`DIM_EXPERIMENT` whose `strategy_id` is `BRAND_DEFENSE` (through `DIM_EXPERIMENT_CAMPAIGN`) **or**
+`V_BID_CPC_TRANSFER`'s flag, last. `PRODUCT_DEFENSE` is not brand defense — extending the exclusion to
+it is a ruling (§8 says brand defense; 3 PT product-defense campaigns sit in the 10-02 ladder
+snapshot, one row each, family NULL, so none reaches the plan).
+SOP of the ladder: `architecture/KEYWORD_STATE.md`.
+
+**C02 restated** (`V_PLAN_WINDOW_JUDGMENT_acceptance.sql`). It read the flag — the column the
+universe filter reads — so it passed by construction. It now counts universe rows whose campaign is
+brand defense by name (the row's own name, or the dimension's) or by experiment strategy, each read
+from its own source, plus two emptiness terms: no judgement row, or no defense keyword in the latest
+ladder snapshot (HARVEST family the judgement covers, ENABLED campaign, not LAUNCH_CONTAINED) for the
+exclusion to act on.
+
+### Deploy and verify v27.161 (2026-10-02, piece-1 Task 7)
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_SNAPSHOT_KEYWORD_STATE.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_SNAPSHOT_KEYWORD_STATE\`()"       # ~20 s; the orchestrator's 20.8 runs it nightly
+# the judge's checks and their negative controls: one script job, submitted and collected
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --submit
+python3 scripts/bigquery/tests/check_judge_memory_controls.py --collect <the JOB it printed>
+```
+
+```sql
+-- the flag against the campaign, on the live snapshot: every defense campaign's keyword flagged
+WITH d AS (
+  SELECT CAST(campaign_id AS STRING) AS cid FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
+  WHERE REGEXP_CONTAINS(UPPER(campaign_name), r'BRAND DEFENSE')
+  UNION DISTINCT
+  SELECT CAST(ec.campaign_id AS STRING) FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
+  JOIN `onyga-482313.OI.DIM_EXPERIMENT` e USING (experiment_id) WHERE e.strategy_id = 'BRAND_DEFENSE')
+SELECT COUNTIF(campaign_id IN (SELECT cid FROM d)) AS defense_rows,
+       COUNTIF(campaign_id IN (SELECT cid FROM d) AND is_brand_defense) AS flagged,
+       COUNTIF(campaign_id NOT IN (SELECT cid FROM d) AND is_brand_defense) AS flagged_elsewhere
+FROM `onyga-482313.OI.FACT_KEYWORD_STATE`;
+```
+
+Measured at deploy (2026-10-02 Los Angeles, 04:05–04:40 UTC 10-03):
+
+- **Before deploy, on the same inputs.** The v27.105 body and the v27.161 body, each run as a query
+  into a scratch table with the 16:55 UTC snapshot as the prior row (`OI._tmp_t7_ks_old` /
+  `_tmp_t7_ks_new`, prior = `OI._tmp_t7_ks_before`; all expire 2026-10-10): 818 rows each, every
+  column equal except `is_brand_defense` on the five keywords of `92805659761140` (FALSE → TRUE).
+  The query above: 28 defense rows, 23 flagged before, 28 after, 0 flagged elsewhere. Three paired
+  runs, slot-seconds new / old: 2,140.3 / 162.7, 245.3 / 155.1, 264.6 / 202.8; bytes 130,905,146 /
+  130,856,111 (the two experiment tables and `DIM_CAMPAIGN`; no new read of `FACT_AMAZON_ADS`).
+- **The restated C02 on the deployed v27.160 judge over the v27.105 snapshot** (C02's CTEs with `j` =
+  the view, job `bqjob_r14efa745090b29e6_000001a0fff6862f_1`, 913.9 slot-seconds): **5** — the five
+  rows of `92805659761140`, out of 361; the population term read 28.
+- **Deployed** 04:13:01 UTC (`INFORMATION_SCHEMA.ROUTINES.last_altered`; the deployed body equals
+  the file with comment lines stripped). **One CALL** (job
+  `bqjob_r51a275a2a3c5e62c_000001a0fff76ba5_1`, 216.0 slot-seconds, 151,910,622 bytes, ~21 s)
+  rewrote the 10-02 snapshot: against the 16:55 UTC snapshot `is_brand_defense` changed on exactly
+  those five rows (FALSE → TRUE), no `state` changed; `m_effective` (115 rows), `affordable_bid` /
+  `clean_affordable_bid` (92) and `prior_state` (1) moved with the data — the v27.105 body reproduces
+  all three on the same inputs.
+- **After:** the same C02 query on the deployed judge (job
+  `bqjob_r459e37318be25532_000001a1000027cc_1`, 968.6 slot-seconds): **0**; the universe 361 → 356
+  rows, none of `92805659761140`; population 28. The plan table keeps those five rows until the next
+  builder pass writes a partition without them; nothing else in the plan moves (they had no spend, no
+  candidacy and no move). Both C02 queries read the population term through `V_BOOK_ASSIGNMENT`;
+  the file now reads it over the judgement's own HARVEST families (below).
+- **The negative controls** (`check_judge_memory_controls.py`, now one script job: every copy
+  INSERTs into a temp table and the last statement reads it, so `--submit` / `--collect` poll it with
+  `bq wait` like `check_plan_clock_controls.py`; two more sources are swapped per copy,
+  `DIM_EXPERIMENT_CAMPAIGN` and `FACT_KEYWORD_STATE`). Job
+  `bqjob_rfd55d4d6239c64c_000001a1000386e3_1`, 13,281.6 slot-seconds: exit 0, LIVE 30 checks 0, all
+  37 doctored copies as expected — the 32 earlier ones unchanged, and a universe row's name given
+  " (Brand Defense)" 1, " (Product Defense)" 0, its campaign (`104973644967484`) put in a
+  `BRAND_DEFENSE` experiment 9 (its 9 universe rows — the first run expected 1 and read 9), in a
+  `PRODUCT_DEFENSE` one 0, an empty ladder snapshot 1, an empty judgement 2. Per-copy values are in
+  the acceptance file's header.
+- **What the restated C02 costs.** Its first form read `V_BOOK_ASSIGNMENT` for the HARVEST families,
+  77,330,550 bytes a read (bq dry run), once per copy: the first two control runs cost 19,084.8 and
+  22,462.4 slot-seconds (104.3 MB a copy) against 7,661.3 for the v27.160 run (65.5 MB a copy).
+  Reading the families from the judgement's own `book` column brought it to 64.9 MB a copy and
+  13,281.6 slot-seconds. Run the file through the script, never directly (§2's deploy notes).
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
@@ -2065,7 +2161,10 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT` GROUP BY 1 ORDER BY 2 DESC;
    "BRAND DEFENSE" in the campaign name) and refuses to move its cap. *To overrule / to finish:*
    fix the FLAG in the ladder snapshot so the judgement view excludes those keywords from the
    universe entirely — a Task 1 / ladder file, recorded here rather than patched from the builder,
-   because widening candidacy inside the builder would break `C13`.
+   because widening candidacy inside the builder would break `C13`. **Finished 2026-10-02 (v27.161,
+   piece-1 Task 7, audit fix #18):** the ladder now reads the flag from the campaign (its name, or
+   its experiment's `BRAND_DEFENSE` strategy, with `V_BID_CPC_TRANSFER`'s flag last), and the five
+   keywords left the universe — see "Brand defense is read from the campaign" below.
 6. **The book and the plan read one grace memory from v27.137 to v27.155, and not since v27.156.**
    `tools/build_reprice_bulksheet.py --rule-b` reads `FACT_PLAN_NEXT_WEEK` for P-5's limit with the
    v27.135 expression (the most recent GRACE later than the most recent GOOD); the judge now reads

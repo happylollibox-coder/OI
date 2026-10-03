@@ -16,6 +16,22 @@
 -- deployed v27.160 view and the live history (both dates 10-02, after the first v27.160 CALL): exit
 -- 0, LIVE 30 checks 0, all 34 copies as expected (job bqjob_r50cef6748812af44_000001a0ffbb3ea6_1,
 -- 7,661.3 slot-seconds).
+-- v27.161 (2026-10-02, piece-1 plan Task 7, audit fix #18): C02 RESTATED to test the brand-defense
+-- DERIVATION (campaign name or experiment strategy) instead of the is_brand_defense column it used
+-- to read (see C02 below). On the deployed v27.160 view over the v27.105 ladder snapshot, C02's CTEs
+-- run with j = the view read 5 (the five keywords of 92805659761140, of 361 rows; job
+-- bqjob_r14efa745090b29e6_000001a0fff6862f_1); after SP_SNAPSHOT_KEYWORD_STATE v27.161 was deployed
+-- and called once, 0 of 356 (job bqjob_r459e37318be25532_000001a1000027cc_1). Both runs read the
+-- population term through V_BOOK_ASSIGNMENT (28 both times), before c02_pop moved to j's families.
+-- check_judge_memory_controls.py (now one script job: --submit, then --collect) on the deployed
+-- view after that CALL, job bqjob_rfd55d4d6239c64c_000001a1000386e3_1, 13,281.6 slot-seconds:
+-- exit 0, LIVE 30 checks 0, all 37 doctored copies as expected — the 32 earlier ones unchanged, and
+-- NC_C02_DOCTORED_NAME (one row's campaign_name + " (Brand Defense)") 1; HC_C02_PRODUCT_DEFENSE
+-- (+ " (Product Defense)") 0; NC_C02_STRATEGY (that row's campaign 104973644967484 added to a
+-- BRAND_DEFENSE experiment in a copy of DIM_EXPERIMENT_CAMPAIGN) 9 = its 9 universe rows (the first
+-- run expected 1 and read 9; the expectation now reads the campaign's row count); HC_C02_OTHER_STRATEGY
+-- (a PRODUCT_DEFENSE experiment) 0; NC_C02_NO_POPULATION (an empty ladder snapshot) 1;
+-- NC_EMPTY_JUDGEMENT C02 2 (both emptiness terms).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -221,9 +237,51 @@ c01 AS (
                  OR DATE_DIFF(CURRENT_DATE('America/Los_Angeles'), window_to, DAY) < 2) AS violations
   FROM j
 ),
+-- C02 RESTATED v27.161 (2026-10-02, piece-1 plan Task 7, audit fix #18): it tests the DERIVATION,
+-- not the column. Until then it read is_brand_defense, the column the view's universe filter reads,
+-- so it passed by construction while BOTTLE-VIDEO/PHRASE (Brand Defense) 92805659761140 sat in the
+-- universe (5 rows a night in FACT_PLAN_NEXT_WEEK 09-28 .. 10-02, its ladder flag FALSE). It now
+-- counts universe rows whose campaign is brand defense by NAME (the name the row carries, or the
+-- campaign dimension's current name) or by the STRATEGY of an experiment it sits in
+-- (DIM_EXPERIMENT_CAMPAIGN -> DIM_EXPERIMENT.strategy_id = 'BRAND_DEFENSE'), each read here from its
+-- own source, never from the flag. PRODUCT_DEFENSE is not brand defense (spec §8; a ruling).
+-- Emptiness: no judgement row reads 1, and no keyword the exclusion acts on — a defense campaign's
+-- keyword in the latest ladder snapshot, of a HARVEST family the judgement covers, ENABLED campaign,
+-- not LAUNCH_CONTAINED — reads 1 (an empty judgement covers no family, so it reads 2).
+c02_def AS (
+  SELECT CAST(campaign_id AS STRING) AS campaign_id
+  FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
+  WHERE REGEXP_CONTAINS(UPPER(campaign_name), r'BRAND DEFENSE')
+  UNION DISTINCT
+  SELECT CAST(ec.campaign_id AS STRING)
+  FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
+  JOIN `onyga-482313.OI.DIM_EXPERIMENT` e USING (experiment_id)
+  WHERE e.strategy_id = 'BRAND_DEFENSE'
+),
+-- the HARVEST families are read from the judgement's own book column, not from V_BOOK_ASSIGNMENT:
+-- that view processes 77,330,550 bytes a read (bq dry run, 2026-10-02), and the controls script
+-- runs this file once per copy — with it, the first two v27.161 control runs cost 19,084.8 and
+-- 22,462.4 slot-seconds against 7,661.3 for the v27.160 run (460 / 546 against 206 per copy;
+-- 104.3 MB per copy against 65.5); without it, 13,281.6 (303 per copy, 64.9 MB per copy).
+c02_pop AS (
+  SELECT COUNT(*) AS n
+  FROM `onyga-482313.OI.FACT_KEYWORD_STATE` s
+  JOIN (SELECT DISTINCT family FROM j WHERE book = 'HARVEST') b ON b.family = s.family
+  JOIN `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT` c
+    ON CAST(c.campaign_id AS STRING) = CAST(s.campaign_id AS STRING)
+   AND UPPER(COALESCE(c.campaign_state, 'ENABLED')) = 'ENABLED'
+  WHERE s.snapshot_date = (SELECT MAX(snapshot_date) FROM `onyga-482313.OI.FACT_KEYWORD_STATE`)
+    AND s.state != 'LAUNCH_CONTAINED'
+    AND CAST(s.campaign_id AS STRING) IN (SELECT campaign_id FROM c02_def)
+),
 c02 AS (
-  SELECT 'C02 HARVEST book only, no brand defense, no launch state',
-         COUNTIF(book != 'HARVEST' OR is_brand_defense OR ladder_state = 'LAUNCH_CONTAINED')
+  SELECT 'C02 HARVEST book only, no brand defense by campaign name or experiment strategy, no launch state',
+         COUNTIF(book != 'HARVEST' OR ladder_state = 'LAUNCH_CONTAINED'
+                 OR REGEXP_CONTAINS(UPPER(COALESCE(campaign_name, '')), r'BRAND DEFENSE')
+                 OR campaign_id IN (SELECT campaign_id FROM c02_def))
+       -- emptiness: no judgement, or no defense keyword the exclusion acts on
+       + IF(COUNT(*) = 0, 1, 0)
+       + IF((SELECT n FROM c02_pop) = 0, 1, 0)
   FROM j
 ),
 c03 AS (

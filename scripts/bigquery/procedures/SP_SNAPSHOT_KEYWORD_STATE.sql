@@ -20,6 +20,23 @@
 --   count and the due date are NULL and the state publishes "waiting for the floor bid"; the
 --   appointment falls back to the 7d re-read so invariant 2 holds. Nothing else in the ladder
 --   changed — state counts are identical to v27.104 except these probation fields.
+-- v27.161 (2026-10-02, piece-1 plan Task 7, audit fix #18): BRAND DEFENSE IS READ FROM THE CAMPAIGN.
+--   is_brand_defense = 'BRAND DEFENSE' in the campaign's name (FACT_PANEL_OWNERSHIP's or
+--   V_DIM_CAMPAIGN_CURRENT's) OR the campaign sits in a DIM_EXPERIMENT whose strategy_id is
+--   BRAND_DEFENSE (through DIM_EXPERIMENT_CAMPAIGN) OR V_BID_CPC_TRANSFER's flag, last. Until now it
+--   was V_BID_CPC_TRANSFER's flag alone, and that view keeps only campaigns with clicks in its
+--   placement window ([MAX(date) - 103, MAX(date) - 14]; filtered to the 8 BRAND_DEFENSE campaigns
+--   on 2026-10-02 it returned 7), so BOTTLE-VIDEO/PHRASE (Brand Defense) 92805659761140 — no click
+--   in the window — read "not defense" on all five of its keywords and entered the plan's universe
+--   (V_PLAN_WINDOW_JUDGMENT's ks CTE filters on this flag). Nothing in the ladder reads the flag:
+--   it is published only. Measured 2026-10-02 21:06-21:09 Los Angeles, the v27.105 body and this body run
+--   into scratch tables on the same inputs (OI._tmp_t7_ks_old / _new, prior snapshot =
+--   OI._tmp_t7_ks_before): 818 rows each, every column equal except is_brand_defense on those 5
+--   rows (FALSE -> TRUE); 28 rows of the 8 BRAND_DEFENSE campaigns, 28 flagged (23 before).
+--   Three paired runs, slot-seconds new / old: 2,140.3 / 162.7, 245.3 / 155.1, 264.6 / 202.8
+--   (bytes 130,905,146 / 130,856,111: the two experiment tables and DIM_CAMPAIGN; no new read of
+--   FACT_AMAZON_ADS). PRODUCT_DEFENSE is not brand defense (spec §8 says brand defense; extending
+--   it is a ruling, audit fix #18).
 --
 -- WHAT CHANGED vs v27.103 (Ori, verbatim: "floor question bid-up-to-floor if after a few days
 -- still loosing kill it" and "i think it is not 0.25 (we already checked it)"):
@@ -74,7 +91,7 @@
 -- =============================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_SNAPSHOT_KEYWORD_STATE`()
 OPTIONS (
-  description = "Keyword state machine, bar/SE ladder with per-channel floors (v27.105, 2026-08-22 — the probation clock starts only when the live bid is observed at the floor, dated by the applied change-log row that landed it; NULL = waiting for the floor bid): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | FLOOR_PROBATION | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, the A2 click-space sufficiency check, the A8 launch exemption, affordability in BID space (affordable CPC / V_BID_CPC_TRANSFER.m_effective) against the keyword's OWN floor (DIM_KEYWORD -> V_BID_FLOOR -> FN_BID_FLOOR: SP $0.20, SB collection $0.10, SB video/unknown $0.25), FLOOR_PROBATION (bid to the floor, re-judged when >= 10 settled clicks exist at the floor — floor_since carried forward from this table's own prior row), LOSER only after an elapsed probation at the floor, and the clean-then-judge guard over every verdict that can move a bid down (deterioration labels re-read cleaned; AT_BAR's standing price deferred to its cleaned record). NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
+  description = "v27.161 (2026-10-02, piece-1 plan Task 7, audit fix #18): is_brand_defense is read from the campaign — BRAND DEFENSE in its name (FACT_PANEL_OWNERSHIP or V_DIM_CAMPAIGN_CURRENT) OR a DIM_EXPERIMENT with strategy_id BRAND_DEFENSE through DIM_EXPERIMENT_CAMPAIGN OR V_BID_CPC_TRANSFER's flag (which misses a campaign with no click in its placement window: 92805659761140, 5 keywords, read FALSE until now). Keyword state machine, bar/SE ladder with per-channel floors (v27.105, 2026-08-22 —the probation clock starts only when the live bid is observed at the floor, dated by the applied change-log row that landed it; NULL = waiting for the floor bid): one row per (campaign, keyword) — state (DEAD | PENDING_SETTLE | REVIVED_SETTLING | PARKED | PACED_WINNER | WINNER | AT_BAR | REPRICE | FLOOR_PROBATION | LOSER | LAUNCH_CONTAINED | TRIAL, first-match ladder), judged against the FAMILY bar (T_FAMILY_BAR) inside an SE noise band that collapses at per-family N_f orders, the A2 click-space sufficiency check, the A8 launch exemption, affordability in BID space (affordable CPC / V_BID_CPC_TRANSFER.m_effective) against the keyword's OWN floor (DIM_KEYWORD -> V_BID_FLOOR -> FN_BID_FLOOR: SP $0.20, SB collection $0.10, SB video/unknown $0.25), FLOOR_PROBATION (bid to the floor, re-judged when >= 10 settled clicks exist at the floor — floor_since carried forward from this table's own prior row), LOSER only after an elapsed probation at the floor, and the clean-then-judge guard over every verdict that can move a bid down (deterioration labels re-read cleaned; AT_BAR's standing price deferred to its cleaned record). NO ENGINE reads this table — the only executor is the manual reprice book (tools/build_reprice_bulksheet.py). Invariants read by V_ENGINE_HEALTH. Spec: architecture/KEYWORD_STATE.md."
 )
 BEGIN
   DECLARE has_table BOOL DEFAULT FALSE;
@@ -150,6 +167,21 @@ BEGIN
   m AS (SELECT CAST(campaign_id AS STRING) cid, MAX(m_effective) AS m_eff,
                LOGICAL_OR(is_brand_defense) AS is_brand_defense
         FROM `onyga-482313.OI.V_BID_CPC_TRANSFER` GROUP BY 1),
+  -- v27.161 BRAND DEFENSE IS A PROPERTY OF THE CAMPAIGN (piece-1 plan Task 7, audit fix #18). `m`
+  -- keeps only campaigns with clicks in its placement window, so a dormant defense campaign read
+  -- "not defense" there; the campaign's own name and its experiment's strategy do not depend on
+  -- clicks. The name is read from the campaign dimension (one row per campaign, the judge's `camp`
+  -- ordering) as well as from FACT_PANEL_OWNERSHIP, which names no campaign on 352 of the 818 rows
+  -- of the 2026-10-02 snapshot. DIM_EXPERIMENT has no campaign_id: the strategy is reached through
+  -- DIM_EXPERIMENT_CAMPAIGN; DISTINCT so a campaign in two defense experiments is one row.
+  cname AS (SELECT CAST(campaign_id AS STRING) cid, campaign_name
+            FROM `onyga-482313.OI.V_DIM_CAMPAIGN_CURRENT`
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY CAST(campaign_id AS STRING)
+                                       ORDER BY effective_from DESC, campaign_name) = 1),
+  bdx AS (SELECT DISTINCT CAST(ec.campaign_id AS STRING) cid
+          FROM `onyga-482313.OI.DIM_EXPERIMENT_CAMPAIGN` ec
+          JOIN `onyga-482313.OI.DIM_EXPERIMENT` e USING (experiment_id)
+          WHERE e.strategy_id = 'BRAND_DEFENSE'),
   pr AS (SELECT campaign_id cid, keyword_id kid, prior_state, prior_floor_since FROM prior_snapshot),
   -- v27.105 THE FLOOR BID LANDED: for a keyword on probation, the date the applied change log
   -- first shows a bid at/below its channel floor (bid_tol) after the last applied bid ABOVE it,
@@ -316,7 +348,11 @@ BEGIN
       COALESCE(bf.bid_floor_source,
                CONCAT(`onyga-482313.OI.FN_BID_FLOOR`(b.channel, NULL).bid_floor_source, '_NO_ADGROUP')) AS bid_floor_source,
       m.m_eff AS m_effective,
-      COALESCE(m.is_brand_defense, FALSE) AS is_brand_defense,
+      -- v27.161 (fix #18): by name, by experiment strategy, and V_BID_CPC_TRANSFER's flag last
+      (REGEXP_CONTAINS(UPPER(COALESCE(po.campaign_name, '')), r'BRAND DEFENSE')
+       OR REGEXP_CONTAINS(UPPER(COALESCE(cn.campaign_name, '')), r'BRAND DEFENSE')
+       OR bdx.cid IS NOT NULL
+       OR COALESCE(m.is_brand_defense, FALSE)) AS is_brand_defense,
       SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_clk90, 0)) AS gp_per_click,
       -- the price this record affords at the family bar (settled window — A3), in CPC space...
       SAFE_DIVIDE(SAFE_DIVIDE(b.settled_gp90, NULLIF(b.settled_clk90, 0)),
@@ -364,6 +400,8 @@ BEGIN
     LEFT JOIN kag ON kag.kid = b.keyword_id
     LEFT JOIN bf ON bf.ad_group_id = kag.ad_group_id
     LEFT JOIN m ON m.cid = b.campaign_id
+    LEFT JOIN cname cn ON cn.cid = b.campaign_id
+    LEFT JOIN bdx ON bdx.cid = b.campaign_id
     LEFT JOIN pr ON pr.cid = b.campaign_id AND pr.kid = b.keyword_id
     LEFT JOIN cs ON cs.cid = b.campaign_id AND cs.kid = b.keyword_id
     CROSS JOIN bg
