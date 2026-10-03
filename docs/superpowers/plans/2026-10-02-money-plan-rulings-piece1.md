@@ -512,7 +512,7 @@ each with its own check and negative control.
   date that keys `as_of` since Task 6; fix the view description that still says "below 10".
 - [x] **F5 spec P-7.** Restate P-7's "ties by clicks" to point at P-20 (zero-score candidates by money
   burned, then clicks).
-- [ ] **F6 SEAT_REQUEST R02.** It claims the ledger matches the plan's seats "count and content" but
+- [x] **F6 SEAT_REQUEST R02.** It claims the ledger matches the plan's seats "count and content" but
   subtracts counts (it read −1). Compare the key sets both ways; the value is never negative.
 - [ ] **F7 judge acceptance Run line.** The header's direct Run line did not finish in 16.6 minutes
   (1.79 M slot-seconds). Point it at `check_judge_memory_controls.py` and say why.

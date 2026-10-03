@@ -33,6 +33,27 @@
 --   NC_EMPTY    no rows: R09 reads 0 on an empty ledger; R02 is its emptiness term and reads 118 (the
 --               plan's seats on its latest partition with none in the ledger).
 --
+-- piece-1 follow-up F6 (2026-10-03): R02 compares the (plan, campaign_id, keyword_id) keys of the plan's
+-- latest seats with the ledger's partition for that as_of, both ways, instead of subtracting row counts.
+-- NEGATIVE CONTROLS, run 2026-10-03 10:29 UTC: this file's own text, comment lines stripped, with
+-- FACT_SEAT_REQUEST and FACT_PLAN_NEXT_WEEK swapped for copies taken at 10:28 UTC (job
+-- f6_setup_1791023296: OI._tmp_f6_plan, _tmp_f6_plan_empty, _tmp_f6_led_*); "old" is the 90c1ed3 text
+-- run the same way. Jobs f6_*_102917, 134.0 slot-seconds (plus 15.6 for the copies); nothing here reads
+-- FACT_AMAZON_ADS. The plan's latest partition is 2026-10-03, 126 seats, built_at 08:58:26 UTC; the
+-- ledger's 2026-10-03 partition holds 125 rows appended from the 08:12:08 UTC build.
+--   LIVE          real tables and their copies alike: new R02 9 (5 plan seats missing from the ledger,
+--                 4 ledger rows the 08:58 build no longer seats); old R02 1. A true staleness alarm
+--                 (NOTE ON R02 below).
+--   NC_SYNC       the 10-03 partition rewritten from the plan copy as SP_APPEND_SEAT_REQUEST writes it:
+--                 new 0, old 0.
+--   NC_SWAP       NC_SYNC with one 10-03 row's keyword_id replaced, row counts equal: new 2, old 0.
+--   NC_EXTRA      NC_SYNC plus one 10-03 row on a keyword the plan does not seat: new 1, old -1.
+--   NC_MISSING    NC_SYNC minus one 10-03 row: new 1, old 1.
+--   NC_ARM        NC_SYNC with one plan-A row relabelled B, on a keyword plan B does not seat: new 2, old 0.
+--   NC_EMPTY      an empty ledger: new 126, old 126 (emptiness term).
+--   NC_PLAN_EMPTY an empty plan table, ledger as NC_SYNC: new 1 (emptiness term), old 0.
+--   Every other check read the same on every copy under both texts: R01, R03..R11 0, R12 1.
+--
 -- NOTE ON R02: the ledger is expected to go RED if the plan is rebuilt without the append. That is
 -- a true staleness alarm, not a false one, and the fix is CALL SP_APPEND_SEAT_REQUEST(), which is
 -- safe at any time.
@@ -48,10 +69,25 @@ plan_seats AS (
 r01 AS (SELECT COUNTIF(stamps > 1) AS v
         FROM (SELECT requested_on, COUNT(DISTINCT captured_at) AS stamps FROM led GROUP BY 1)),
 
--- R02 the ledger's latest day matches the plan's seated rows EXACTLY, count and content.
+-- R02 the ledger's partition for the plan's latest as_of holds EXACTLY the plan's seated keys
+--     (plan, campaign_id, keyword_id), compared both ways: plan seats missing from the ledger plus
+--     ledger rows the plan no longer seats. The value is a sum of two counts and is never negative.
+--     Until piece-1 follow-up F6 (2026-10-03) it subtracted the two row counts, so equal counts over
+--     different keywords read 0 and a ledger holding more rows than the plan read negative (the Task 10
+--     proof read -1). Multiplicity is R03's (one row per key); NULL keys compare equal under EXCEPT
+--     DISTINCT (measured: NULL EXCEPT DISTINCT NULL is 0 rows). Emptiness terms: an empty ledger reads
+--     the plan's seat count (NC_EMPTY); no plan partition at all reads 1 (NC_PLAN_EMPTY), where the
+--     counts form read 0. Controls in the F6 block of the header.
 r02 AS (SELECT
-          (SELECT COUNT(*) FROM plan_seats) -
-          (SELECT COUNT(*) FROM led WHERE requested_on = (SELECT d FROM plan_day)) AS v),
+          (SELECT COUNT(*) FROM (
+             SELECT plan, campaign_id, keyword_id FROM plan_seats
+             EXCEPT DISTINCT
+             SELECT plan, campaign_id, keyword_id FROM led WHERE requested_on = (SELECT d FROM plan_day)))
+        + (SELECT COUNT(*) FROM (
+             SELECT plan, campaign_id, keyword_id FROM led WHERE requested_on = (SELECT d FROM plan_day)
+             EXCEPT DISTINCT
+             SELECT plan, campaign_id, keyword_id FROM plan_seats))
+        + IF((SELECT d FROM plan_day) IS NULL, 1, 0) AS v),
 
 -- R03 APPEND-ONLY GRAIN: one row per (requested_on, plan, campaign, keyword).
 r03 AS (SELECT COUNTIF(n > 1) AS v
@@ -115,7 +151,7 @@ r12 AS (SELECT COUNT(*) AS v FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
 
 SELECT * FROM (
   SELECT 1 AS n, 'R01 one captured_at per requested_on'                     AS check_name, v FROM r01 UNION ALL
-  SELECT 2,  'R02 the ledger matches the plan seats exactly',                   v FROM r02 UNION ALL
+  SELECT 2,  'R02 the ledger holds the plan seat keys, both ways',              v FROM r02 UNION ALL
   SELECT 3,  'R03 one row per (day, plan, campaign, keyword)',                  v FROM r03 UNION ALL
   SELECT 4,  'R04 no promise without a question',                               v FROM r04 UNION ALL
   SELECT 5,  'R05 no row is ever mutated',                                      v FROM r05 UNION ALL

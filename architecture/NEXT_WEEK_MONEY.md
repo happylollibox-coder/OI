@@ -1601,6 +1601,13 @@ $0.37). `request_basis` is `HORIZON_WINDOW_RATE` or `HORIZON_PROBE_GOAL`. An inc
 question, so `FACT_SEAT_REQUEST` holds one promise per seat and `V_SEAT_REQUEST_OUTCOME` grades the
 clicks delivered since the night it was asked. `PLAN_SEAT_REQUEST_acceptance.sql` S03 / S06 / S07 /
 S11 and `SEAT_REQUEST_acceptance.sql` R04 / R11 read the new bases; rows written before keep theirs.
+`SEAT_REQUEST_acceptance.sql` R02 (follow-up F6, 2026-10-03) compares the `(plan, campaign_id,
+keyword_id)` keys of the plan's latest seats with the ledger's partition for that `as_of` both ways
+(seats missing from the ledger plus ledger rows the plan no longer seats); until then it subtracted
+row counts, so equal counts over different keywords read 0 and a longer ledger read negative. On
+2026-10-03 at 10:29 UTC it read 9 (the 08:58 UTC plan build after the 08:12 UTC append: 5 seats
+missing, 4 rows no longer seated) where the counts form read 1; its controls on copies are in the
+file's header.
 
 **Seat numbers (P-28).** See "Seat numbers are the ledger's" above. Two defects made the builder's
 continuity assertion refuse 4 passes from 2026-09-29 16:53 to 2026-10-02 05:34 UTC. Replayed with
