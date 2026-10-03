@@ -142,7 +142,8 @@ expected_orders  = DO_NOTHING orders           × r^ε     -- w_ord / settle_fac
 expected_gp      = DO_NOTHING gross profit     × r^ε
 expected_net     = expected_gp − expected_spend
 PAUSE            = all five zero
-campaign budget  = where the plan CUTS a campaign's budget, every ACT row of the campaign is scaled by
+campaign budget  = OPEN for Ori, to rule before piece-2 Task 4 (below; §14.1, E8). As first written:
+                   where the plan CUTS a campaign's budget, every ACT row of the campaign is scaled by
                    LEAST(1, Σ DO_NOTHING spend × planned / current ÷ Σ ACT spend) over its rows;
                    a raise has no effect in v1 (a stated limitation)
 no window clicks = DO_NOTHING is zero, and so is ACT — except OPEN_PROBE, priced from the seat:
@@ -157,6 +158,23 @@ can only come from a move. The seat's spend stays a separate column, `alloc_spen
 allocation `FN_PLAN_SCORECARD` grades, not a forecast. The catalog's `cvr_hat` and `gp_per_order`
 are not read (§14 D3, D6).
 
+**Open 2026-10-03 — the budget clause (§14.1, E8; Ori rules before piece-2 Task 4).** The clause as
+first written cuts `ACT` on campaigns whose new budget cannot bind: `Σ DO_NOTHING spend × planned /
+current` can sit below `Σ ACT spend` while the `ACT` run rate (`Σ ACT spend ÷ H`, H = the horizon's
+days) is already at or below the new budget, and the clause then removes spend the budget would not.
+On the stored nights that is almost all of what it removes (E8). Anchoring was ruled in to stop
+exactly this kind of movement on a lever that does not act (E3); E5 and the first §6 compared the
+clause only with a plain cap at the budget and never measured its own cuts. Recommended:
+
+```
+factor = LEAST(1, GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)
+```
+
+It does not cut while the `ACT` run rate is at or below the new budget, and on a campaign whose
+`DO_NOTHING` run rate is above its current budget (`Σ DO_NOTHING spend ÷ H > current`, the
+overdelivery E5 measured) the proportional term is the larger one, so it cuts in proportion exactly as
+the first form does. Until Ori rules, the ledger is not built.
+
 *Corrected 2026-10-03 (§14 D3): was the literal form — `expected_cpc = new_bid × bid_to_cpc_ratio`
 with an account fallback of 1.17, clicks capped so spend ≤ campaign budget × horizon, orders from
 the catalog's `cvr_hat`. On rows the plan does not move it disagreed with `DO_NOTHING` by as much
@@ -170,8 +188,14 @@ first weeks will show how wrong it is; that is the point of writing it down.
 ## 7. The grader
 
 `SP_GRADE_PREDICTIONS`, nightly from the orchestrator after `SP_FACT_AMAZON_ADS` and the observed-
-change recorder. For every ledger row whose `horizon_to` is at least `SETTLE_HORIZON_DAYS` (14) complete
-days old and that has no grade yet, it:
+change recorder. *Corrected 2026-10-03 (Task-1 review; §14 E1): "complete days old" below is
+counted against the house watermark, never the calendar alone — a row is gradable when
+`DATE_ADD(horizon_to, INTERVAL SETTLE_HORIZON_DAYS DAY) <= LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over
+`FACT_AMAZON_ADS`, the expression of the judge's `wm` CTE (`V_PLAN_WINDOW_JUDGMENT.sql`).
+`FN_ADS_ANCHOR_CAP()` alone is calendar only and never reads `FACT_AMAZON_ADS`; keyed on it, a stalled
+table would grade missing days as zero clicks (step 4: no row means zero) and freeze those grades.*
+For every ledger row whose `horizon_to` is at least `SETTLE_HORIZON_DAYS` (14) complete days old and
+that has no grade yet, it:
 
 1. reads the realised spend, clicks, orders, gross profit and net for the keyword over
    `horizon_from … horizon_to` from `FACT_AMAZON_ADS` as read today;
@@ -312,7 +336,7 @@ proposal 12.`
 
 | check | RED when |
 |---|---|
-| `prediction_grades_fresh` | any ledger row with `horizon_to` older than 14 days has no grade |
+| `prediction_grades_fresh` | any ledger row with `horizon_to` older than 14 days has no grade. *Corrected 2026-10-03 (Task-1 review): "older" on the house watermark of §7 — a row gradable there one night ago (`horizon_to` + 15 ≤ the watermark) has no current grade. A stalled `FACT_AMAZON_ADS` makes no row due, so this check stays GREEN through it; it measures the grader, not the ads feed.* |
 | `prediction_regression` | per predictor: trailing-3-window accuracy or money worse than the previous 3 by > `REGRESSION_MAX` (0.10); the line names any rule applied between |
 | `proposals_open` | AMBER when an `OPEN` proposal is older than 14 days; the line lists them. *Corrected 2026-10-03 (§14): built in piece 6 with `DE_RULE_PROPOSALS`, which does not exist before then (§14 E7); piece 2 builds the other three.* |
 | `response_model_unverified` | INFO until the first `ACT` grade exists |
@@ -343,7 +367,8 @@ A contract suite, `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql`, t
 future predictor must pass, each check with a negative control:
 
 1. every ledger row has both scenarios, the five numbers non-NULL, `basis_clicks ≥ 0`, a `rule_version`;
-2. every ledger row with `horizon_to` ≥ 14 days old has exactly one grade;
+2. every ledger row with `horizon_to` ≥ 14 days old has exactly one grade (*corrected 2026-10-03:
+   days counted on §7's house watermark — every gradable row*);
 3. the grader re-run inserts zero rows; a `regrade_from` run re-grades exactly the named band;
 4. `RIGHT + WRONG + INCONCLUSIVE + UNGRADABLE` = graded rows, and no `INCONCLUSIVE` row sits above the
    family's `min_clicks`;
@@ -405,6 +430,16 @@ numbers, each beside the query that produced it (§14.3), re-run before this sec
 Also recorded 2026-10-03: a seated keyword that later becomes a probe keeps the question it was
 seated with (builder v27.168, confirmed by Ori); Ori made no change on Amazon after 2026-09-27.
 
+**Open — D3's budget clause (raised 2026-10-03 by the Task-1 review; Ori rules before Task 4).** D3
+ruled "a campaign budget cut applied proportionally", and §6 first wrote it as `LEAST(1, Σ DO_NOTHING
+spend × planned / current ÷ Σ ACT spend)`. That form also cuts campaigns whose `ACT` run rate is
+already at or below the new budget, where the budget cannot bind (E8). Recommended: `LEAST(1,
+GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)` — no cut while the
+`ACT` run rate is at or below the new budget, and the same proportional cut as before on a campaign
+whose `DO_NOTHING` run rate is above its current budget (§6). The clause scales every `ACT` number
+of a cut campaign, so it reaches the brief's "upload the plan $Y" line and the report card's
+`pred_lift`; piece-2 Task 4 does not start until it is ruled.
+
 The brief's corrections that are not a ruling, made in place above: `UNGRADABLE` means an archived
 keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG` are defined (§7);
 `proposals_open` moves to piece 6 with the table it reads (§9; E7).
@@ -412,12 +447,14 @@ keyword or campaign, not "no outcome rows" (§7); the plan's `RIGHT` and `WRONG`
 ### 14.2 The evidence
 
 Measured 2026-10-03 between 16:00 and 16:12 UTC (09:00–09:12 Los Angeles), when
-`FN_ADS_ANCHOR_CAP()` read 2026-10-02; every query in §14.3 was run from this file's own text. These
+`FN_ADS_ANCHOR_CAP()` read 2026-10-02; every query in §14.3 was run from this file's own text. E8, Q7
+and Q1's added columns come from the Task-1 follow-up of the same day, run after 16:34 UTC, when the
+house watermark also read 2026-10-02 (Q1 `house_watermark_now`). These
 numbers are the record of what the rulings were made on. They gate nothing and are not today's
 reading (`config.yaml`, Standing Rule 0): run the query.
 `FACT_AMAZON_ADS` restates, and every orchestrator pass rewrites tonight's plan partition until the
-D2 freeze is built, so the 10-03 rows below are that partition as built at 13:04:57 UTC and may not
-reproduce; the other nights will, up to restatement.
+D2 freeze is built, so the 10-03 rows in E1–E7 are that partition as built at 13:04:57 UTC (E8's,
+as rebuilt at 16:34:13 UTC) and may not reproduce; the other nights will, up to restatement.
 
 **E1 — the stored nights and when they become gradable (D1, §10). Query Q1.** Twelve nights: six in
 August, 2026-08-23 … 08-28 (PEAK, `window_days` 3, 4,472 plan rows, so 8,944 ledger rows), and
@@ -425,10 +462,24 @@ August, 2026-08-23 … 08-28 (PEAK, `window_days` 3, 4,472 plan rows, so 8,944 l
 and one `window_days` per night. Under the shifted horizon (D2) every August night ends by
 2026-08-31, so all six are gradable on the first run. After the outage the earliest horizon end is
 the 09-30 night's: 10-02 under the old horizon, 10-03 under the shifted one (it was written at
-22:44 Los Angeles on 09-30). 10-03 + 14 = 10-17, and `FN_ADS_ANCHOR_CAP()` returns the Los Angeles
-date from 22:00 Los Angeles and the day before until then, so the grade lands at the first grader run
-at or after 22:00 Los Angeles on 10-17. The 10-12 that §10 had is `FN_PLAN_SCORECARD`'s clock
-(`settle_days_max` 14 days from the night, its `nights` CTE): 09-28 + 14.
+22:44 Los Angeles on 09-30). A row is gradable once `horizon_to` + 14 ≤ the house watermark,
+`LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS` (§7). 10-03 + 14 = 10-17.
+`FN_ADS_ANCHOR_CAP()` is calendar only — the Los Angeles date from 22:00 Los Angeles, the day before
+until then — so the cap reaches 10-17 at 22:00 Los Angeles on 10-17, and the watermark reaches it
+when `FACT_AMAZON_ADS` also holds 10-17. On the eight nights the builder wrote at or after 22:00 Los
+Angeles (08-23 … 08-28, 09-28, 09-30), the watermark it stored equals the Los Angeles date of the write
+(Q1: `built_la_hour`, `watermark_stored`, `built_la_date`), so at that hour the table has held the
+current day every time. The grade therefore lands at the first grader run at or after 22:00 Los
+Angeles on 10-17 at which `FACT_AMAZON_ADS` holds 10-17, and later if the table stalls. The 10-12 that
+§10 had is `FN_PLAN_SCORECARD`'s clock (`settle_days_max` 14 days from the night, its `nights` CTE):
+09-28 + 14. *Corrected 2026-10-03 (Task-1 review): the first version of this paragraph and of
+`architecture/LEARNING.md` §4 keyed gradability on `FN_ADS_ANCHOR_CAP()` alone and called it the ads
+watermark; it never reads `FACT_AMAZON_ADS`, so a stalled table would have graded its missing days as
+zero clicks. The `watermark_stored`, `n_wm`, `built_la_hour` and `house_watermark_now` columns of Q1
+were added with this correction (run from this file's text 2026-10-03 16:40 UTC: 8 of the 8 nights
+written at or after 22:00 Los Angeles have `watermark_stored` = `built_la_date`, one stored watermark
+per night; negative control, a copy with the 08-23 night's stored watermark moved back one day: 7 of
+8).*
 
 **E2 — every night was written after its first horizon day began (D2, §5). Query Q1.** On all
 twelve nights `rows_built_on_or_after_la_as_of` equals `plan_rows`: every row was written on or after
@@ -498,10 +549,30 @@ them.
 controls in the same query, `FACT_PLAN_NEXT_WEEK` and `SP_BUILD_NEXT_WEEK_PLAN`, read `true`.
 `DE_COACH_THRESHOLDS` holds no `strategy_id = 'LEARNING'` row (Q6b); piece-2 Task 2 seeds them.
 
+**E8 — the budget clause as first written cuts where the new budget cannot bind (D3, §6; open,
+§14.1). Query Q7.** Added 2026-10-03 after the Task-1 review; run at 16:35 UTC and again from this
+file's text at 16:40 UTC, identical, on the 10-03 partition as rebuilt at 16:34:13 UTC (the query
+prints it). Plan B, all twelve stored nights, per
+campaign and night, `ACT` spend before the budget clause priced as §6 prices it (window spend × r²
+with ε = γ = 1, PAUSE 0, a zero-basis OPEN_PROBE at its seat cost × H). The plan cuts the budget on
+369 campaign-nights. The first form binds (factor < 1) on 286 of them; on 283 of those 286 the `ACT`
+run rate before the clause is already at or below the new budget, and those 283 carry $1,833.11 of
+the $1,853.69 of horizon spend the clause removes. Example: campaign 435692261851957 on 10-03, budget
+$160.00 → $113.68, `DO_NOTHING` $22.00 a day, `ACT` $20.22 a day before the clause and $15.63 after
+it. The recommended form binds on 3 campaign-nights and removes $6.17, and the example keeps its
+$20.22. Two cut campaign-nights have a `DO_NOTHING` run rate above the current budget; on both the two
+forms give the same factor (`dn_over_current_alt_ne_rm1` = 0). Negative control, in the same query: a
+copy of the rows with the example's 10-03 planned budget set to $10.00, below its `ACT` run rate,
+moves it out of the 283 (282) and into the recommended form's cuts (4 binding, $36.82 removed; the
+example reads $10.00 a day under the recommended form and $1.37 under the first). E5 and the first
+§6 compared the proportional form only with a plain cap at the budget; this is the first measurement
+of its own cuts.
+
 ### 14.3 The queries
 
 Run with `bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache`. Q3 and Q5 read
-`FACT_AMAZON_ADS`: submit them with `--nosync` and poll with `bq wait JOB 60`.
+`FACT_AMAZON_ADS`: submit them with `--nosync` and poll with `bq wait JOB 60`. Q1 reads only its
+newest `date`.
 
 **Q1 — the stored nights (E1, E2).**
 
@@ -511,11 +582,15 @@ SELECT as_of, COUNT(*) AS plan_rows, COUNT(DISTINCT plan) AS plans,
        MIN(window_days) AS window_days, COUNT(DISTINCT window_days) AS n_wd,
        MIN(built_at) AS built_min, MAX(built_at) AS built_max,
        DATE(MIN(built_at), 'America/Los_Angeles') AS built_la_date,
+       EXTRACT(HOUR FROM DATETIME(MIN(built_at), 'America/Los_Angeles')) AS built_la_hour,
+       MIN(watermark) AS watermark_stored, COUNT(DISTINCT watermark) AS n_wm,
        COUNTIF(DATE(built_at, 'America/Los_Angeles') >= as_of) AS rows_built_on_or_after_la_as_of,
        DATE_ADD(as_of, INTERVAL MIN(window_days) - 1 DAY) AS horizon_to_spec,
        DATE_ADD(GREATEST(as_of, DATE_ADD(DATE(MIN(built_at), 'America/Los_Angeles'), INTERVAL 1 DAY)),
                 INTERVAL MIN(window_days) - 1 DAY) AS horizon_to_shifted,
-       `onyga-482313.OI.FN_ADS_ANCHOR_CAP`() AS anchor_cap_now
+       `onyga-482313.OI.FN_ADS_ANCHOR_CAP`() AS anchor_cap_now,
+       (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`())
+        FROM `onyga-482313.OI.FACT_AMAZON_ADS`) AS house_watermark_now
 FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
 GROUP BY as_of ORDER BY as_of;
 ```
@@ -651,6 +726,63 @@ FROM UNNEST(['DE_RULE_PROPOSALS', 'SP_PROPOSE_RULE_CHANGES', 'V_PREDICTION_LEDGE
 
 SELECT COUNT(*) AS learning_rows
 FROM `onyga-482313.OI.DE_COACH_THRESHOLDS` WHERE strategy_id = 'LEARNING';
+```
+
+**Q7 — the budget clause's cuts, first form against the recommended form (E8).** Added
+2026-10-03. The `NC` rows are the negative control: the same rows with one campaign's 10-03 planned
+budget set to $10.00, below its `ACT` run rate.
+
+```sql
+WITH base AS (
+  SELECT 'REAL' AS copy, as_of, campaign_id, move, window_days, w_clk, w_sp, current_bid, planned_bid,
+         bid_park, bid_floor, seat_cost_per_day, campaign_current_budget, campaign_planned_budget
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'
+  UNION ALL  -- the negative control: the same rows, one campaign's 10-03 planned budget set to $10
+  SELECT 'NC', as_of, campaign_id, move, window_days, w_clk, w_sp, current_bid, planned_bid,
+         bid_park, bid_floor, seat_cost_per_day, campaign_current_budget,
+         IF(as_of = '2026-10-03' AND campaign_id = '435692261851957', 10.0, campaign_planned_budget)
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B'
+),
+k AS (
+  SELECT *,
+    CASE
+      WHEN move = 'PAUSE' THEN 0
+      WHEN w_clk = 0 AND move = 'OPEN_PROBE' THEN COALESCE(seat_cost_per_day, 0) * window_days
+      ELSE w_sp * POW(SAFE_DIVIDE(CASE WHEN move IN ('REPRICE', 'OPEN_PROBE') THEN planned_bid
+                                       WHEN move = 'PARK' THEN ROUND(COALESCE(bid_park, bid_floor, current_bid), 2)
+                                       ELSE current_bid END, current_bid), 2)
+    END AS act_sp
+  FROM base
+),
+c AS (
+  SELECT copy, as_of, campaign_id, MAX(window_days) AS h, MAX(campaign_current_budget) AS cur,
+         MAX(campaign_planned_budget) AS planned, SUM(w_sp) AS dn, SUM(act_sp) AS act
+  FROM k GROUP BY 1, 2, 3
+),
+f AS (
+  SELECT *,
+    LEAST(1, SAFE_DIVIDE(dn * planned / cur, act)) AS f_rm1,
+    LEAST(1, SAFE_DIVIDE(GREATEST(planned * h, dn * planned / cur), act)) AS f_alt,
+    (as_of = '2026-10-03' AND campaign_id = '435692261851957') AS ex
+  FROM c WHERE planned < cur
+)
+SELECT copy, COUNT(DISTINCT as_of) AS nights, COUNT(*) AS cut_campaign_nights,
+  COUNTIF(f_rm1 IS NULL) AS factor_null,
+  COUNTIF(f_rm1 < 1) AS rm1_binds,
+  COUNTIF(f_rm1 < 1 AND act / h <= planned) AS rm1_binds_act_le_new_budget,
+  ROUND(SUM(IF(f_rm1 < 1, act * (1 - f_rm1), 0)), 2) AS rm1_removed,
+  ROUND(SUM(IF(f_rm1 < 1 AND act / h <= planned, act * (1 - f_rm1), 0)), 2) AS rm1_removed_act_le_new_budget,
+  COUNTIF(dn / h > cur) AS cut_dn_over_current_budget,
+  COUNTIF(f_alt < 1) AS alt_binds,
+  ROUND(SUM(IF(f_alt < 1, act * (1 - f_alt), 0)), 2) AS alt_removed,
+  COUNTIF(dn / h > cur AND ABS(f_alt - f_rm1) > 1e-9) AS dn_over_current_alt_ne_rm1,
+  ROUND(MAX(IF(ex, cur, NULL)), 2) AS ex_current_budget, ROUND(MAX(IF(ex, planned, NULL)), 2) AS ex_planned_budget,
+  ROUND(MAX(IF(ex, dn / h, NULL)), 2) AS ex_dn_per_day, ROUND(MAX(IF(ex, act / h, NULL)), 2) AS ex_act_per_day,
+  ROUND(MAX(IF(ex, act * f_rm1 / h, NULL)), 2) AS ex_rm1_per_day, ROUND(MAX(IF(ex, act * f_alt / h, NULL)), 2) AS ex_alt_per_day,
+  ANY_VALUE(b.built_at_1003) AS built_at_1003
+FROM f CROSS JOIN (SELECT MAX(built_at) AS built_at_1003 FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                   WHERE as_of = '2026-10-03') b
+GROUP BY 1 ORDER BY 1;
 ```
 
 ### 14.4 What else the brief found, and where it is answered

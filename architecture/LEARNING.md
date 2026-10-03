@@ -99,10 +99,10 @@ short of final.
 
 **`ACT` — upload the plan's move.** The same keyword at the price and budget the plan asks for:
 clicks, orders and gross profit move with the bid change, spend moves further than clicks (more or
-fewer clicks, each at a higher or lower price), a campaign whose budget the plan cuts is trimmed in
-proportion, and a paused keyword does nothing. Where the plan moves nothing, `ACT` is `DO_NOTHING`
-to the cent — the response model is anchored on it, so a predicted lift can only come from a move
-(§3).
+fewer clicks, each at a higher or lower price), a campaign whose budget the plan cuts is trimmed
+(how, exactly, is open for Ori: §3), and a paused keyword does nothing. Where the plan moves
+nothing, `ACT` is `DO_NOTHING` to the cent — the response model is anchored on it, so a predicted
+lift can only come from a move (§3).
 
 ---
 
@@ -122,12 +122,26 @@ pred_net    = pred_gp − pred_spend
 PAUSE       → all five 0
 ```
 
-**The campaign budget.** A budget is set per campaign, so it acts on the sum of the campaign's
-keywords. Where `campaign_planned_budget < campaign_current_budget`, every `ACT` row of the campaign
-is multiplied by `LEAST(1, Σ DO_NOTHING spend × planned / current ÷ Σ ACT spend)` over the
-campaign's rows of that night and plan (net follows as gross profit − spend). A raise has no effect
-in v1. A cap at the budget itself is not used: `DO_NOTHING` already runs above the current budget
-in some campaigns (spec §14 E5), and a cap would cut those whether or not the plan moved them.
+**The campaign budget — open for Ori, to rule before Task 4** (spec §6, §14.1, §14 E8). A budget
+is set per campaign, so it acts on the sum of the campaign's keywords: where
+`campaign_planned_budget < campaign_current_budget`, every `ACT` row of the campaign is multiplied by
+one factor over the campaign's rows of that night and plan (net follows as gross profit − spend). A
+raise has no effect in v1. H is the horizon's days (`window_days`). Two forms of the factor:
+
+```
+as first written  LEAST(1, Σ DO_NOTHING spend × planned / current ÷ Σ ACT spend)
+recommended       LEAST(1, GREATEST(planned × H, Σ DO_NOTHING spend × planned / current) ÷ Σ ACT spend)
+```
+
+The first form also cuts a campaign whose `ACT` run rate (Σ ACT spend ÷ H) is already at or below
+the new budget, where the budget cannot bind — a predicted difference between the scenarios on a
+lever that does not act, the movement anchoring exists to prevent; spec §14 E8 measures how much of
+what it removes falls there (query Q7). The recommended form cuts only while the `ACT` run rate is
+above the new budget, and on a campaign whose `DO_NOTHING` run rate is above its current budget
+(Σ DO_NOTHING spend ÷ H > current) the proportional term is the larger, so both forms cut it in
+proportion. A plain cap at the budget (`ACT` spend ≤ planned × H) is used by neither: `DO_NOTHING`
+already runs above the current budget in some campaigns (spec §14 E5), and a cap would cut those
+whether or not the plan moved them. Task 4 builds the form Ori rules and records it here.
 
 **A keyword with no window clicks** (`w_clk = 0`) has `DO_NOTHING` all zero, and `ACT` all zero —
 except `OPEN_PROBE`, which the plan seats to buy clicks it has never had. It is priced from the seat:
@@ -184,9 +198,18 @@ value that can never change afterwards; Task 4 decides how and records it here.
 | `FACT_PREDICTION_GRADE` | `scripts/bigquery/tables/FACT_PREDICTION_GRADE.sql` (Task 5) | one row per graded ledger row; partitioned by `as_of`, clustered by `predictor, family`; **append-only** — never updated, never deleted from |
 
 1. **Gradable.** A ledger row is gradable when `DATE_ADD(horizon_to, INTERVAL SETTLE_HORIZON_DAYS
-   DAY) <= FN_ADS_ANCHOR_CAP()` and it has no current grade. The clock is the ads watermark, not the
-   calendar, so grading pauses by itself if `FACT_AMAZON_ADS` stops advancing.
-   (`FN_ADS_ANCHOR_CAP()` is the Los Angeles date from 22:00 Los Angeles, the day before until then.)
+   DAY) <= watermark` and it has no current grade, where `watermark = LEAST(MAX(date),
+   FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS` — the house watermark, the judge's own expression
+   (`V_PLAN_WINDOW_JUDGMENT.sql`: the header's "THE WINDOW" and the `wm` CTE). The grader stores the
+   value it used on each grade row (`watermark`). `FN_ADS_ANCHOR_CAP()` alone is calendar only — the
+   Los Angeles date from 22:00 Los Angeles, the day before until then — and never reads
+   `FACT_AMAZON_ADS`; the `MAX(date)` term is what keeps a row ungraded while the table's newest day
+   is short of `horizon_to + SETTLE_HORIZON_DAYS`, so step 2's "no row means zero" is never read on a
+   day the table has not reached. The watermark is one date for the whole table: a day missing below
+   it, or one channel's feed stopping while the other's advances, is not caught by this test (§9).
+   *Corrected 2026-10-03 (Task-1 review): the first version used `FN_ADS_ANCHOR_CAP()` alone and
+   called it the ads watermark; a stalled `FACT_AMAZON_ADS` would have graded its missing days as zero
+   clicks, frozen until a `regrade_from`.*
 2. **What happened.** `FACT_AMAZON_ADS` on `campaign_id + keyword_id`, `date BETWEEN horizon_from AND
    horizon_to`, summing `Ads_clicks`, `Ads_cost`, `Ads_orders`, `GROSS_PROFIT`; net = gross profit −
    cost. The same join as `FN_PLAN_SCORECARD`. **No row means zero**: `FACT_AMAZON_ADS` holds clicked
@@ -283,9 +306,16 @@ every graded night in it (D5); `TRAILING_3` — the three most recent graded win
 In `V_ENGINE_HEALTH` (Task 6), inserted before c33, which stays last
 (`HOLDOUT_INTEGRITY_acceptance.sql` slices the file there); see `architecture/ENGINE_HEALTH.md`.
 
-- **`prediction_grades_fresh`** — RED when a gradable ledger row has no current grade one night past
-  due (the grader's own watermark clock plus one night's grace). Reads the ledger and
+- **`prediction_grades_fresh`** — RED when a ledger row has no current grade although
+  `DATE_ADD(horizon_to, INTERVAL SETTLE_HORIZON_DAYS + 1 DAY) <= watermark`, the house watermark of
+  §4 step 1 (one night's grace). Reads the ledger, `FACT_AMAZON_ADS`'s newest `date` and
   `FACT_PREDICTION_GRADE`, never the report card. An empty population is RED, not vacuously green.
+  It measures the grader against the data that exists: while `FACT_AMAZON_ADS` stops advancing no
+  row falls due, and the check stays GREEN. Its detail line prints the watermark beside
+  `FN_ADS_ANCHOR_CAP()` so a lag is visible; `V_ENGINE_HEALTH` has no check on the ads table's
+  newest date (read 2026-10-03), and `pipeline_step_failing` names a step that fails, not one that
+  loads nothing new. *Corrected 2026-10-03 (Task-1 review): was the calendar clock of §4 step 1's
+  first version.*
 - **`prediction_regression`** — per predictor: the trailing `MIN_GRADED_WINDOWS` windows against the
   `MIN_GRADED_WINDOWS` before them on `mae_net_share` or `counterfactual_net_per_alloc`; RED when
   worse by more than `REGRESSION_MAX`. INFO "YOUNG" until twice `MIN_GRADED_WINDOWS` windows are
@@ -346,8 +376,11 @@ and confirms the column names in §5.
 - **`ACT` is graded only where someone acted.** Until a plan is uploaded (piece 3) no `ACT` scenario
   applies; every non-no-op `ACT` row is an `ACT_NO_MATCHING_ACTION` honesty count, lift is ungraded,
   and `lift_control` is the DO_NOTHING prediction.
-- **A budget raise has no effect in RM1**, and a budget cut is proportional across the campaign's
-  keywords; the response model is a first guess, written down so it can be wrong in a measurable way.
+- **A budget raise has no effect in RM1**, and how a budget cut acts is open for Ori (§3); the
+  response model is a first guess, written down so it can be wrong in a measurable way.
+- **The grading clock is one date for the whole ads table** (§4 step 1). It waits for
+  `FACT_AMAZON_ADS`'s newest day, not for every day or every channel: a day missing below the newest,
+  or one channel stalled while the other loads, grades as zero clicks.
 - **"Do nothing" rests on the change record.** A keyword is DO_NOTHING-applied when no change was
   seen on it or its campaign. A stalled change feed would look the same as a quiet week.
 - **Not day-over-day.** One window is noise; the regression check compares spans of
@@ -384,6 +417,34 @@ sec = s[s.index('### 14.3 The queries'):s.index('### 14.4')]
 for i, b in enumerate(re.findall(r'`{3}sql\n(.*?)`{3}', sec, re.S), 1):
     open(f'.tmp/learning_q{i}.sql', 'w').write(b)
 EOF
-# .tmp/learning_q1..q7.sql: Q1, Q2, Q3, Q4, Q5, Q5b (the final SELECT; prefix it with Q5's CTEs), Q6 + Q6b
+# .tmp/learning_q1..q8.sql: Q1, Q2, Q3, Q4, Q5, Q5b (the final SELECT; prefix it with Q5's CTEs), Q6 + Q6b, Q7
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(cat .tmp/learning_q1.sql)"
 ```
+
+### Task 1 follow-up — the review's two corrections (2026-10-03)
+
+Docs only; nothing deployed, `config.yaml` untouched. The Task-1 review found two errors, corrected
+in the spec, this SOP and the plan:
+
+1. **The grading clock.** §4 step 1 keyed gradability on `FN_ADS_ANCHOR_CAP()` alone and said that
+   was the ads watermark. It is calendar only (`scripts/bigquery/functions/FN_ADS_ANCHOR_CAP.sql`),
+   so a stalled `FACT_AMAZON_ADS` would have graded missing days as zero clicks and frozen them. Now
+   the house watermark `LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` everywhere: §4 step 1, §6
+   `prediction_grades_fresh`, spec §7, §9, §11 check 2, §14.2 E1, and plan Task 5 Step 2. Q1 gained
+   `built_la_hour`, `watermark_stored`, `n_wm` and `house_watermark_now`; re-run from the spec's text
+   (2026-10-03 16:40 UTC) it shows, on each of the eight nights written at or after 22:00 Los
+   Angeles, one stored watermark equal to the Los Angeles date of the write — the evidence that E1's
+   10-17 holds when the table keeps loading the current day. Negative control (a copy of the plan
+   rows with the 08-23 night's stored watermark moved back one day): 7 of 8.
+2. **The budget clause.** RM1's `LEAST(1, Σ DO_NOTHING × planned / current ÷ Σ ACT)` cuts campaigns
+   whose new budget cannot bind. Measured by the new Q7 (spec §14 E8) and marked open for Ori in
+   spec §6, §14.1, this SOP's §3 and plan Task 4 Step 3, with the recommended
+   `GREATEST(planned × H, …)` form beside it. Task 4 starts only after Ori rules. Q7 carries its
+   negative control in the query (an `NC` copy of the rows with one campaign's 10-03 planned budget
+   set to $10.00, below its `ACT` run rate): it moved that campaign out of the "binds although the
+   budget cannot" count and into the recommended form's cuts, as E8 records.
+
+Spec §14.3 was extracted with the snippet above after the edits: eight blocks (`learning_q8.sql` is
+Q7); Q2 … Q6b are byte-identical to the review's extraction. Run from that text at 16:40 UTC: Q1 as
+above; Q7 reproduced E8 to the cent on both copies; Q6 still lists the six piece-2 and piece-6
+objects as absent beside its two `true` controls, and Q6b 0 LEARNING rows.

@@ -181,10 +181,15 @@ pred_net    = pred_gp - pred_spend
 
   Then the campaign budget: where `campaign_planned_budget < campaign_current_budget`, scale every ACT row
   of the campaign by `LEAST(1, SUM(DO_NOTHING spend) * planned / current / SUM(ACT spend))` over the
-  campaign's rows; a raise has no effect in v1 (stated as a limitation). Zero-basis OPEN_PROBE rows use the
-  brief's seat rule (spend = `seat_cost_per_day × H`, clicks at `planned_bid × BID_TO_CPC_RATIO_FALLBACK`,
-  CVR and GP/order from the keyword's own settled 90-day record in `FACT_KEYWORD_STATE_HISTORY` at
-  `built_at` when `settled_clk90 >= OWN_CVR_MIN_CLICKS`, else the family × channel pooled settled rate).
+  campaign's rows; a raise has no effect in v1 (stated as a limitation). **Open 2026-10-03 (Task-1
+  review; spec §6, §14.1, §14 E8): Ori rules this clause before this task starts.** The form above
+  also cuts campaigns whose ACT run rate is already at or below the new budget; the recommended form
+  is `LEAST(1, GREATEST(planned * H, SUM(DO_NOTHING spend) * planned / current) / SUM(ACT spend))`,
+  H = `window_days`. Build the ruled form and record it in `architecture/LEARNING.md` §3.
+  Zero-basis OPEN_PROBE rows use the brief's seat rule (spend = `seat_cost_per_day × H`, clicks at
+  `planned_bid × BID_TO_CPC_RATIO_FALLBACK`, CVR and GP/order from the keyword's own settled 90-day
+  record in `FACT_KEYWORD_STATE_HISTORY` at `built_at` when `settled_clk90 >= OWN_CVR_MIN_CLICKS`, else
+  the family × channel pooled settled rate).
   Every other zero-basis ACT row predicts 0. Settings are read from `DE_COACH_THRESHOLDS`
   (`strategy_id = 'LEARNING'`), never as literals.
 - [ ] **Step 4: versions** — `rule_version` = the `history_id` of the `DE_PLAN_CONFIG` row for the row's
@@ -206,7 +211,10 @@ pred_net    = pred_gp - pred_spend
   cluster by `predictor, family`; append-only; `regrade_seq`; frozen copies of the five predicted numbers
   and `built_at`). `T_PREDICTION_SCORECARD` per the brief §6.
 - [ ] **Step 2: gradability** — a ledger row is gradable when `DATE_ADD(horizon_to, INTERVAL
-  SETTLE_HORIZON_DAYS DAY) <= FN_ADS_ANCHOR_CAP()` and it has no current grade.
+  SETTLE_HORIZON_DAYS DAY) <= LEAST(MAX(date), FN_ADS_ANCHOR_CAP())` over `FACT_AMAZON_ADS` (the house
+  watermark, `V_PLAN_WINDOW_JUDGMENT`'s `wm` CTE; store it on the grade row as `watermark`) and it has no
+  current grade. *Corrected 2026-10-03 (Task-1 review): was `<= FN_ADS_ANCHOR_CAP()`, which is calendar
+  only and never reads `FACT_AMAZON_ADS`, so a stalled table would grade missing days as zero.*
 - [ ] **Step 3: realised numbers** — `FACT_AMAZON_ADS` on `campaign_id + keyword_id`, `date BETWEEN
   horizon_from AND horizon_to`; a missing row means 0 (FACT holds clicked rows only). `UNGRADABLE` only
   when the keyword or its campaign is ARCHIVED (case-insensitive) in the SCD within the horizon.
@@ -240,10 +248,12 @@ pred_net    = pred_gp - pred_spend
   `SP_APPEND_CATALOG_FORECAST` and `SP_REFRESH_CUBE_TABLES` (brief §8), the standard step block byte for
   byte. Diff the deployed body first; deploy; do not run the orchestrator.
 - [ ] **Step 2:** `V_ENGINE_HEALTH` checks (brief §9; insert before c33, which must stay last):
-  `prediction_grades_fresh` (RED when a gradable ledger row has no current grade one night past due;
-  empty population RED), `prediction_regression` (per predictor, trailing 3 vs prior 3 windows on
-  `mae_net_share` or `counterfactual_net_per_alloc`, RED when worse by more than `REGRESSION_MAX`; INFO
-  "YOUNG" until 6 windows exist; names any `rule_version` / `builder_version` change between), and
+  `prediction_grades_fresh` (RED when a gradable ledger row has no current grade one night past due —
+  gradable on the house watermark of Task 5 Step 2, `horizon_to + SETTLE_HORIZON_DAYS + 1 <= watermark`;
+  empty population RED; the detail prints the watermark beside `FN_ADS_ANCHOR_CAP()`),
+  `prediction_regression` (per predictor, trailing 3 vs prior 3 windows on `mae_net_share` or
+  `counterfactual_net_per_alloc`, RED when worse by more than `REGRESSION_MAX`; INFO "YOUNG" until 6
+  windows exist; names any `rule_version` / `builder_version` change between), and
   `response_model_unverified` (INFO until an applied, non-no-op ACT grade exists). Add the two RED-able
   checks to `V_DAILY_BRIEF`'s priority list and update the copies in `PLAN_HEALTH_acceptance.sql` in the
   same step.
