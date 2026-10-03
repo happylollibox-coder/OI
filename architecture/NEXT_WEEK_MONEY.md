@@ -1811,6 +1811,29 @@ GROUP BY 1 ORDER BY 1;
   `CURRENT_DATE('America/New_York')`. Controls on copies of the ledger with the clock pinned to 22:40
   Los Angeles 10-02 = 01:40 New York 10-03 (recorded in the file): the 10-02 partition copied to 10-03
   reads R09 118 under the old form and 0 under the new; copied to 10-04 it reads 118 under the new.
+- `PLAN_HEALTH_acceptance.sql` C02b (added after the second review, 2026-10-03): the negative control
+  of `plan_partition_fresh`, NC_DROP_LATEST, dropped only `MAX(as_of)`. After the 01:35 New York pass
+  (about 22:35 Los Angeles, day D) that is the D+1 partition; D was left, equal to `due` (the Los
+  Angeles day the step last ran), the control did not fire, and C02b read FAIL until the 04:10 New
+  York pass. It now drops every partition dated on or after the Los Angeles day the plan step last
+  ran, which is never later than `due`. Pinned-clock controls on the file's own text (recorded in
+  its header, jobs `t6r3_c02b_*_035333`): at 22:40 Los Angeles 10-02 after a simulated 01:35 New York
+  pass the old form reads 1 and the new 0; at 00:30 Los Angeles 10-03, before the 04:10 pass, 1 and
+  0; at 10:30 Los Angeles 10-02, at 22:40 with the pass rewriting 10-02 as under v27.159, and at
+  01:20 Los Angeles 10-03 after the 04:10 pass, 0 and 0. The live alarm was right throughout; only
+  the control's premise moved.
+- **Every test re-read for the key (2026-10-03).** A grep of `scripts/bigquery/tests/` (not `.bak`,
+  not `archive/`) for files naming `as_of` or `requested_on` together with a Los Angeles or UTC clock
+  found, besides the two above: `FACT_PLAN_NEXT_WEEK_acceptance.sql` (the C01 fence, already on the
+  build's Los Angeles date); `PLAN_SCORECARD_acceptance.sql` (C10 and the gradable-night twins bound
+  `as_of` by the same Los Angeles date `FN_PLAN_SCORECARD` is called with, so a New York partition
+  dated tomorrow is left out of both); `V_PLAN_WINDOW_JUDGMENT_acceptance.sql` (C01's fence and C06's
+  settle date compare ads dates, Los Angeles by design); `V_FAMILY_SEAT_REGISTER_acceptance.sql` (a
+  change's Los Angeles date against ads dates, no `as_of`); `check_judge_memory_controls.py` (doctored
+  `hold_settles_on`, an ads date, and `grace_ends_on` set to Los Angeles yesterday, which is before the
+  New York date C12 compares it with at every hour); `check_plan_clock_controls.py` (NC_K1 stamps a
+  22:40 Los Angeles build on purpose); `PLAN_OWNERSHIP_acceptance.sql` (holdout `eligible_from`, no
+  `as_of`). No other test compares `as_of` or `requested_on` with a clock.
 - **Not changed, recorded:** `tools/build_reprice_bulksheet.py` still reads the plan's history with
   `as_of < CURRENT_DATE('America/Los_Angeles')` (and still carries v27.135's grace reading); between
   21:00 and 24:00 Los Angeles its history stops a night short of the judge's. The judge's `holdout`

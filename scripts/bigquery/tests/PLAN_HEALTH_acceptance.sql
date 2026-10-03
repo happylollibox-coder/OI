@@ -69,6 +69,36 @@
 -- (partition 2026-10-02) had 6 rows under the guard preconditions, all LAST_DAY_NOT_STRONG, and
 -- 0 HELD, so C06a fired on a real row and C06b was vacuous, as its name says.
 --
+-- v27.160 follow-up (2026-10-03, piece-1 Task 6, second review): C02b's NC_DROP_LATEST dropped only
+-- MAX(as_of). Since v27.160 the 01:35 New York pass (about 22:35 Los Angeles, day D) writes as_of
+-- D+1; with that one partition dropped, D was left, due was D (the Los Angeles day the step last
+-- ran), the control did not fire and C02b read FAIL. NC_DROP_LATEST now drops every partition dated
+-- on or after reached_on, the Los Angeles day the plan step last ran (due when it has no run in 30
+-- days); reached_on <= due, so every partition dated on or after due is dropped at every hour.
+-- Measured 2026-10-03 03:53 UTC on this file's own runs / plan_nights / plan_due / plan_clock_copies
+-- statements and c02b expression, comment lines stripped, CURRENT_DATE('America/Los_Angeles') and
+-- CURRENT_DATE() pinned, LOG_PIPELINE_RUNS cut at the pinned instant plus simulated OK rows of
+-- SP_BUILD_NEXT_WEEK_PLAN, FACT_PLAN_NEXT_WEEK's nights cut at 2026-10-02 plus simulated ones; OLD =
+-- the 63192fd text, NEW = this text; jobs t6r3_c02b_{OLD,NEW,LIT}_<instant>_035333, 24 jobs, 220.6
+-- slot-s, no FACT_AMAZON_ADS. C02b OLD / NEW, with NC_DROP_LATEST's last_plan against due:
+--   live, 20:53 Los Angeles 10-02 (LIVE_REAL) ............................ 0 / 0  both 10-01 < 10-02
+--   10:30 Los Angeles 10-02, after the 12:40 New York pass (F) ............ 0 / 0  both 10-01 < 10-02
+--   22:40 Los Angeles 10-02 after a simulated 01:35 New York pass: an OK
+--     row at 05:36 UTC 10-03 and a partition dated 10-03 (B) ............. 1 / 0  OLD 10-02 = due 10-02; NEW 10-01
+--   the same instant, the pass rewriting 10-02 as under v27.159 (C) ...... 0 / 0
+--   00:30 Los Angeles 10-03, before the 04:10 New York pass (E) ........... 1 / 0  OLD 10-02 = due 10-02; NEW 10-01
+--   01:20 Los Angeles 10-03, after a simulated 04:10 New York pass: an OK
+--     row at 08:11 UTC (D) ............................................... 0 / 0  due 10-03; both 10-02
+-- So the old form failed from the 01:35 New York pass until the 04:10 one, past Los Angeles midnight.
+-- WHY reached_on AND NOT due (LIT = NEW with `as_of < due`): LIT also reads 0 at B and E, but the
+-- latest partition below due is below due whatever due is, so LIT cannot see a twin that fires a
+-- day late. A twin whose due lost its reached-on term (due = Los Angeles yesterday only) reads
+-- OLD 1 / NEW 1 / LIT 0 at F and at B (LAG_F, LAG_B: NEW's NC 10-01 = lagged due 10-01).
+-- The whole file, run live after the change at 03:56 UTC 10-03 (20:56 Los Angeles 10-02, before
+-- that night's 01:35 New York pass), job t6r3_ph_full_035632: 22 rows, every one PASS; 67,384.0
+-- slot-s (63,999.7 the V_DAILY_BRIEF read, 3,342.5 the V_ENGINE_HEALTH read, the other 16
+-- statements 41.8 together), 713 MB billed, 115 s.
+--
 -- plan_one_move_per_notgood (V_ENGINE_HEALTH c25) has no twin in this file: C01 only checks that it
 -- is on the board. Its negative controls run the view's OWN c25 text on doctored copies of the plan,
 -- in scripts/bigquery/tests/check_plan_seat_controls.py (readings HM / HS); the results are in
@@ -119,21 +149,31 @@ CREATE TEMP TABLE pipe_fired AS
   GROUP BY 1, 2
   HAVING COUNT(*) = 3 AND COUNTIF(status = 'FAIL') = 3;
 
--- ---- C02b: plan_partition_fresh — LIVE / latest partition dropped / no partition ----
+-- ---- C02b: plan_partition_fresh — LIVE / every partition from the step's last day dropped / no partition ----
 CREATE TEMP TABLE plan_nights AS SELECT DISTINCT as_of FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`;
 -- TWIN of V_ENGINE_HEALTH c31 (plan_clock): due = the later of the Los Angeles day the plan step
--- last ran (OK or FAIL) and yesterday; RED when the latest plan is older than that, or absent
-CREATE TEMP TABLE plan_clock_copies AS
-  SELECT copy, last_plan,
-         GREATEST(COALESCE((SELECT MAX(DATE(started_at, 'America/Los_Angeles')) FROM runs
-                            WHERE procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN'), DATE '1900-01-01'),
+-- last ran (OK or FAIL) and yesterday; RED when the latest plan is older than that, or absent.
+-- reached_on is the first of the two days alone (NULL when the step has no run in 30 days).
+CREATE TEMP TABLE plan_due AS
+  SELECT reached_on,
+         GREATEST(COALESCE(reached_on, DATE '1900-01-01'),
                   DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY)) AS due
+  FROM (SELECT MAX(DATE(started_at, 'America/Los_Angeles')) AS reached_on FROM runs
+        WHERE procedure_name = 'SP_BUILD_NEXT_WEEK_PLAN');
+-- NC_DROP_LATEST drops EVERY partition dated on or after the Los Angeles day the plan step last ran
+-- (due when the step has no run), not only MAX(as_of). reached_on <= due, so every partition dated
+-- on or after due is dropped at every hour. Since v27.160 the 01:35 New York pass (about 22:35 Los
+-- Angeles, day D) writes as_of D+1; dropping only that one left D = due, and the control did not
+-- fire from that pass until the 04:10 New York pass (measured 2026-10-03, see the header).
+CREATE TEMP TABLE plan_clock_copies AS
+  SELECT c.copy, c.last_plan, d.due
   FROM (SELECT 'LIVE' AS copy, MAX(as_of) AS last_plan FROM plan_nights
         UNION ALL
         SELECT 'NC_DROP_LATEST', MAX(as_of) FROM plan_nights
-        WHERE as_of < (SELECT MAX(as_of) FROM plan_nights)
+        WHERE as_of < (SELECT COALESCE(reached_on, due) FROM plan_due)
         UNION ALL
-        SELECT 'NC_EMPTY', MAX(as_of) FROM plan_nights WHERE FALSE);
+        SELECT 'NC_EMPTY', MAX(as_of) FROM plan_nights WHERE FALSE) c
+  CROSS JOIN plan_due d;
 
 -- ---- C06: plan_settle_guard_holds — LIVE / one release nulled / one hold weakened ----
 CREATE TEMP TABLE plb AS
@@ -297,7 +337,7 @@ c02 AS (
 ),
 -- THE ALARM NEVER FIRES: a dropped night reads GREEN and the outage repeats unseen.
 c02b AS (
-  SELECT 'C02b NEGATIVE CONTROL plan_partition_fresh FIRES: latest partition dropped -> RED with >= 1 night missing; no partition -> RED',
+  SELECT 'C02b NEGATIVE CONTROL plan_partition_fresh FIRES: every partition from the Los Angeles day the plan step last ran dropped -> RED with >= 1 night missing; no partition -> RED',
          (SELECT IF(COUNTIF(copy = 'NC_DROP_LATEST' AND last_plan < due AND DATE_DIFF(due, last_plan, DAY) >= 1) = 1, 0, 1)
                  + IF(COUNTIF(copy = 'NC_EMPTY' AND last_plan IS NULL) = 1, 0, 1)
                  + IF(COUNTIF(copy = 'LIVE' AND last_plan >= due) = 1, 0, 1)
