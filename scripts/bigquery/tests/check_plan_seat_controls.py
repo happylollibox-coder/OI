@@ -134,8 +134,21 @@ read T1 1, 0, 1, 0 beyond that form's live reading of 1 (job bqjob_r69ce5b20553e
         submit only; prints JOB=<id>.
     python3 scripts/bigquery/tests/check_plan_seat_controls.py --collect JOB
         poll until DONE, then read the job's last statement (`SELECT * FROM res`) with `bq head -j`.
-    --judge-table reads a snapshot of the judgement instead of the deployed view; use one taken
-    from the same data the latest partition was built on, or C13 reads the difference on LIVE.
+    --judge-table reads a snapshot of the judgement instead of the deployed view. Since v27.171 the
+    plan acceptance reads it only for T1's click goal (a constant the view declares) and this
+    script's PROBE_COST; C13 reads the judgement each night was BUILT ON, which
+    SP_BUILD_NEXT_WEEK_PLAN v27.171 saves with the night:
+        `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`    -> bjsnap (with --build-judge-table PROJECT.DATASET.TABLE,
+                                                      a copy of it), read ONCE
+    LIVE (every check 0) holds on the real table at any hour once a night has been written by v27.171.
+    Until then LIVE reads C13 1 (the latest night's judgement is not on record), F1 1 and F2 1
+    (emptiness) and the script exits 1 whatever the copies read. Before v27.171, C13 read the live
+    view, whose fence moves at Los Angeles midnight while a frozen night (v27.170) stays: from the
+    first frozen night on, LIVE would have read C13 non-zero outside the hours between a night's write
+    and Los Angeles midnight. Run on the real table 2026-10-03 18:47-18:59 UTC after the v27.171
+    deploy (job bqjob_r28ce46c4ceeae428_000001a10317178d_1, 8,986.4 slot-seconds): exit 1 by LIVE
+    alone — 52 readings, non-zero exactly C13 1, F1 1, F2 1 (the 10-03 night was written by v27.169)
+    — and every copy read its expected value (64 assertions, none NOT EXERCISED).
 """
 import json
 import os
@@ -150,6 +163,8 @@ ACC_REQ = os.path.join(ROOT, "scripts", "bigquery", "tests", "PLAN_SEAT_REQUEST_
 HEALTH = os.path.join(ROOT, "scripts", "bigquery", "views", "V_ENGINE_HEALTH.sql")
 VIEW = "`onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`"
 PLAN = "`onyga-482313.OI.FACT_PLAN_NEXT_WEEK`"
+# v27.171 (learning piece 2 Task 3 follow-up 2): C13 reads the judgement each night was built on
+BUILD_J = "`onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`"
 BQ = ["bq", "--project_id=onyga-482313"]
 
 
@@ -159,9 +174,10 @@ def stripped(path):
 
 def acceptance_query(path, needs_view):
     q = stripped(path).strip().rstrip(";")
-    if PLAN not in q or (needs_view and VIEW not in q):
-        raise ValueError(f"{os.path.basename(path)} no longer reads the plan table (and the view) by name")
-    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__")
+    if PLAN not in q or (needs_view and (VIEW not in q or BUILD_J not in q)):
+        raise ValueError(f"{os.path.basename(path)} no longer reads the plan table (and the view and the "
+                         "saved judgement) by name")
+    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__").replace(BUILD_J, "bjsnap")
 
 
 def health_ctes():
@@ -461,7 +477,7 @@ def raw(s):
     return 'r"""' + s + '"""'
 
 
-def build_script(judge_source):
+def build_script(judge_source, build_judge_source=BUILD_J):
     acc_plan = acceptance_query(ACC_PLAN, True)
     acc_req = acceptance_query(ACC_REQ, False)
     pl, c25 = health_ctes()
@@ -484,6 +500,7 @@ def build_script(judge_source):
         f"DECLARE acc_req STRING DEFAULT {raw(acc_req)};",
         f"DECLARE acc_health STRING DEFAULT {raw(acc_health)};",
         f"CREATE TEMP TABLE jsnap AS SELECT * FROM {judge_source};",
+        f"CREATE TEMP TABLE bjsnap AS SELECT * FROM {build_judge_source};",
         "CREATE TEMP TABLE hbase AS SELECT *, ROW_NUMBER() OVER (ORDER BY as_of, plan, campaign_id, keyword_id) AS rn "
         f"FROM {PLAN};",
         PICK,
@@ -530,9 +547,9 @@ def view_tie():
     return 0
 
 
-def submit(judge_source):
+def submit(judge_source, build_judge_source=BUILD_J):
     try:
-        script = build_script(judge_source)
+        script = build_script(judge_source, build_judge_source)
     except Exception as e:  # noqa: BLE001
         print("could not build the script:", e)
         return None, 2
@@ -614,9 +631,12 @@ def main():
     judge_source = VIEW
     if "--judge-table" in sys.argv:
         judge_source = "`" + sys.argv[sys.argv.index("--judge-table") + 1] + "`"
+    build_judge_source = BUILD_J
+    if "--build-judge-table" in sys.argv:
+        build_judge_source = "`" + sys.argv[sys.argv.index("--build-judge-table") + 1] + "`"
     if "--collect" in sys.argv:
         return collect(sys.argv[sys.argv.index("--collect") + 1])
-    job, rc = submit(judge_source)
+    job, rc = submit(judge_source, build_judge_source)
     if rc or "--submit" in sys.argv:
         return rc
     return collect(job)

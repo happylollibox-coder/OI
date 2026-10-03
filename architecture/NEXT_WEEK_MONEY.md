@@ -1233,7 +1233,9 @@ settled record clearing the bar with the window's order floor met).
 
 `SP_BUILD_NEXT_WEEK_PLAN` reads `V_PLAN_WINDOW_JUDGMENT` once and turns the judgement into money.
 It writes one partition of `FACT_PLAN_NEXT_WEEK` per night — **both plans**, `B` live and `A` in
-shadow (P-9) — and nothing else. It is idempotent (it rewrites only today's `as_of`, and since
+shadow (P-9) — and, since v27.171, the judgement that night was built on (`T_PLAN_BUILD_JUDGMENT`,
+the same `as_of`, written right after the plan partition and only with it; acceptance C13 reads it,
+below), and nothing else. It is idempotent (it rewrites only today's `as_of`, and since
 v27.170 only until Los Angeles midnight of it — the freeze of learning piece 2, Ori's ruling D2 (c);
 `architecture/LEARNING.md` §1 "The freeze") and deterministic (every ordering reaches the keyword key). Orchestrator step **20.8c**, after the seat
 ledger at 20.8b, because a continuing occupant's seat number comes from the ledger that step
@@ -1356,8 +1358,18 @@ after the first write, the live rows' `side` is the P-14b guard's "was good" (th
 bootstrap for a keyword the plan has never seen), and `verdict = 'GRACE'` **spends** P-5's one quiet
 window. So the builder writes `GRACE` as `GRACE` and never collapses it into `GOOD`: a builder that
 collapsed it would silently restore the permanent exemption §2 describes. `C13` of the acceptance
-asserts the live plan reproduces the view row for row on `side`, `verdict` and `is_candidate`, which
-is the check that stands over this. Since v27.156 the judge also reads back
+asserts the live plan reproduces the judgement row for row on `side`, `verdict` and `is_candidate`
+(since v27.171 also the window and calendar state), which is the check that stands over this. *Since
+v27.171 (2026-10-03, learning piece 2 Task 3 follow-up 2) C13 reads the judgement the night was
+BUILT ON — `T_PLAN_BUILD_JUDGMENT`, which the builder writes with the night, keyed on its `as_of` and
+`built_at` — not the live view. Under the freeze a night is written on the Los Angeles day before
+its `as_of` and stays, while the view's window fence moves at Los Angeles midnight: the 10-03
+night's 05:36:35 UTC write (window ending `as_of` − 3) and its 16:34:13 UTC rewrite (`as_of` − 2)
+differed in side, verdict or candidacy (the count and its query: `architecture/LEARNING.md` §10
+"Task 3 follow-up 2"), so C13 against the view could pass only between a night's write and that
+midnight. A night written before
+v27.171 has no record and C13 reads 1 on it. The choice and its alternative are in
+`architecture/LEARNING.md` §1 "The freeze".* Since v27.156 the judge also reads back
 `memory_cleared_by_gap` (P-29): a grace or hold memory a GOOD gap window cleared stays cleared the
 next night only because the builder stored that column, so it is copied faithfully too, with
 `hold_strong_day`, `hold_kept_by` and `grace_since` (migration

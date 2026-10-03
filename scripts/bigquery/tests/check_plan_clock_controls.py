@@ -69,9 +69,28 @@ H23S = 1 when its status is RED)
                                   version, and not the deployed builder's).
     NC_F2_STALE_VERSION           one row of the night with builder_version 'v27.169' (a deploy that
                                   forgot to bump builder_version_d): F2 1.
-    Until a night is written after the cutover, LIVE on the real table reads F1 1 and F2 1 by their
-    emptiness terms and the script exits 1; run it on a simulated pass (--plan-table, --jobs-table-id,
-    --judge-table) as the v27.170 deploy did.
+  v27.171 (learning piece 2 Task 3 follow-up 2): C13 compares the latest night with the judgement it
+  was BUILT ON, which SP_BUILD_NEXT_WEEK_PLAN v27.171 saves with the night in T_PLAN_BUILD_JUDGMENT
+  (keyed on as_of and built_at), not with the live view, whose window fence moves at Los Angeles
+  midnight while a frozen night stays. That table is swapped too:
+        `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`    -> bjbase (read ONCE; with --build-judge-table, a
+                                                      copy a simulated pass wrote), doctored per copy
+  The doctored saved row is the one of the latest night's lowest-numbered live row (live_rn); bj_n is
+  the number of saved rows for the latest night's write (NULL: NOT EXERCISED).
+    NC_EMPTY                      also C13 2 (nothing saved for an empty night, and no live row).
+    NC_C13_VERDICT_MOVED          that live row's verdict changed in the plan: C13 1.
+    NC_C13_NOT_SAVED              no judgement saved (a night written before v27.171): C13 1.
+    NC_C13_OTHER_WRITE            the saved judgement stamped one second later (saved by another write
+                                  of the night): C13 1.
+    NC_C13_ROW_NOT_SAVED          that row's saved judgement removed: C13 1.
+    NC_C13_SIDE_DIFFERS / _CANDIDACY_DIFFERS / _WINDOW_DIFFERS (window_from and window_to a day later)
+    / _STATE_DIFFERS              that row's saved side_b, is_candidate, window or calendar_state
+                                  changed: C13 1 each.
+    LIVE on the REAL table reads 0 on every check, at any hour, once a night has been written by
+    v27.171 (its first write records the judgement C13 reads, and F1 / F2 read that night). Until then
+    it reads C13 1 (the latest night's judgement is not on record), F1 1 and F2 1 (emptiness) and the
+    script exits 1; run it on a simulated pass (--plan-table, --jobs-table-id, --judge-table,
+    --build-judge-table) as the v27.170 and v27.171 deploys did.
     A copy's other checks are printed and not asserted. NOT EXERCISED: a copy whose doctored row does
     not exist on the partition (its pick column is NULL) tests nothing; it is reported and the script
     exits 1.
@@ -86,16 +105,22 @@ USAGE (one BigQuery script job of 41 statements, submitted asynchronously and po
 slot-seconds and about 2 minutes on 2026-10-03 02:51 UTC, job bqjob_r28d04f5d6d9da7e1_000001a0ffabd93a_1,
 exit 0 on the live table; 2,407.5 slot-seconds and exit 0 on a simulated 22:40 Los Angeles pass,
 --plan-table OI._tmp_t6_sim_plan --judge-table OI._tmp_t6_sim_judge, job
-bqjob_r3b355b0a9c44aefd_000001a0ffb852de_1)
+bqjob_r3b355b0a9c44aefd_000001a0ffb852de_1; with the eight v27.171 C13 copies, 25 copies, 10,134.5
+slot-seconds and about 6 minutes on 2026-10-03 18:40 UTC, exit 0 on a simulated pass, --plan-table
+OI._tmp_c13_plan --jobs-table-id _tmp_c13_plan --judge-table OI._tmp_c13_judge --build-judge-table
+OI._tmp_c13_bj, job bqjob_r2bf99b8d41e5b9f7_000001a10310eb8f_1)
     python3 scripts/bigquery/tests/check_plan_clock_controls.py [--judge-table PROJECT.DATASET.TABLE]
+        [--plan-table PROJECT.DATASET.TABLE --jobs-table-id TABLE_ID --build-judge-table PROJECT.DATASET.TABLE]
     python3 scripts/bigquery/tests/check_plan_clock_controls.py --submit [--judge-table ...]
     python3 scripts/bigquery/tests/check_plan_clock_controls.py --collect JOB
-    --judge-table reads a snapshot of the judgement instead of the deployed view; use one taken from
-    the same data the latest partition was built on, or C13 reads the difference on LIVE.
+    --judge-table reads a snapshot of the judgement instead of the deployed view. Since v27.171 only
+    T1's click goal (a constant the view declares) reads it; C13 reads the saved judgement below.
     --plan-table reads a copy of the plan table instead of FACT_PLAN_NEXT_WEEK (a simulated pass
     written to a copy, with --judge-table the judgement that pass read).
     --jobs-table-id reads the write record of that copy (a table id in OI, e.g. _tmp_t3_plan) instead
     of FACT_PLAN_NEXT_WEEK's (v27.170).
+    --build-judge-table reads a copy of T_PLAN_BUILD_JUDGMENT (the judgement a simulated pass saved with
+    the night it wrote to --plan-table) instead of the real one (v27.171).
 """
 import json
 import os
@@ -110,6 +135,8 @@ HEALTH = os.path.join(ROOT, "scripts", "bigquery", "views", "V_ENGINE_HEALTH.sql
 VIEW = "`onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`"
 PLAN = "`onyga-482313.OI.FACT_PLAN_NEXT_WEEK`"
 JOBS = "`region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT"
+# v27.171 (Task 3 follow-up 2): C13 reads the judgement each night was built on, which the builder saves
+BUILD_J = "`onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`"
 BQ = ["bq", "--project_id=onyga-482313"]
 
 
@@ -119,13 +146,14 @@ def stripped(path):
 
 def acceptance_query():
     q = stripped(ACC_PLAN).strip().rstrip(";")
-    if PLAN not in q or VIEW not in q or JOBS not in q:
-        raise ValueError("the acceptance no longer reads the plan table, the view and the job record by name")
+    if PLAN not in q or VIEW not in q or JOBS not in q or BUILD_J not in q:
+        raise ValueError("the acceptance no longer reads the plan table, the view, the job record and the "
+                         "saved judgement by name")
     if "__K1_CUTOVER__" in q:
         raise ValueError("the acceptance still carries the K1 cutover placeholder")
     if "__F_CUTOVER__" in q:
         raise ValueError("the acceptance still carries the F1/F2 cutover placeholder")
-    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__").replace(JOBS, "__JJ__")
+    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__").replace(JOBS, "__JJ__").replace(BUILD_J, "__BJ__")
 
 
 def f_cutover():
@@ -201,10 +229,48 @@ JCOPIES = {
     "NC_F1_WRITE_NOT_ON_RECORD": f"{JLIVE} WHERE jrn != (SELECT f_ins_jrn FROM pick)",
 }
 
+# v27.171 (Task 3 follow-up 2): C13 reads the judgement the latest night was built on, saved by the builder
+# in T_PLAN_BUILD_JUDGMENT and keyed on (as_of, built_at). bjbase is that table (or --build-judge-table's
+# copy), read ONCE; a copy names its own doctored record in BJCOPIES, every other copy reads bjbase as it is.
+BJLIVE = "SELECT * FROM bjbase"
+# the saved row of the live row C13's copies doctor (the latest night's lowest-numbered live row)
+BJ_ROW = ("(as_of = (SELECT mx FROM pick) AND campaign_id = (SELECT campaign_id FROM hbase WHERE rn = (SELECT live_rn FROM pick)) "
+          "AND keyword_id = (SELECT keyword_id FROM hbase WHERE rn = (SELECT live_rn FROM pick)))")
+
+
+def bj_row(**repl):
+    sets = ", ".join(f"IF({BJ_ROW}, {v}, {k}) AS {k}" for k, v in repl.items())
+    return f"SELECT * REPLACE ({sets}) FROM bjbase"
+
+
+BJCOPIES = {
+    "NC_C13_NOT_SAVED": f"{BJLIVE} WHERE FALSE",
+    "NC_C13_OTHER_WRITE": "SELECT * REPLACE (TIMESTAMP_ADD(built_at, INTERVAL 1 SECOND) AS built_at) FROM bjbase",
+    "NC_C13_ROW_NOT_SAVED": f"{BJLIVE} WHERE NOT {BJ_ROW}",
+    "NC_C13_SIDE_DIFFERS": bj_row(side_b="IF(side_b = 'GOOD', 'NOT_GOOD', 'GOOD')"),
+    "NC_C13_CANDIDACY_DIFFERS": bj_row(is_candidate="NOT is_candidate"),
+    "NC_C13_WINDOW_DIFFERS": bj_row(window_from="DATE_ADD(window_from, INTERVAL 1 DAY)",
+                                    window_to="DATE_ADD(window_to, INTERVAL 1 DAY)"),
+    "NC_C13_STATE_DIFFERS": bj_row(calendar_state="CONCAT(calendar_state, '_DOCTORED')"),
+}
+BJ_NEEDS = ["bj_n", "live_rn"]
+
 # name -> (copy SQL, [(check, expected)], pick columns the copy needs: NULL = NOT EXERCISED)
 COPIES = {
     "LIVE": (LIVE, None, []),
-    "NC_EMPTY": (f"{LIVE} WHERE FALSE", [("K1", 1), ("K2", 1), ("K3", 1), ("H23S", 1), ("F1", 1), ("F2", 1)], []),
+    "NC_EMPTY": (f"{LIVE} WHERE FALSE", [("K1", 1), ("K2", 1), ("K3", 1), ("H23S", 1), ("F1", 1), ("F2", 1),
+                                         ("C13", 2)], []),
+    # v27.171 (Task 3 follow-up 2): C13 against the judgement the night was built on. The plan's side
+    # of the comparison (one live row's verdict moved), the record's presence (none saved; one saved by
+    # another write of the night; one row missing) and the record's side of each compared column.
+    "NC_C13_VERDICT_MOVED": (at("live_rn", verdict="CONCAT(verdict, '_DOCTORED')"), [("C13", 1)], BJ_NEEDS),
+    "NC_C13_NOT_SAVED": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_OTHER_WRITE": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_ROW_NOT_SAVED": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_SIDE_DIFFERS": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_CANDIDACY_DIFFERS": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_WINDOW_DIFFERS": (LIVE, [("C13", 1)], BJ_NEEDS),
+    "NC_C13_STATE_DIFFERS": (LIVE, [("C13", 1)], BJ_NEEDS),
     # v27.170 (D2 (c)): the freeze. LIVE (on a night written since the cutover by its first write,
     # however late) is the late-first-write case and reads F1 0, F2 0.
     "NC_F1_SECOND_WRITE_AFTER_MIDNIGHT": (LIVE, [("F1", 1)], F_NEEDS),
@@ -253,7 +319,12 @@ SELECT
   -- v27.170: the latest night written since the F cutover, and its write's INSERT and DELETE
   (SELECT f_as_of FROM fpick) AS f_as_of, (SELECT f_built_at FROM fpick) AS f_built_at,
   (SELECT f_n FROM fpick) AS f_n, (SELECT f_rn FROM fpick) AS f_rn,
-  (SELECT f_ins_jrn FROM fpick) AS f_ins_jrn, (SELECT f_del_jrn FROM fpick) AS f_del_jrn;
+  (SELECT f_ins_jrn FROM fpick) AS f_ins_jrn, (SELECT f_del_jrn FROM fpick) AS f_del_jrn,
+  -- v27.171: the saved judgement's rows for the latest night's write (NULL when none: C13's copies
+  -- would test nothing)
+  (SELECT NULLIF(COUNT(*), 0) FROM bjbase
+   WHERE as_of = (SELECT MAX(as_of) FROM hbase)
+     AND built_at = (SELECT MAX(built_at) FROM hbase WHERE as_of = (SELECT MAX(as_of) FROM hbase))) AS bj_n;
 """
 
 # v27.170: the write record F1 reads, as the acceptance's f_dml reads it (plan table id swappable for a
@@ -296,7 +367,7 @@ def raw(s):
     return 'r"""' + s + '"""'
 
 
-def build_script(judge_source, plan_source=PLAN, jobs_table_id="FACT_PLAN_NEXT_WEEK"):
+def build_script(judge_source, plan_source=PLAN, jobs_table_id="FACT_PLAN_NEXT_WEEK", build_judge_source=BUILD_J):
     acc_plan = acceptance_query()
     cut = f_cutover()
     pl, c23 = health_ctes()
@@ -315,17 +386,20 @@ def build_script(judge_source, plan_source=PLAN, jobs_table_id="FACT_PLAN_NEXT_W
         "CREATE TEMP TABLE hbase AS SELECT *, ROW_NUMBER() OVER (ORDER BY as_of, plan, campaign_id, keyword_id) AS rn "
         f"FROM {plan_source};",
         JBASE.format(jobs=JOBS, cut=cut, table_id=jobs_table_id),
+        f"CREATE TEMP TABLE bjbase AS SELECT * FROM {build_judge_source};",
         FPICK.format(cut=cut),
         PICK,
         "CREATE TEMP TABLE res (copy STRING, check_name STRING, violations INT64, detail STRING);",
         "INSERT INTO res SELECT 'PICK', 'PICK', 0, TO_JSON_STRING(p) FROM pick p;",
     ]
     for i, (name, (hsql, _, _)) in enumerate(COPIES.items()):
-        hh, jj = f"hh{i}", f"jj{i}"
+        hh, jj, bj = f"hh{i}", f"jj{i}", f"bj{i}"
         parts.append(f"CREATE TEMP TABLE {hh} AS {hsql};")
         parts.append(f"CREATE TEMP TABLE {jj} AS {JCOPIES.get(name, JLIVE)};")
+        parts.append(f"CREATE TEMP TABLE {bj} AS {BJCOPIES.get(name, BJLIVE)};")
         parts.append("EXECUTE IMMEDIATE FORMAT(\"INSERT INTO res SELECT '%s', check_name, violations, NULL "
-                     f"FROM (%s)\", '{name}', REPLACE(REPLACE(acc_plan, '__HH__', '{hh}'), '__JJ__', '{jj}'));")
+                     f"FROM (%s)\", '{name}', REPLACE(REPLACE(REPLACE(acc_plan, '__HH__', '{hh}'), '__JJ__', '{jj}'), "
+                     f"'__BJ__', '{bj}'));")
         parts.append("EXECUTE IMMEDIATE FORMAT(\"INSERT INTO res SELECT '%s', check_name, violations, detail "
                      f"FROM (%s)\", '{name}', REPLACE(acc_health, '__HH__', '{hh}'));")
     parts.append("SELECT copy, check_name, violations, detail FROM res ORDER BY copy, check_name;")
@@ -354,9 +428,9 @@ def view_tie():
     return 0
 
 
-def submit(judge_source, plan_source=PLAN, jobs_table_id="FACT_PLAN_NEXT_WEEK"):
+def submit(judge_source, plan_source=PLAN, jobs_table_id="FACT_PLAN_NEXT_WEEK", build_judge_source=BUILD_J):
     try:
-        script = build_script(judge_source, plan_source, jobs_table_id)
+        script = build_script(judge_source, plan_source, jobs_table_id, build_judge_source)
     except Exception as e:  # noqa: BLE001
         print("could not build the script:", e)
         return None, (1 if "placeholder" in str(e) else 2)
@@ -445,9 +519,12 @@ def main():
     jobs_table_id = "FACT_PLAN_NEXT_WEEK"
     if "--jobs-table-id" in sys.argv:
         jobs_table_id = sys.argv[sys.argv.index("--jobs-table-id") + 1]
+    build_judge_source = BUILD_J
+    if "--build-judge-table" in sys.argv:
+        build_judge_source = "`" + sys.argv[sys.argv.index("--build-judge-table") + 1] + "`"
     if "--collect" in sys.argv:
         return collect(sys.argv[sys.argv.index("--collect") + 1])
-    job, rc = submit(judge_source, plan_source, jobs_table_id)
+    job, rc = submit(judge_source, plan_source, jobs_table_id, build_judge_source)
     if rc or "--submit" in sys.argv:
         return rc
     return collect(job)

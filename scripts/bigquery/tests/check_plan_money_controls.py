@@ -63,8 +63,21 @@ EXIT CODES
 
 USAGE
     python3 scripts/bigquery/tests/check_plan_money_controls.py [--judge-table PROJECT.DATASET.TABLE]
-    --judge-table reads a snapshot of the judgement instead of the deployed view; use one taken
-    from the same data the latest partition was built on, or C13 reads the difference on LIVE.
+        [--build-judge-table PROJECT.DATASET.TABLE]
+    --judge-table reads a snapshot of the judgement instead of the deployed view. Since v27.171 the
+    acceptance reads it only for T1's click goal (a constant the view declares); C13 reads the
+    judgement each night was BUILT ON, which SP_BUILD_NEXT_WEEK_PLAN v27.171 saves with the night:
+        `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`    -> bjsnap (with --build-judge-table, a copy of it)
+    LIVE (every check 0) holds on the real table at any hour once a night has been written by v27.171.
+    Until then LIVE reads C13 1 (the latest night's judgement is not on record), F1 1 and F2 1
+    (emptiness) and the script exits 1 whatever the copies read. Before v27.171, C13 read the live
+    view, whose fence moves at Los Angeles midnight while a frozen night (v27.170) stays. Run on the
+    real table 2026-10-03 18:47-19:02 UTC after the v27.171 deploy (job
+    bqjob_r114f15b1e643729a_000001a103173577_1, 949,116.0 slot-seconds, 921.9 s, 2,296,381,440 bytes):
+    exit 1 by LIVE alone — 39 readings, non-zero exactly C13 1, F1 1, F2 1 (the 10-03 night was
+    written by v27.169) — and every copy read its expected value (28 assertions). The 2026-10-03
+    11:52 UTC run of this script cost 120,513.8 slot-seconds; where the increase comes from was not
+    measured.
 """
 import json
 import os
@@ -76,14 +89,17 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 ACC_FILE = os.path.join(ROOT, "scripts", "bigquery", "tests", "FACT_PLAN_NEXT_WEEK_acceptance.sql")
 VIEW = "`onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`"
 PLAN = "`onyga-482313.OI.FACT_PLAN_NEXT_WEEK`"
+# v27.171 (learning piece 2 Task 3 follow-up 2): C13 reads the judgement each night was built on
+BUILD_J = "`onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`"
 
 
 def acceptance_query():
     lines = [l for l in open(ACC_FILE).read().split("\n") if not l.startswith("--")]
     q = "\n".join(lines).strip().rstrip(";")
-    if VIEW not in q or PLAN not in q:
-        raise ValueError("the acceptance file no longer reads the plan table and the judgement view by name")
-    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__")
+    if VIEW not in q or PLAN not in q or BUILD_J not in q:
+        raise ValueError("the acceptance file no longer reads the plan table, the judgement view and the "
+                         "saved judgement by name")
+    return q.replace(VIEW, "jsnap").replace(PLAN, "__HH__").replace(BUILD_J, "bjsnap")
 
 
 LIVE = "SELECT * EXCEPT (rn) FROM hbase"
@@ -177,11 +193,12 @@ COPIES = {
 }
 
 
-def build_script(judge_source):
+def build_script(judge_source, build_judge_source=BUILD_J):
     acc = acceptance_query()
     latest = "(SELECT MAX(as_of) FROM hbase)"
     parts = [
         f"CREATE TEMP TABLE jsnap AS SELECT * FROM {judge_source};",
+        f"CREATE TEMP TABLE bjsnap AS SELECT * FROM {build_judge_source};",
         # the latest two partitions: the acceptance reads the latest, and C23 the one before it
         "CREATE TEMP TABLE hbase AS SELECT *, ROW_NUMBER() OVER (ORDER BY as_of, plan, campaign_id, keyword_id) AS rn "
         f"FROM {PLAN} WHERE as_of >= (SELECT MAX(as_of) FROM {PLAN} WHERE as_of < (SELECT MAX(as_of) FROM {PLAN}));",
@@ -242,8 +259,11 @@ def main():
     judge_source = VIEW
     if "--judge-table" in sys.argv:
         judge_source = "`" + sys.argv[sys.argv.index("--judge-table") + 1] + "`"
+    build_judge_source = BUILD_J
+    if "--build-judge-table" in sys.argv:
+        build_judge_source = "`" + sys.argv[sys.argv.index("--build-judge-table") + 1] + "`"
     try:
-        script = build_script(judge_source)
+        script = build_script(judge_source, build_judge_source)
     except Exception as e:  # noqa: BLE001
         print("could not build the script:", e)
         return 2

@@ -1,7 +1,7 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.170 (2026-10-03). The spec's §9 guarantees, read on the
--- latest as_of partition (F1 / F2: every night written since the v27.170 deploy). EVERY ROW MUST
--- READ PASS.
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.171 (2026-10-03). The spec's §9 guarantees, read on the
+-- latest as_of partition (F1 / F2: every night written since the v27.170 deploy; C13: against the
+-- judgement that night was built on, T_PLAN_BUILD_JUDGMENT, v27.171). EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
 -- P-12, P-14. Object: scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql.
@@ -337,12 +337,56 @@
 -- emptiness (job t3_acc_live2_1791050257, 682.4 slot-seconds, 330,785,449 bytes); the controls, same
 -- arguments, exit 0, every reading above unchanged (job bqjob_r60aad232f3626a83_000001a102ea38f4_1,
 -- 6,722.0 slot-seconds, 678,044,832 bytes).
+--
+-- v27.171 (2026-10-03, learning piece 2 Task 3 follow-up 2). C13 RESTATED: it compares the latest
+-- night with the judgement that night was BUILT ON (T_PLAN_BUILD_JUDGMENT, written by
+-- SP_BUILD_NEXT_WEEK_PLAN v27.171 with the night, keyed on as_of and built_at), not with the live
+-- V_PLAN_WINDOW_JUDGMENT, and adds the window and the calendar state to the comparison (see C13).
+-- The v27.170 form on the real 10-03 night, against the view at 18:32 UTC: the 05:36:35 UTC write
+-- (stored until 08:12, BigQuery time travel) 47, the 16:34:13 UTC write 0 (job
+-- c13fix_snap_1791052309, 927.7 slot-seconds, 440,401,920 bytes).
+-- SIMULATED 05:00 UTC PASS: a copy of the v27.171 builder wrote the 10-03 night to the copy
+-- OI._tmp_c13_plan_old and its judgement to OI._tmp_c13_bj_old, reading OI._tmp_c13_judge_old, the
+-- deployed view's text with its Los Angeles date set to 2026-10-02 (window 09-28 .. 09-30; it
+-- differs from the stored 05:36:35 write on 3 of 356 live rows, data restated since). On that night
+-- the v27.170 form, against the live view (09-29 .. 10-01), reads C13 44 (job
+-- c13fix_drift_old_1791052680, 2,196.0 slot-seconds); this form reads C13 0 (job
+-- c13fix_drift_new_1791052680, 2,697.2 slot-seconds). Both also read C01 712 and F1 1 there, from the
+-- simulation (built_at is 11:34 Los Angeles on 10-03, a window fenced for 10-02; the copy's write is
+-- not in FACT_PLAN_NEXT_WEEK's job record).
+-- RUN 2026-10-03 18:40 UTC on the live table: 36 rows PASS, C13 1 (the 10-03 night was written at
+-- 16:34:13 UTC by v27.169 and no judgement is on record for it), F1 1 and F2 1 (emptiness) — job
+-- c13fix_acc_live_1791052823, 2,895.9 slot-seconds, 241,172,480 bytes. The three read 0 only once a
+-- night is written by v27.171 (the first is 10-04, at the 05:00 UTC pass of 2026-10-04); not yet run.
+-- NEGATIVE CONTROLS, run 2026-10-03 18:40-18:46 UTC by check_plan_clock_controls.py --plan-table
+-- onyga-482313.OI._tmp_c13_plan --jobs-table-id _tmp_c13_plan --judge-table
+-- onyga-482313.OI._tmp_c13_judge --build-judge-table onyga-482313.OI._tmp_c13_bj: a simulated pass —
+-- the copy's 10-03 night removed and written again at 18:38:55 UTC (its first write, after the
+-- v27.171 deploy at 18:37:21) by a copy of the deployed v27.171 text, the judgement from the snapshot
+-- OI._tmp_c13_judge (18:32 UTC); exit 0, all 25 copies exercised (job
+-- bqjob_r2bf99b8d41e5b9f7_000001a10310eb8f_1, 10,134.5 slot-seconds, 3,853,516,800 bytes):
+--   LIVE: 41 readings 0.  NC_EMPTY: C13 2 (nothing saved for an empty night, and no live row).
+--   NC_C13_VERDICT_MOVED (one live row's verdict changed in the plan) 1; NC_C13_NOT_SAVED (no record)
+--   1; NC_C13_OTHER_WRITE (the record stamped one second later) 1; NC_C13_ROW_NOT_SAVED 1;
+--   NC_C13_SIDE_DIFFERS 1; NC_C13_CANDIDACY_DIFFERS 1; NC_C13_WINDOW_DIFFERS 1; NC_C13_STATE_DIFFERS 1
+--   — no other check moved on any of them. The other copies read as before; C13 now also moves on
+--   the copies that re-key or restamp the night (1 on HC_F1_REWRITE_BEFORE_MIDNIGHT,
+--   NC_F1_REWRITE_AT_MIDNIGHT and NC_K1_NOT_NY_DATE: no record for the new key) or change its window
+--   or state (NC_C01_WINDOW_SHIFTED 1, NC_K2_TWO_STATES 1, NC_K2_REWRITTEN_WHOLE 356); unasserted,
+--   printed. HC_F1_REWRITE_BEFORE_MIDNIGHT and NC_F1_REWRITE_AT_MIDNIGHT also read T1 13, as on the
+--   v27.170 run (unasserted; the cause was not investigated here).
+-- check_plan_seat_controls.py and check_plan_money_controls.py on the real table after the deploy:
+-- exit 1 by LIVE alone (non-zero exactly C13 1, F1 1, F2 1), every copy at its expected value (jobs
+-- bqjob_r28ce46c4ceeae428_000001a10317178d_1, 8,986.4 slot-seconds; bqjob_r114f15b1e643729a_000001a103173577_1,
+-- 949,116.0 slot-seconds).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
   WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
 ),
 b AS (SELECT * FROM p WHERE is_live_plan),
+-- the live judgement view: since v27.171 only T1's click goal reads it (inc_goal); C13 reads the
+-- judgement the night was built on (js, below)
 j AS (SELECT * FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`),
 led AS (
   SELECT family, CAST(campaign_id AS STRING) AS campaign_id,
@@ -530,13 +574,38 @@ c12 AS (
        + (SELECT COUNTIF(planned_bid IS NOT NULL OR seat_cost_per_day IS NOT NULL)
           FROM p WHERE side = 'GOOD')
 ),
+-- C13 RESTATED v27.171 (2026-10-03, learning piece 2 Task 3 follow-up 2): the live plan reproduces
+-- the judgement ITS NIGHT WAS BUILT ON, read from T_PLAN_BUILD_JUDGMENT — the builder's own read of
+-- the view, saved with the night and keyed on its as_of and built_at — not the live view. Under the
+-- freeze (v27.170) a night is written on the Los Angeles day before its as_of and stays, while the
+-- view's fence (window_to = LEAST(watermark - 1, today_la - 2)) moves at Los Angeles midnight: on the
+-- 2026-10-03 night the 05:36:35 UTC write (window 09-28 .. 09-30) and the 16:34:13 UTC write
+-- (09-29 .. 10-01) differ on 47 of 356 live rows in side, verdict or is_candidate, with the same 356
+-- keys (BigQuery time travel, job c13fix_tt47b_1791052048), so the v27.170 form, read against the
+-- view, could pass only between a night's write and Los Angeles midnight. The comparison now also
+-- covers the window and calendar state, and uses IS DISTINCT FROM (a NULL on one side counts).
+-- Terms: the row-for-row difference (read only when the night's judgement is on record), 1 when it
+-- is not on record (a night written before v27.171, or a saved judgement of another write: its
+-- built_at differs), and 1 when the live plan is empty.
+js AS (
+  SELECT s.*
+  FROM `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT` s
+  JOIN (SELECT as_of, MAX(built_at) AS built_at FROM p GROUP BY as_of) n
+    ON s.as_of = n.as_of AND s.built_at = n.built_at
+),
 c13 AS (
-  SELECT 'C13 the live plan reproduces the judgement view row for row: side, verdict, candidacy',
-         (SELECT COUNT(*) FROM b FULL OUTER JOIN j
-            ON j.campaign_id = b.campaign_id AND j.keyword_id = b.keyword_id
-          WHERE b.campaign_id IS NULL OR j.campaign_id IS NULL
-             OR b.side != j.side_b OR b.verdict != j.verdict
-             OR b.is_candidate != j.is_candidate)
+  SELECT 'C13 the live plan reproduces the judgement its night was built on, row for row: side, verdict, candidacy, window, calendar state',
+         (SELECT COUNT(*) FROM b FULL OUTER JOIN js s
+            ON s.campaign_id = b.campaign_id AND s.keyword_id = b.keyword_id
+          WHERE EXISTS (SELECT 1 FROM js)
+            AND (b.campaign_id IS NULL OR s.campaign_id IS NULL
+                 OR b.side IS DISTINCT FROM s.side_b OR b.verdict IS DISTINCT FROM s.verdict
+                 OR b.is_candidate IS DISTINCT FROM s.is_candidate
+                 OR b.window_from IS DISTINCT FROM s.window_from
+                 OR b.window_to IS DISTINCT FROM s.window_to
+                 OR b.calendar_state IS DISTINCT FROM s.calendar_state))
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM js)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM b)
 ),
 -- C14 EXTENDED v27.159 (P-25): a seat's move is REPRICE / HOLD_AT_PRICE, or OPEN_PROBE on a probe;
 -- a queue position's is PARK / HOLD_AT_PARK / PAUSE, or NONE on an unseated probe; a probe that is

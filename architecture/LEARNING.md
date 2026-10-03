@@ -7,7 +7,8 @@ rulings D1–D6 and the evidence behind them in §14)
 the ledger)
 **Status:** Task 1 (2026-10-03) wrote this SOP before any code. Task 2 (2026-10-03) seeded the
 LEARNING settings (§3; §10 "Task 2"). Task 3 (2026-10-03) deployed the freeze and `builder_version`
-(§1 "The freeze"; §10 "Task 3"). Nothing else below is deployed yet: the ledger is Task 4, the
+(§1 "The freeze"; §10 "Task 3"), and its follow-up 2 the judgement each night was built on, which C13
+reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Nothing else below is deployed yet: the ledger is Task 4, the
 grader and the report card Task 5, the schedule and the health checks Task 6, the contract suite
 Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
 sentence here that its build proves wrong.
@@ -101,12 +102,37 @@ deployed by Task 3).**
   later passes, a Los Angeles day on, would have judged a window ending two days before. A night now
   stands on the older window — one day less evidence — and the later passes' restatement of the
   window's days is not taken in. The measured windows of one night are in §10 "Task 3".
+- **The night keeps the judgement it was built on (v27.171, Task 3 follow-up 2).** Acceptance C13
+  asserts that the live plan reproduces the judgement row for row. Until v27.170 it compared the
+  latest night with the *live* `V_PLAN_WINDOW_JUDGMENT`, which held while later passes rewrote the
+  night on the view's current window. Under the freeze it cannot: the night is built on the Los
+  Angeles day before its `as_of` and stays, while the view's fence moves at Los Angeles midnight, so
+  C13 against the view could pass only between a night's write and that midnight, and every harness
+  that requires a clean LIVE run would fail the rest of the day. **Choice: option (a).** The builder
+  writes `T_PLAN_BUILD_JUDGMENT` (`scripts/bigquery/tables/T_PLAN_BUILD_JUDGMENT.sql`) right after
+  the plan partition — one row per row of its one read of the view, stamped with the night's `as_of`
+  and `built_at`, with the columns C13 compares (`side_b`, `verdict`, `is_candidate`, `window_from`,
+  `window_to`, `calendar_state`) — past both freeze readings and R11's guard, so a frozen, refused or
+  failed pass writes neither table, and a rewrite before midnight replaces both. C13 reads that record
+  for the latest night's `as_of` and `built_at`: the row-for-row difference, plus 1 when the night's
+  judgement is not on record (a night written before v27.171, or a record of another write), plus 1
+  when the live plan is empty. It no longer reads the view, so the hour it runs does not matter.
+  Option (b) — run C13 only when the view's window and calendar state equal the night's, and report
+  "not comparable" otherwise — was not taken: under the freeze the two are equal only between the
+  05:00 UTC pass's write and Los Angeles midnight (07:00 UTC under daylight time), so C13 would test
+  something for at most two hours a day, and an equal window still reads data restated after the
+  build (measured in §10 "Task 3 follow-up 2"). T1's click goal is the only
+  term that still reads the live view (`click_goal_day`, a constant the view declares).
 - **Checked by** `FACT_PLAN_NEXT_WEEK_acceptance.sql` F1 (no night written since the deploy was
   rewritten after Los Angeles midnight of its `as_of`; whether a write was the night's first is read
   from its own `DELETE` in `INFORMATION_SCHEMA.JOBS_BY_PROJECT` — a first write removes nothing) and
   F2 (every row written since the deploy carries a `builder_version`, the deployed builder's on rows
-  written since its deploy), each with an emptiness term; controls in
-  `scripts/bigquery/tests/check_plan_clock_controls.py`.
+  written since its deploy), each with an emptiness term, and C13 (above); controls in
+  `scripts/bigquery/tests/check_plan_clock_controls.py`. A LIVE run of the suite or of its three
+  harnesses (`check_plan_clock_controls.py`, `check_plan_seat_controls.py`,
+  `check_plan_money_controls.py`) reads every check 0 at any hour once a night has been written by
+  v27.171; before that it reads C13 1, F1 1 and F2 1 (not on record / emptiness). The harnesses take
+  `--build-judge-table` to read a copy of the record a simulated pass wrote.
 
 **Why a ledger row never changes after its night is final.** The view reads only stored columns of
 a night that is no longer rewritten, the settings history (append-only, `FACT_THRESHOLD_HISTORY`)
@@ -397,9 +423,11 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    missing keys; never deletes or updates; its last statement is `CALL SP_SNAPSHOT_THRESHOLDS()`, so
    the history holds them), then `scripts/bigquery/tests/LEARNING_SETTINGS_acceptance.sql`.
 2. **The freeze** (Task 3): `scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql` (the
-   column), then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the guard and `builder_version`), then
-   `FACT_PLAN_NEXT_WEEK_acceptance.sql` (F1 and F2 read their emptiness terms until the first night
-   written after the deploy) and `check_plan_clock_controls.py` on a simulated pass.
+   column) and `scripts/bigquery/tables/T_PLAN_BUILD_JUDGMENT.sql` (the judgement each night was built
+   on, v27.171), then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the guard, `builder_version` and the saved
+   judgement), then `FACT_PLAN_NEXT_WEEK_acceptance.sql` (C13 reads "not on record" and F1 and F2
+   their emptiness terms until the first night written after the deploy) and
+   `check_plan_clock_controls.py` on a simulated pass.
 3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`.
 4. **The grader** (Task 5): `tables/FACT_PREDICTION_GRADE.sql`, `tables/T_PREDICTION_SCORECARD.sql`,
    then `procedures/SP_GRADE_PREDICTIONS.sql`, then its first CALL (the August nights grade).
@@ -716,3 +744,100 @@ written in the last 170 days (its emptiness term too). Re-run after the change: 
 17:57 UTC 37 PASS, F1 1 and F2 1 by emptiness (`t3_acc_live2_1791050257`, 682.4 slot-seconds); the
 controls with the same arguments exit 0, every reading above unchanged
 (`bqjob_r60aad232f3626a83_000001a102ea38f4_1`, 6,722.0 slot-seconds, 678,044,832 bytes).
+
+### Task 3 follow-up 2 — C13 reads the judgement the night was built on (2026-10-03)
+
+**The defect (review of 5528c1e / 9b9b8f1).** C13 compared the latest night with the *live*
+`V_PLAN_WINDOW_JUDGMENT`. Under the freeze a night is written by the 05:00 UTC pass on a window ending
+`as_of` − 3 and stays, while the view's fence moves to `as_of` − 2 at Los Angeles midnight (07:00 UTC
+under daylight time). Measured on the 10-03 night: the 05:36:35 UTC write and the 16:34:13 UTC write
+differ on 47 of 356 live rows in side, verdict or is_candidate (side 11, verdict 45, candidacy 16;
+the same 356 keys; BigQuery time travel, job `c13fix_tt47b_1791052048`; the query below gives 47 too,
+job `c13fix_tt47c_1791053485`), and C13's v27.170 text
+against the view at 18:32 UTC reads 47 on the 05:36:35 write and 0 on the 16:34:13 write (job
+`c13fix_snap_1791052309`, 927.7 slot-seconds). So from the first frozen night C13 could pass only
+between a night's write and Los Angeles midnight, and the three harnesses that require a clean LIVE
+run would exit 1 the rest of the day.
+
+```sql
+-- the two writes of the 10-03 night, live rows (time travel reaches back 7 days)
+CREATE TEMP TABLE a AS SELECT campaign_id, keyword_id, side, verdict, is_candidate
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` FOR SYSTEM_TIME AS OF TIMESTAMP '2026-10-03 05:40:00+00'
+  WHERE as_of = '2026-10-03' AND is_live_plan;
+CREATE TEMP TABLE z AS SELECT campaign_id, keyword_id, side, verdict, is_candidate
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` FOR SYSTEM_TIME AS OF TIMESTAMP '2026-10-03 17:20:00+00'
+  WHERE as_of = '2026-10-03' AND is_live_plan;
+SELECT (SELECT COUNT(*) FROM a) AS rows_0536, (SELECT COUNT(*) FROM z) AS rows_1634,
+       (SELECT COUNTIF(a.campaign_id IS NULL OR z.campaign_id IS NULL)
+          FROM a FULL OUTER JOIN z USING (campaign_id, keyword_id)) AS keys_differ,
+       (SELECT COUNTIF(a.side IS DISTINCT FROM z.side OR a.verdict IS DISTINCT FROM z.verdict
+                       OR a.is_candidate IS DISTINCT FROM z.is_candidate)
+          FROM a JOIN z USING (campaign_id, keyword_id)) AS rows_differ;
+```
+
+**The fix: option (a)** (§1 "The freeze" gives the choice and why (b) was not taken).
+`scripts/bigquery/tables/T_PLAN_BUILD_JUDGMENT.sql` created 18:31:02 UTC (job `c13fix_ddl_1791052260`).
+`SP_BUILD_NEXT_WEEK_PLAN` v27.171 deployed 18:37:21 UTC (`INFORMATION_SCHEMA.ROUTINES.last_altered`;
+job `c13fix_deploy_builder_1791052638`), comment lines stripped: the deployed `routine_definition`
+equals the file's `BEGIN … END` (63,105 characters) and its description equals the file's (10,864
+characters, opening `v27.171`). After writing the plan partition it writes `T_PLAN_BUILD_JUDGMENT`'s
+partition for the same `as_of` from its own `j`, stamped with the night's `built_at`; `builder_version_d`
+is `v27.171`. C13 reads that record (the night's `as_of` and `built_at`) and also compares the window
+and the calendar state. `config.yaml`: `T_PLAN_BUILD_JUDGMENT` (tables), `SP_BUILD_NEXT_WEEK_PLAN`
+(description, the table in its dependencies). The three harnesses swap the record like the plan table
+(`--build-judge-table` reads a copy). No real build ran: the 10-03 night stays as written at 16:34:13
+UTC by v27.169, with no record.
+
+**Proved on copies of the builder** (no real write). Judgement snapshot `OI._tmp_c13_judge` (18:32 UTC,
+window 09-29 … 10-01) and `OI._tmp_c13_judge_old` — the deployed view's text with its Los Angeles
+date set to 2026-10-02, the date the 05:00 UTC pass reads (window 09-28 … 09-30; it differs from the
+stored 05:36:35 write on 3 of 356 live rows, data restated since) — both in job
+`c13fix_snap_1791052309`. Plan copies of `FACT_PLAN_NEXT_WEEK` with the 10-03 night removed; record
+copies created `LIKE T_PLAN_BUILD_JUDGMENT`; procedure copies are the file (or HEAD's v27.170 file)
+with comment lines stripped and only the procedure, plan table, view and record names swapped. Scratch
+tables expire 2026-10-10.
+
+| case | what happened | job, slot-seconds |
+|---|---|---|
+| v27.171 copy, first write (snapshot) | plan copy: `DELETE` 0, `INSERT` 712, `builder_version` v27.171; record: `DELETE` 0, `INSERT` 356 (356 keys, `as_of` 10-03, `built_at` equal to the night's to the microsecond); the record equals the snapshot's 356 rows on all 8 saved columns both ways | `c13fix_call171_1791052411`, 599.7 |
+| v27.170 copy, same snapshot | 712 rows; all columns but `built_at` and `builder_version` equal v27.171's night, 0 differences either way | `c13fix_call170_1791052411`, 445.6; compared in `c13fix_eq_1791052592` |
+| v27.171 copy, called again | `FROZEN: partition 2026-10-03 was written at 2026-10-03 18:34:43 UTC; …` at entry; 2 child jobs, no DML; the record unchanged | `c13fix_frozen_1791052603`, 0.09 |
+| v27.171 copy on `_tmp_c13_judge_old` (the 05:00 UTC pass's window) | night written on 09-28 … 09-30, record of the same | `c13fix_call171old_1791052411`, 381.9 |
+| this file's C13 on that night | **0** (the record) | `c13fix_drift_new_1791052680`, 2,697.2 |
+| v27.170's C13 on that night, live view | **44** | `c13fix_drift_old_1791052680`, 2,196.0 |
+
+(Both runs on the 09-28 … 09-30 night also read C01 712 and F1 1: simulation artefacts — its
+`built_at` is 11:34 Los Angeles on 10-03, a window fenced for 10-02, and the copy's write is not in
+`FACT_PLAN_NEXT_WEEK`'s job record.)
+
+**Checked.** On the live table at 18:40 UTC: 36 rows PASS; C13 1 (no record for the 10-03 night), F1
+1 and F2 1 (emptiness) — job `c13fix_acc_live_1791052823`, 2,895.9 slot-seconds, 241,172,480 bytes.
+`check_plan_clock_controls.py` on a simulated pass written after the v27.171 deploy (the copy's 10-03
+night removed and rewritten at 18:38:55 UTC by the v27.171 copy, job `c13fix_call171b_1791052664`,
+585.9 slot-seconds; `--plan-table onyga-482313.OI._tmp_c13_plan --jobs-table-id _tmp_c13_plan
+--judge-table onyga-482313.OI._tmp_c13_judge --build-judge-table onyga-482313.OI._tmp_c13_bj`): exit
+0, all 25 copies exercised (job `bqjob_r2bf99b8d41e5b9f7_000001a10310eb8f_1`, 10,134.5 slot-seconds,
+3,853,516,800 bytes). LIVE 41 readings 0. NC_EMPTY C13 2. NC_C13_VERDICT_MOVED, NC_C13_NOT_SAVED,
+NC_C13_OTHER_WRITE (the record stamped one second later), NC_C13_ROW_NOT_SAVED, NC_C13_SIDE_DIFFERS,
+NC_C13_CANDIDACY_DIFFERS, NC_C13_WINDOW_DIFFERS, NC_C13_STATE_DIFFERS: C13 1 each, no other check
+moved. Every v27.170 copy read as before; C13 also reads 1 on the copies that re-key or restamp the
+night or move its window or state, and 356 on NC_K2_REWRITTEN_WHOLE (unasserted).
+`check_plan_seat_controls.py` and `check_plan_money_controls.py` (no simulated-pass option; real
+table, defaults) after the deploy: each exits 1 by LIVE alone — non-zero exactly C13 1, F1 1, F2 1,
+the 10-03 night having been written by v27.169 — and every copy reads its expected value (seat: 52
+LIVE readings, 64 assertions, job `bqjob_r28ce46c4ceeae428_000001a10317178d_1`, 8,986.4
+slot-seconds; money: 39 LIVE readings, 28 assertions, job `bqjob_r114f15b1e643729a_000001a103173577_1`,
+949,116.0 slot-seconds, 2,296,381,440 bytes — the money script's 10-03 11:52 UTC run cost 120,513.8
+slot-seconds; the increase was not attributed).
+
+**Not yet measured: C13 on a real night.** The first night v27.171 writes is 10-04, at the 05:00 UTC
+pass of 2026-10-04. Re-run the suite after it, at any hour, and the three harnesses with their
+defaults: C13, F1 and F2 should read 0 and every LIVE reading 0. The query for C13's record of a
+night:
+
+```sql
+SELECT as_of, built_at, builder_version, COUNT(*) AS saved_rows,
+       MIN(window_from) AS window_from, MAX(window_to) AS window_to
+FROM `onyga-482313.OI.T_PLAN_BUILD_JUDGMENT`
+GROUP BY 1, 2, 3 ORDER BY as_of DESC;
+```
