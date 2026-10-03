@@ -1,5 +1,17 @@
 -- =============================================================================================
--- SP_BUILD_NEXT_WEEK_PLAN — v27.159 (2026-10-02): the nightly plan for the working families.
+-- SP_BUILD_NEXT_WEEK_PLAN — v27.160 (2026-10-02): the nightly plan for the working families.
+-- v27.160 (piece-1 plan Task 6; Ori's ruling R11 of 2026-10-02 = spec P-24, and audit fix #25):
+--   P-24     A NIGHT IS KEYED ON THE NEW YORK DATE: as_of_d = CURRENT_DATE('America/New_York'),
+--            the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on (its plan history and its
+--            count of nights moved to the same date in the same version). The window fence stays
+--            on Los Angeles. Partitions written before v27.160 are keyed on the Los Angeles date.
+--            R11's GUARD: before the DELETE, a partition for as_of_d written under a calendar state
+--            other than tonight's is never rewritten — the build refuses ("partition <date> was
+--            written under <state>; tonight reads <state>; refusing to rewrite").
+--   fix #25  a shadow (plan A) row whose side differs from the live plan's names the ladder state,
+--            plan A's side and rule B's verdict, then plan A's own move; it no longer opens with the
+--            judgement's rule-B sentence (and its P-4 "carries no planned price" clause).
+--   The ramp step's upload count reads applied_at on the New York date too (the clock as_of is on).
 -- Reads V_PLAN_WINDOW_JUDGMENT (the side and the price) ONCE and turns it into money:
 --   1. POT (P-2, P-15)  the GOOD side's window spend per day, per family — EVERY GOOD keyword of
 --                       the family, holdout included (P-15, Ori 2026-10-02). Not the family total.
@@ -157,7 +169,8 @@
 -- was made under and FN_PLAN_SCORECARD never grades history against today's constant. A column
 -- copy: no assertion reads them.
 --
--- Idempotent: deletes today's as_of partition and rewrites it. Never touches an earlier one.
+-- Idempotent: deletes today's as_of partition (the New York date, v27.160) and rewrites it — unless
+-- it was written under another calendar state (R11's guard). Never touches an earlier one.
 -- Deterministic: every ordering reaches the keyword key.
 -- Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c, after the seat ledger (20.8b).
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §4, §5, §9.
@@ -165,10 +178,23 @@
 -- SOP: architecture/NEXT_WEEK_MONEY.md §3.
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`()
-OPTIONS (description = "v27.159 (2026-10-02, piece-1 plan Task 5, rulings R2/R6/R12/R13/R15 = spec P-16/P-20/P-25/P-26/P-28, audit fix #19): a seat is held until its verdict date while its keyword is still a candidate -- incumbents (last partition's seats written with seat_since, dated after tonight, still candidates, ladder not DEAD) keep their seat, number, price, cost, verdict date and question, are walked first in the order they took their seats, and leave only when tonight's allowance cannot carry them (LEFT_ALLOWANCE_SHRANK); newcomers are walked in rank order into what is left; candidates rank as the judge orders them (P-7 score, then money burned with no return, then clicks); a seated probe is OPEN_PROBE, an unseated probe gets NONE and nothing uploaded, and the queue's words branch on service; clicks_requested spans the settle horizon (window click rate x settle_days, probes click_goal_day x settle_days) with expected_cpc so that clicks x CPC / horizon = implied_daily_spend = the seat's cost; a seat number is the keyword's most recent seat in any earlier partition, the register numbers the live plan only, and the continuity assertion reads that memory; seat_since, seat_tenure and is_probe are written (migration 2026-10-02_plan_seat_tenure_columns.sql). v27.158 (2026-10-02, piece-1 plan Task 4, rulings R1/R7/R8 = spec P-15/P-21/P-22, audit fixes #11 #12 #15 #24): the pot is every GOOD keyword of the family, holdout included (P-15); the ramped allowance is capped at today's not-good spend (P-21); expected_after_upload_per_day (seats + the queue at the price the plan leaves it at) and share_closed (the share of the gap to the allowance target that closes; NULL when the family is at or under its target) are published per family and printed in a FAMILY clause on every row (P-22); a holdout campaign's cap is not moved (NO_MOVE_HOLDOUT, asserted); campaign_budget_basis names what bound the cap (RAMPED only when the cap is the one-third ramp's number to the cent, asserted; FLOORED_AT_NEED, BAND_SNAPPED_UP / BAND_SNAPPED_DOWN, FLOORED_AT_MINIMUM); ramp_step = plan uploads landed since the family's first plan night (BRAIN / PACING / CATALOG batches in V_PPC_CHANGE_LOG_APPLIED or confirmed by an observed change), capped at ramp_steps, published as plan_uploads_landed. The budget floor at need binds only a cap the plan moves. v27.156 (2026-10-02): copies hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap from V_PLAN_WINDOW_JUDGMENT (spec P-17, P-18, P-29; the judge reads memory_cleared_by_gap back as a reset); the HELD assertion reads hold_kept_by -- every HELD row names LAST_DAY (with last_day_strong) or STRONG_DAY_IN_WINDOW (with window_from <= hold_strong_day), and no other row names one -- instead of requiring a very good last day on every hold. v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
+OPTIONS (description = "v27.160 (2026-10-02, piece-1 plan Task 6, ruling R11 = spec P-24, audit fix #25): a night is keyed on the New York date -- as_of = CURRENT_DATE('America/New_York'), the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on and (from the same version) counts nights and reads the plan's history on; the window fence stays on Los Angeles; partitions written before v27.160 are keyed on the Los Angeles date. R11's guard: before the DELETE, a partition for tonight's date written under a different calendar state is never rewritten (the build raises 'partition <date> was written under <state>; tonight reads <state>; refusing to rewrite'), and every row of a night carries one calendar state (asserted). Fix #25: a shadow (plan A) row whose side differs from the live plan's names the ladder state, plan A's side and rule B's verdict, then plan A's own move, instead of the judgement's rule-B sentence and its P-4 'carries no planned price' clause. The ramp step's upload count reads applied_at on the New York date. v27.159 (2026-10-02, piece-1 plan Task 5, rulings R2/R6/R12/R13/R15 = spec P-16/P-20/P-25/P-26/P-28, audit fix #19): a seat is held until its verdict date while its keyword is still a candidate -- incumbents (last partition's seats written with seat_since, dated after tonight, still candidates, ladder not DEAD) keep their seat, number, price, cost, verdict date and question, are walked first in the order they took their seats, and leave only when tonight's allowance cannot carry them (LEFT_ALLOWANCE_SHRANK); newcomers are walked in rank order into what is left; candidates rank as the judge orders them (P-7 score, then money burned with no return, then clicks); a seated probe is OPEN_PROBE, an unseated probe gets NONE and nothing uploaded, and the queue's words branch on service; clicks_requested spans the settle horizon (window click rate x settle_days, probes click_goal_day x settle_days) with expected_cpc so that clicks x CPC / horizon = implied_daily_spend = the seat's cost; a seat number is the keyword's most recent seat in any earlier partition, the register numbers the live plan only, and the continuity assertion reads that memory; seat_since, seat_tenure and is_probe are written (migration 2026-10-02_plan_seat_tenure_columns.sql). v27.158 (2026-10-02, piece-1 plan Task 4, rulings R1/R7/R8 = spec P-15/P-21/P-22, audit fixes #11 #12 #15 #24): the pot is every GOOD keyword of the family, holdout included (P-15); the ramped allowance is capped at today's not-good spend (P-21); expected_after_upload_per_day (seats + the queue at the price the plan leaves it at) and share_closed (the share of the gap to the allowance target that closes; NULL when the family is at or under its target) are published per family and printed in a FAMILY clause on every row (P-22); a holdout campaign's cap is not moved (NO_MOVE_HOLDOUT, asserted); campaign_budget_basis names what bound the cap (RAMPED only when the cap is the one-third ramp's number to the cent, asserted; FLOORED_AT_NEED, BAND_SNAPPED_UP / BAND_SNAPPED_DOWN, FLOORED_AT_MINIMUM); ramp_step = plan uploads landed since the family's first plan night (BRAIN / PACING / CATALOG batches in V_PPC_CHANGE_LOG_APPLIED or confirmed by an observed change), capped at ramp_steps, published as plan_uploads_landed. The budget floor at need binds only a cap the plan moves. v27.156 (2026-10-02): copies hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap from V_PLAN_WINDOW_JUDGMENT (spec P-17, P-18, P-29; the judge reads memory_cleared_by_gap back as a reset); the HELD assertion reads hold_kept_by -- every HELD row names LAST_DAY (with last_day_strong) or STRONG_DAY_IN_WINDOW (with window_from <= hold_strong_day), and no other row names one -- instead of requiring a very good last day on every hold. v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
 BEGIN
-  DECLARE as_of_d DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
+  -- P-24 (Ori 2026-10-02, R11 option (a); v27.160, piece-1 plan Task 6): A NIGHT IS KEYED ON THE
+  -- NEW YORK DATE, the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on, so one partition is
+  -- one calendar state. Until v27.159 this was the Los Angeles date, and the ~22:35 Los Angeles
+  -- pass (already the next New York date) rewrote the Los Angeles day's partition under the next
+  -- day's state: the 2026-09-30 partition was written at 22:44 Los Angeles as BOOST, 3-day window,
+  -- while FN_PLAN_CALENDAR_STATE('2026-09-30') is OFF_PEAK. Partitions written before v27.160 are
+  -- keyed on the Los Angeles date. The window fence stays on Los Angeles (ads days are LA days), so
+  -- inside one New York date the window can move forward a day between the 01:35 and 04:10 New York
+  -- passes: fresher evidence for the same night, never a different calendar state.
+  DECLARE as_of_d DATE DEFAULT CURRENT_DATE('America/New_York');
   DECLARE live_plan_code STRING DEFAULT 'B';
+  -- R11's guard (P-24, v27.160): the calendar state tonight's rows carry, and the one an existing
+  -- partition for as_of_d was written under (NULL when there is none)
+  DECLARE tonight_state STRING;
+  DECLARE written_state STRING;
 
   -- The ramp STEP is a report on how long this family has been planned for. Read BEFORE the
   -- delete, so the INSERT never reads the table it is writing.
@@ -194,14 +220,15 @@ BEGIN
   -- of its rows is in V_PPC_CHANGE_LOG_APPLIED (the one definition of an applied status) or an
   -- observed change on Amazon names one of its rows ('CONFIRMS <change_id>', the pairing
   -- V_PPC_CHANGE_LOG_LANDED reads). It counts for a family when it touched a campaign of the
-  -- family's plan universe, on or after the family's first plan night (Los Angeles date, the date
-  -- as_of is keyed on). Nothing in the money reads it; ramp_step = LEAST(ramp_steps, this count).
+  -- family's plan universe, on or after the family's first plan night, read on the clock as_of is
+  -- keyed on (the New York date since v27.160, P-24; the Los Angeles date before). Nothing in the
+  -- money reads it; ramp_step = LEAST(ramp_steps, this count).
   CREATE OR REPLACE TEMP TABLE uploads AS
   WITH fam_campaign AS (
     SELECT DISTINCT family, CAST(campaign_id AS STRING) AS campaign_id FROM j),
   plan_rows AS (
     SELECT change_id, batch_id, CAST(campaign_id AS STRING) AS campaign_id,
-           DATE(applied_at, 'America/Los_Angeles') AS logged_on
+           DATE(applied_at, 'America/New_York') AS logged_on
     FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG`
     WHERE STARTS_WITH(source, 'BRAIN:') OR STARTS_WITH(source, 'PACING:')
        OR STARTS_WITH(source, 'CATALOG:')),
@@ -931,8 +958,31 @@ BEGIN
     b.campaign_budget_basis, ROUND(b.visible_spend, 4),
     p.holdout, p.holdout_member, p.holdout_eligible_from,
     CONCAT(
-      IF(p.plan = live_plan_code, '', 'SHADOW PLAN A, recorded for grading and never uploaded (P-9). '),
-      COALESCE(p.sentence, ''), ' ', COALESCE(p.settle_arm_sentence, ''), '.',
+      -- AUDIT FIX #25 (v27.160, piece-1 plan Task 6): A SHADOW ROW SPEAKS FOR PLAN A'S SIDE. The
+      -- judgement's sentence and its settle-arm sentence are written for RULE B's verdict. Until
+      -- v27.159 every plan-A row opened with them, so where the ladder and rule B disagree the row
+      -- named the live plan's side and then plan A's move: on the 2026-10-02 partition v27.159 wrote
+      -- (01:20 UTC 10-03) 118 of 361 shadow rows had a side other than the live plan's, 110 plan-A
+      -- GOOD rows carried the not-good side's words and 8 plan-A NOT_GOOD rows the good side's, 54
+      -- of the GOOD rows read both "competes for a seat at" and "No move: the good side is never
+      -- cut", and 8 plan-A rows published a planned bid beside "this row carries no planned price"
+      -- (acceptance K3 read 244 on that partition; query: SOP §3, "Which clock keys a
+      -- night, and the shadow plan's sentences"). Now a shadow row whose side differs from the live
+      -- plan's names the ladder state, plan A's side and rule B's verdict, and is followed by plan
+      -- A's own move clause below; the judgement's rule-B sentence is not printed on it (its P-4
+      -- "carries no planned price" clause with it). A shadow row on the live plan's side keeps the
+      -- judgement's sentence: it names the side the row holds.
+      CASE
+        WHEN p.plan = live_plan_code
+          THEN CONCAT(COALESCE(p.sentence, ''), ' ', COALESCE(p.settle_arm_sentence, ''), '.')
+        WHEN p.side != p.side_b THEN FORMAT(
+          'SHADOW PLAN A, recorded for grading and never uploaded (P-9): the ladder calls this %s, so plan A puts it on the %s side; rule B says %s for the window %t to %t (%d order(s) on $%.2f of ad spend, %.2f gross-profit dollars per ad dollar corrected, against the %s bar of %.2f), so the live plan puts it on the %s side. What follows is plan A\'s own move, never uploaded.',
+          COALESCE(p.ladder_state, 'no ladder state'), IF(p.side = 'GOOD', 'good', 'not-good'),
+          p.verdict, p.window_from, p.window_to, p.w_ord, p.w_sp, COALESCE(p.ret_corrected, 0),
+          p.family, p.family_bar, IF(p.side_b = 'GOOD', 'good', 'not-good'))
+        ELSE CONCAT('SHADOW PLAN A, recorded for grading and never uploaded (P-9). ',
+                    COALESCE(p.sentence, ''), ' ', COALESCE(p.settle_arm_sentence, ''), '.')
+      END,
       CASE
         WHEN p.move = 'REPRICE' THEN CONCAT(FORMAT(
           ' SEAT %d of %s: re-price $%.2f -> $%.2f, costing about $%.2f a day of the $%.2f a day this family allows the not-good side. That is %s of about $%.2f a day against what this keyword is spending now. Judged again on %t (P-12).',
@@ -1415,6 +1465,29 @@ BEGIN
                 + COUNTIF(is_candidate AND move = 'NONE' AND NOT COALESCE(is_probe, FALSE))
           FROM final) = 0
     AS 'a seated probe opens (OPEN_PROBE) and an unseated probe gets no move and no price (P-25)';
+  -- P-24 (v27.160): one night is one calendar state — every row tonight carries the one state the
+  -- judgement read (acceptance K2 reads the same on every written partition).
+  ASSERT (SELECT COUNT(DISTINCT calendar_state) FROM final) = 1
+         AND (SELECT COUNTIF(calendar_state IS NULL) FROM final) = 0
+    AS 'every row of a night carries the one calendar state the judgement read (P-24)';
+
+  -- R11's GUARD (P-24, Ori 2026-10-02: option (a) with option (c)'s guard; v27.160). A partition is
+  -- never rewritten under a different calendar state than the one it was written under. Keyed on
+  -- the New York date, the calendar is read on the same date as the key, so in normal operation
+  -- this never fires; it is the net under any future change of either clock. The 2026-09-30
+  -- partition is what it prevents: written as OFF_PEAK (7-day window, share 0.20) at 01:22 and
+  -- 09:42 Los Angeles, then deleted and rewritten as BOOST (3-day window, share 0.50) by the 22:44
+  -- Los Angeles pass, which was already 2026-10-01 in New York (audit 2026-10-02, BigQuery time
+  -- travel). The refusal leaves the partition already written standing, like every ASSERT above,
+  -- and the orchestrator's Task 20.8c logs it as a FAIL.
+  SET tonight_state = (SELECT MAX(calendar_state) FROM final);
+  SET written_state = (SELECT STRING_AGG(DISTINCT calendar_state, ' + ' ORDER BY calendar_state)
+                       FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = as_of_d);
+  IF written_state IS NOT NULL AND written_state != tonight_state THEN
+    RAISE USING MESSAGE = FORMAT(
+      'partition %t was written under %s; tonight reads %s; refusing to rewrite (P-24 / R11: a night is keyed on the New York date and is never rewritten under another calendar state)',
+      as_of_d, written_state, tonight_state);
+  END IF;
 
   DELETE FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = as_of_d;
   INSERT INTO `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` SELECT * FROM final;

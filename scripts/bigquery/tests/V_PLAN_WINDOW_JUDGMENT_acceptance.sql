@@ -3,6 +3,19 @@
 -- restated 2026-10-02 for P-14c (see C06 below); C12 / C22 restated and G1..G4 added 2026-10-02
 -- for the judge's memory, v27.156 (see the v27.156 block below); C08 / C18 restated and P1..P3
 -- added 2026-10-02 for the judge's prices and ranks, v27.157 (see the v27.157 block below).
+-- v27.160 (2026-10-02, piece-1 plan Task 6, P-24): the NIGHT clocks — C12's grace run, G1's history
+-- and tonight, G3, G4's memory and gap nights — read the New York date, the date the view's
+-- today_plan and FACT_PLAN_NEXT_WEEK.as_of are keyed on from v27.160; C01's fence and C06's settle
+-- date stay on Los Angeles. Measured 2026-10-02 (Los Angeles) on a simulated 22:40 Los Angeles pass
+-- (the v27.160 view and builder bodies run with the Los Angeles date 10-02, the New York date 10-03
+-- and FN_ADS_ANCHOR_CAP 10-02 written in, on a copy of the plan table, OI._tmp_t6_sim_judge /
+-- OI._tmp_t6_sim_plan): this file with those dates written in, 30 rows PASS (job
+-- t6_jaccsimn_1790996816, 182.0 slot-seconds); the v27.159 file (every clock Los Angeles) on the same
+-- tables, G1 6 and G3 2 FAIL, every other row PASS (job t6_jaccsimo_1790996820) — on a night keyed on
+-- New York its Los Angeles "tonight" is the night before. check_judge_memory_controls.py on the
+-- deployed v27.160 view and the live history (both dates 10-02, after the first v27.160 CALL): exit
+-- 0, LIVE 30 checks 0, all 34 copies as expected (job bqjob_r50cef6748812af44_000001a0ffbb3ea6_1,
+-- 7,661.3 slot-seconds).
 -- EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md P-1, P-3..P-7, P-10, P-14
@@ -307,8 +320,8 @@ c12 AS (
                  -- P-17 (v27.156): a GRACE row carries its run, and tonight is inside it
                  OR (verdict = 'GRACE'
                      AND (grace_since IS NULL OR grace_window_days IS NULL OR grace_ends_on IS NULL
-                          OR grace_since > CURRENT_DATE('America/Los_Angeles')
-                          OR grace_ends_on < CURRENT_DATE('America/Los_Angeles'))))
+                          OR grace_since > CURRENT_DATE('America/New_York')
+                          OR grace_ends_on < CURRENT_DATE('America/New_York'))))
   FROM j
 ),
 c13 AS (
@@ -389,14 +402,16 @@ c23 AS (
 ),
 -- ---------------------------------------------------------------------------------------------
 -- G1..G4 (v27.156, piece-1 plan Task 2): THE JUDGE'S MEMORY. hist is the live plan's history
--- before tonight; the clock is the Los Angeles date the plan's as_of is keyed on (plan Task 6
--- moves both to New York).
+-- before tonight; the clock is the date the plan's as_of is keyed on — the New York date since
+-- v27.160 (P-24, piece-1 plan Task 6, which moved as_of, the view's today_plan and every night-clock
+-- in this file together: C12's grace run, hist and tonight's night in G1, G3, and G4's memory, gap
+-- and nights). The ads clock stays on Los Angeles here as in the view: C01's fence, C06's settle date.
 -- ---------------------------------------------------------------------------------------------
 hist AS (
   SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(keyword_id AS STRING) AS keyword_id,
          as_of, verdict, window_days, window_to, memory_cleared_by_gap
   FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
-  WHERE is_live_plan AND as_of < CURRENT_DATE('America/Los_Angeles')
+  WHERE is_live_plan AND as_of < CURRENT_DATE('America/New_York')
 ),
 -- G1: every keyword-night of the history and tonight; a GRACE run starts at the first GRACE after
 -- the latest reset at or before that night (a GOOD night: the run may start the night after; a
@@ -404,7 +419,7 @@ hist AS (
 g1_nights AS (
   SELECT campaign_id, keyword_id, as_of, verdict, window_days, memory_cleared_by_gap FROM hist
   UNION ALL
-  SELECT campaign_id, keyword_id, CURRENT_DATE('America/Los_Angeles'), verdict, window_days,
+  SELECT campaign_id, keyword_id, CURRENT_DATE('America/New_York'), verdict, window_days,
          memory_cleared_by_gap
   FROM j
 ),
@@ -449,7 +464,7 @@ g3 AS (
   SELECT 'G3 fix #16 every HELD row carries hold_since, hold_settles_on and hold_strong_day',
          COUNTIF(verdict = 'HELD_UNSETTLED'
                  AND (hold_since IS NULL OR hold_settles_on IS NULL OR hold_strong_day IS NULL
-                      OR hold_since > CURRENT_DATE('America/Los_Angeles')))
+                      OR hold_since > CURRENT_DATE('America/New_York')))
   FROM j
 ),
 -- G4: P-29, computed here from the history and the ads record, not read from the view's own flag.
@@ -462,9 +477,9 @@ g4_mem AS (
   FROM j,
   UNNEST(ARRAY_CONCAT(
     IF(j.prior_grace
-       OR (j.verdict = 'GRACE' AND j.grace_since < CURRENT_DATE('America/Los_Angeles')),
+       OR (j.verdict = 'GRACE' AND j.grace_since < CURRENT_DATE('America/New_York')),
        ['GRACE'], CAST([] AS ARRAY<STRING>)),
-    IF(j.hold_since < CURRENT_DATE('America/Los_Angeles'),
+    IF(j.hold_since < CURRENT_DATE('America/New_York'),
        ['HOLD'], CAST([] AS ARRAY<STRING>)))) AS kind
 ),
 g4_last AS (
@@ -492,9 +507,9 @@ g4_gap AS (
   JOIN hist mh
     ON mh.campaign_id = m.campaign_id AND mh.keyword_id = m.keyword_id AND mh.as_of = m.m_night
   CROSS JOIN UNNEST(GENERATE_DATE_ARRAY(DATE_ADD(m.m_night, INTERVAL 1 DAY),
-                                        DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 1 DAY))) AS gn
+                                        DATE_SUB(CURRENT_DATE('America/New_York'), INTERVAL 1 DAY))) AS gn
   LEFT JOIN hist h ON h.campaign_id = m.campaign_id AND h.keyword_id = m.keyword_id AND h.as_of = gn
-  WHERE m.m_night < DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL m.window_days + 1 DAY)
+  WHERE m.m_night < DATE_SUB(CURRENT_DATE('America/New_York'), INTERVAL m.window_days + 1 DAY)
     AND h.as_of IS NULL
     AND DATE_SUB(gn, INTERVAL 2 DAY) > mh.window_to
     AND DATE_SUB(gn, INTERVAL 2 DAY) < m.window_from

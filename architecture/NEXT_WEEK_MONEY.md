@@ -37,7 +37,10 @@ QUALIFY ROW_NUMBER() OVER (PARTITION BY c.calendar_state ORDER BY c.updated_at D
 ```
 
 The calendar is read on **New York** (it is a US retail calendar); the ads facts the window then
-selects are read on **Los Angeles**.
+selects are read on **Los Angeles**. A plan NIGHT is keyed on New York too (P-24, v27.160):
+`FACT_PLAN_NEXT_WEEK.as_of` is the New York date the calendar was read on, so one partition is one
+calendar state. Partitions written before v27.160 are keyed on the Los Angeles date (§3, "Which
+clock keys a night").
 
 **THE WINDOW, EXACTLY (P-10 + the P-14a fence).** `window_days` complete days ending at
 
@@ -649,7 +652,7 @@ Four properties of those arms were repaired in **v27.134** and each is now asser
   keyword earns a GOOD window back. The run starts at the first `GRACE` after the latest reset (a
   `GOOD` night, or a night whose row records `memory_cleared_by_gap`, P-29 below); its length is
   the `window_days` of that first night's row; nights are counted on the date `as_of` is keyed on
-  (Los Angeles until plan Task 6). Every row publishes `grace_since`, `grace_window_days` and
+  (the New York date since v27.160, P-24; the Los Angeles date before). Every row publishes `grace_since`, `grace_window_days` and
   `grace_ends_on`, and the GRACE sentence prints "through <last night>". `C12` asserts the arm and
   that a GRACE row is inside its run; `G1` asserts no run outlasts its window over the whole
   history; `C22` asserts the sentence. (v27.135 to v27.155 granted ONE nightly judgment and
@@ -1436,11 +1439,11 @@ SELECT COUNT(*) AS n, ROUND(SUM(planned_spend_per_day), 4) AS spend,
        FARM_FINGERPRINT(STRING_AGG(CONCAT(plan, campaign_id, keyword_id, move,
               CAST(COALESCE(seat_no, -1) AS STRING), CAST(ROUND(planned_spend_per_day, 4) AS STRING))
               ORDER BY plan, campaign_id, keyword_id)) AS fingerprint
-FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = CURRENT_DATE('America/Los_Angeles');
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of = CURRENT_DATE('America/New_York');
 ```
 
-(Both runs must land in the same Los Angeles day and behind the same ads watermark; if the watermark
-moved between them, re-run both.)
+(Both runs must land in the same New York day — the date `as_of` is keyed on since v27.160 — and
+behind the same ads watermark; if the watermark moved between them, re-run both.)
 
 **v27.156 (2026-10-02, piece-1 Task 2).** The builder copies `hold_strong_day`, `hold_kept_by`,
 `grace_since` and `memory_cleared_by_gap` (deploy the column migration
@@ -1720,6 +1723,182 @@ WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)
 GROUP BY 1, 2 ORDER BY 1, 2;
 ```
 
+### Which clock keys a night, and the shadow plan's sentences (v27.160, piece-1 Task 6 — P-24, fix #25)
+
+**P-24 (Ori 2026-10-02, R11 option (a) with option (c)'s guard).** A plan night is keyed on the
+**New York date**: `SP_BUILD_NEXT_WEEK_PLAN` writes `as_of = CURRENT_DATE('America/New_York')`, the
+date `V_PLAN_WINDOW_JUDGMENT` reads the calendar state on. The judge's `today_plan` moved with it, so
+the plan's history is read before the New York date (`plan_hist`, `armed`), P-17's grace nights and
+P-29's gap nights are counted on it, and a first HELD or GRACE night publishes it. **The ads clock
+stays on Los Angeles** — the window fence `window_to = LEAST(watermark − 1, today_la − 2)`, the
+settle ages, `settled`, the hold's settle clock (`today_la > hold_settles_on`, an ads date) and the
+holdout date — because ads days are Los Angeles days. So within one New York night the window can
+move a day between the 01:35 and 04:10 New York passes: fresher evidence for the same night, under
+the same calendar state.
+
+**Partitions before v27.160 are keyed on the Los Angeles date.** The eight built after 22:00 Los
+Angeles — 2026-08-23 … 08-28, 09-28 and 09-30 — carry an `as_of` one day before the New York date of
+their build, and the 09-30 partition carries BOOST while `FN_PLAN_CALENDAR_STATE('2026-09-30')` is
+OFF_PEAK (the audit's rewrite: the 01:22 and 09:42 Los Angeles builds were OFF_PEAK, 7-day window,
+share 0.20; the 22:44 Los Angeles build, already 10-01 in New York, replaced them with BOOST, 3-day
+window, 0.50). Read it:
+
+```sql
+SELECT as_of, ANY_VALUE(calendar_state) AS state, COUNT(DISTINCT calendar_state) AS n_states,
+       `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(as_of) AS state_of_its_date,
+       DATETIME(MAX(built_at), 'America/Los_Angeles') AS built_la,
+       DATE(MAX(built_at), 'America/New_York') AS built_ny_date
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` GROUP BY 1 ORDER BY 1;
+```
+
+**R11's guard.** Before the `DELETE`, the builder reads the calendar state the partition for tonight's
+date was written under; if it differs from tonight's, the build raises `partition <date> was written
+under <state>; tonight reads <state>; refusing to rewrite` and the written partition stands (the
+orchestrator's Task 20.8c logs a FAIL). Keyed on New York, the calendar is read on the key's own date,
+so the guard does not fire in normal operation; it is the net under any later change of either clock
+(or an edit to `DIM_US_HOLIDAYS` that moves tonight's state after a pass has written it — then the
+night keeps the state it was first written under, and K2 reads 1 until the next night). A new
+assertion also requires one calendar state on every row of a night.
+
+**Fix #25: a shadow row speaks for plan A's side.** The judgement's sentence and its settle-arm
+sentence are written for rule B's verdict. Until v27.159 every plan-A row opened with them, so where the
+ladder and rule B disagree the row named the live plan's side and then plan A's move. A shadow row
+whose side differs from the live plan's now reads "SHADOW PLAN A, recorded for grading and never
+uploaded (P-9): the ladder calls this <ladder state>, so plan A puts it on the <good | not-good> side;
+rule B says <verdict> for the window … so the live plan puts it on the <side> side. What follows is
+plan A's own move, never uploaded." followed by plan A's own seat or queue clause; the P-4 "carries no
+planned price" clause leaves with the rule-B sentence. A shadow row on the live plan's side keeps the
+judgement's sentence. On the v27.159 partition of 2026-10-02 (built 01:20 UTC): 118 of 361 shadow rows
+sided differently from the live plan, 110 plan-A GOOD rows carried the not-good side's words (54 of them
+"competes for a seat at" beside "No move: the good side is never cut"), 8 plan-A NOT_GOOD rows the
+good side's, and 8 priced rows said "carries no planned price" (audit counts for 09-28 … 10-01: sides
+differ on 120 / 135 / 141 / 152; 59 / 75 / 77 / 89; 6 / 4 / 2 / 4). The query, on any partition:
+
+```sql
+SELECT a.as_of, COUNT(*) AS keys, COUNTIF(a.side != b.side) AS sides_differ,
+       COUNTIF(a.side != b.side AND STRPOS(a.sentence, 'so plan A puts it on the') = 0) AS side_unnamed,
+       COUNTIF(a.side = 'GOOD' AND a.side != b.side AND a.sentence LIKE '%competes for a seat at%'
+               AND a.sentence LIKE '%No move: the good side is never cut%') AS good_row_promised_a_seat,
+       COUNTIF(a.planned_bid IS NOT NULL AND a.sentence LIKE '%carries no planned price%') AS priced_says_none
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` a
+JOIN `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` b
+  ON b.as_of = a.as_of AND b.campaign_id = a.campaign_id AND b.keyword_id = a.keyword_id AND b.plan = 'B'
+WHERE a.plan = 'A' AND a.as_of >= '2026-09-28'
+GROUP BY 1 ORDER BY 1;
+```
+
+**What else had to follow the key, and what did not.**
+- `FACT_PLAN_NEXT_WEEK_acceptance.sql` C01 and `V_ENGINE_HEALTH` `plan_window_complete_days` asserted
+  `window_to = LEAST(watermark − 1, as_of − 2)`. On a partition the ~22:35 Los Angeles pass writes,
+  `as_of` is the next New York date and the watermark has already advanced to the Los Angeles date
+  (watermark = the build's Los Angeles date on all eight late partitions above), so that form fails
+  every row. Both now fence on `DATE(built_at, 'America/Los_Angeles') − 2`, which equals `as_of − 2` on
+  every Los Angeles-keyed partition.
+- `V_PLAN_WINDOW_JUDGMENT_acceptance.sql`: the night clocks (C12's grace run, G1's history and
+  tonight, G3, G4's memory and gap nights) moved to New York with the view; C01's fence and C06's
+  settle date stay on Los Angeles.
+- `plan_partition_fresh` keeps its clock (the later of yesterday and the Los Angeles day the plan step
+  last ran): a New York `as_of` is never earlier than the Los Angeles day of its build, so every pass
+  that saved its partition meets it. Only its comment changed.
+- `FN_PLAN_SCORECARD` needed no change: it dates a night by the `as_of` it reads and grades the
+  `window_days` ads days from it; the last pass of New York night D is the 12:40 New York pass of Los
+  Angeles day D, so the graded days still start on the day the plan's final partition was written.
+- The ramp step's upload count reads `applied_at` on the New York date, the clock `as_of` is on.
+- **Not changed, recorded:** `tools/build_reprice_bulksheet.py` still reads the plan's history with
+  `as_of < CURRENT_DATE('America/Los_Angeles')` (and still carries v27.135's grace reading); between
+  21:00 and 24:00 Los Angeles its history stops a night short of the judge's. The judge's `holdout`
+  flag compares `eligible_from` with the Los Angeles date; every eligible date is in the past, so no
+  row moves today.
+
+### Deploy and verify v27.160 (2026-10-02, piece-1 Task 6)
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/views/V_ENGINE_HEALTH.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN\`()"          # a long job: submit with --nosync and poll
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"
+# the negative controls of C01, K1, K2, K3 and V_ENGINE_HEALTH plan_window_complete_days (exit 0 =
+# every control exercised and as expected). One script job: submit, then collect.
+python3 scripts/bigquery/tests/check_plan_clock_controls.py --submit
+python3 scripts/bigquery/tests/check_plan_clock_controls.py --collect <the JOB it printed>
+```
+
+Measured at deploy (2026-10-02 Los Angeles; 02:36–03:07 UTC 10-03). Before deploy, with both dates
+10-02: the v27.160 judge body run as a query equalled the deployed v27.157 view on all 98 columns of
+361 rows (floats to 1e-9 relative; 639.0 against 527.6 slot-seconds, 127,819,989 bytes each); the
+builder body on that snapshot, writing to a copy of the table (`OI._tmp_t6_plan`), passed every
+assertion and differed from the v27.159 partition of 10-02 only in `sentence` on the 118 shadow rows
+whose side differs from the live plan's, `rank_no` on one tied pair (LolliME ranks 10 / 11, scores
+equal to the last bit) and `built_at`; the plan acceptance read 37 of 37 PASS on it. Deployed at
+02:45:20 UTC (`INFORMATION_SCHEMA.ROUTINES.last_altered`; each deployed body equals its file). One
+CALL (job `t6_call1_1790995726`, 2,048.7 slot-seconds) rewrote the 2026-10-02 partition — the New
+York date at 19:50 Los Angeles — with the same 722 rows, money, seats and moves (the same three
+column differences as the dry run); the plan acceptance read 37 of 37 PASS (job
+`t6_acc_live1_1790995837`, 1,383.0 slot-seconds) and the board's `plan_window_complete_days` GREEN.
+On the v27.159 partition K3 read 244 (118 / 110 / 8 / 8 on its four terms).
+
+The guard was controlled on the builder's own body against a copy of the table: over the copy's
+BOOST partition of the same date it wrote (627.4 slot-seconds); with that partition set to OFF_PEAK it
+raised `partition 2026-10-02 was written under OFF_PEAK; tonight reads BOOST; refusing to rewrite …`
+and the OFF_PEAK partition stood, 722 rows, `built_at` unchanged (1,070.2 slot-seconds). The negative
+controls (`check_plan_clock_controls.py`, job `bqjob_r28d04f5d6d9da7e1_000001a0ffabd93a_1`, 2,642.4
+slot-seconds) exited 0: LIVE 39 readings 0, all 11 copies exercised as expected (per-copy values in
+the acceptance file's header).
+
+**The late pass, simulated.** No orchestrator pass had yet run under v27.160, and the case R11 is
+about — the ~22:35 Los Angeles pass, already the next New York date, after `FN_ADS_ANCHOR_CAP` has
+advanced — cannot be produced by a CALL before 22:00 Los Angeles. So both v27.160 bodies were run
+with the Los Angeles date 10-02, the New York date 10-03, `FN_ADS_ANCHOR_CAP` 10-02 and `built_at`
+05:40 UTC (22:40 Los Angeles) written in, on a copy of the table holding the CALL's 10-02 partition
+(`OI._tmp_t6_sim_judge`, `OI._tmp_t6_sim_plan`; 401.6 and 1,006.1 slot-seconds). It wrote as_of
+2026-10-03, BOOST, window 09-28 … 09-30 behind watermark 10-02; every assertion passed. On that
+partition the v27.159 fence form (`as_of − 2`) reads 722 of 722 rows wrong and the v27.160 form 0;
+the controls script on the copy exited 0 (job `bqjob_r3b355b0a9c44aefd_000001a0ffb852de_1`, 2,407.5
+slot-seconds; LIVE 39 readings 0, including T1 and C23 over 82 real incumbents). The judge acceptance
+with the same dates written in read 30 of 30 PASS; the v27.159 judge acceptance (every clock Los
+Angeles) read G1 6 and G3 2 on the same tables. Live plan B, the CALL's 10-02 partition against the
+simulated 10-03 one (the first night P-16 meets seats written with `seat_since`):
+
+| family | seats 10-02 → 10-03 | incumbents kept / new / left | pot $/day | allowance $/day | expected after upload $/day | GRACE | HELD | releases |
+|---|---|---|---|---|---|---|---|---|
+| Bottle | 3 → 3 | 3 / 0 / 0 | 12.54 → 4.46 | 0.74 → 0.74 | 0.70 → 0.70 | 1 → 0 | 0 → 0 | 0 → 1 |
+| Fresh | 22 → 22 | 22 / 0 / 0 | 104.40 → 104.40 | 58.58 → 58.58 | 57.06 → 57.06 | 8 → 8 | 0 → 0 | 1 → 0 |
+| LolliME | 49 → 53 | 49 / 4 / 0 | 337.69 → 318.30 | 136.03 → 155.42 | 132.39 → 152.26 | 20 → 14 | 0 → 2 | 1 → 4 |
+| Lollibox | 8 → 9 | 8 / 1 / 0 | 147.25 → 147.04 | 37.19 → 37.40 | 36.76 → 36.97 | 6 → 5 | 0 → 0 | 4 → 1 |
+
+What moved is the ruling, not the data: the window (09-28 … 09-30) and the calendar state are the
+same on both sides (the watermark moved 10-01 → 10-02 when `FN_ADS_ANCHOR_CAP` advanced at 22:00 Los
+Angeles, and the fence held the window where it was). The night is one later, so the judge's memory reads 10-02 as last night: the v27.157
+judge at the same simulated clock (history before 10-02) against v27.160's (history through 10-02)
+— 8 grace runs counted one more night and spent, 6 of them to the not-good side ($27.68 a day of
+window spend: Bottle 1, LolliME 4, Lollibox 1) and 2 LolliME held instead; `prior_good` differs on 53
+rows. Under v27.159 that pass would have rewritten 10-02 itself.
+
+```sql
+-- the late-pass fence, on any partition: the v27.159 form and the v27.160 form
+SELECT as_of, DATETIME(MAX(built_at), 'America/Los_Angeles') AS built_la, COUNT(*) AS n,
+       COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY), DATE_SUB(as_of, INTERVAL 2 DAY))) AS v27159_form_wrong,
+       COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
+                                  DATE_SUB(DATE(built_at, 'America/Los_Angeles'), INTERVAL 2 DAY))) AS v27160_form_wrong
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` GROUP BY 1 ORDER BY 1;
+```
+
+Nothing new reads `FACT_AMAZON_ADS`; the judge's one scan is unchanged in bytes. A direct run of
+`V_PLAN_WINDOW_JUDGMENT_acceptance.sql` on the deployed view was cancelled at 354,660 slot-seconds
+(its header records 1,180,821 for one run: every CTE that reads `j` re-evaluates the view) — use
+`check_judge_memory_controls.py`, which reads the view once.
+
+`check_judge_memory_controls.py` on the deployed v27.160 view and the live history, after the CALL
+(both dates 10-02; job `bqjob_r50cef6748812af44_000001a0ffbb3ea6_1`, 7,661.3 slot-seconds): exit 0,
+LIVE 30 checks 0, all 34 copies as expected — the restated night clocks keep their controls.
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not
@@ -1891,7 +2070,7 @@ check reads RED on an empty partition rather than vacuously green.
 
 | check | reads | status |
 |---|---|---|
-| `plan_window_complete_days` | the fence: `window_to = LEAST(watermark − 1, as_of − 2)` and `window_days` long (the Task 5 draft's `watermark − 1` fails after 22:00 Los Angeles — §2 "why it is fenced") | red > 0 |
+| `plan_window_complete_days` | the fence: `window_to = LEAST(watermark − 1, the Los Angeles date of built_at − 2)` and `window_days` long (the Task 5 draft's `watermark − 1` fails after 22:00 Los Angeles — §2 "why it is fenced"; v27.152–v27.159 read `as_of − 2`, which is a day past the fence on a partition keyed on the New York date by the ~22:35 Los Angeles pass, P-24, v27.160) | red > 0 |
 | `plan_pot_reconciliation` | pot = every GOOD keyword's window spend, holdout included (P-15, v27.158), allowance = share × pot, to the cent (the acceptance's C03/C04 form; v27.152–v27.157 excluded the holdout under a "(P-2)" label, audit fix #24); the detail prints each family's not-good side, expected spend after the upload and share of the gap closed (P-22) | red > 0 |
 | `plan_one_move_per_notgood` | one move per CANDIDATE, NONE on the good side and on rows with nothing to repair (§9 v27.135, the acceptance's C06 form; the draft read 152 violations on a healthy partition) | red > 0 |
 | `plan_ownership_no_foreign_go` | foreign GO rows on money levers inside live-plan campaigns — **a REPORT until Task 3 ships**, because no engine `PLAN` writes proposals and the plan owns nothing at the gate yet | INFO, then red > 0 |
@@ -1899,7 +2078,7 @@ check reads RED on an empty partition rather than vacuously green.
 | `plan_settle_guard_holds` | **P-14b is a clock and P-14c a last-day test, not a veto.** A live-plan row demoted under the guard's preconditions (not-good, was good, served, unsettled) is legitimate iff the judge published `guard_released_by` as `HOLD_EXPIRED` or `LAST_DAY_NOT_STRONG`; a `HELD_UNSETTLED` row must have earned the hold with a very good last day, or (P-18, v27.156) carry `hold_kept_by = STRONG_DAY_IN_WINDOW` with `window_from <= hold_strong_day`. The check READS `hold_kept_by` as well, and `guard_released_by` and never re-derives the guard — re-deriving it is what vetoed every partition for a month | red > 0 |
 | `plan_settle_curve_coverage` | share of live-plan rows the curve could correct | INFO |
 | `plan_proposal_lag_days` | the proposal snapshot's date against the live plan's | INFO, amber > 2 |
-| `plan_partition_fresh` | **ALARM.** The latest plan is older than the later of yesterday and the Los Angeles day the plan step last ran, OK or FAIL. Not "older than today": the pass runs three times a day and the first that can write today's partition is the 04:10 New York one, so "today" alone would be red between midnight and that pass every day. The detail says the last plan date and the nights missing | red > 0 |
+| `plan_partition_fresh` | **ALARM.** The latest plan is older than the later of yesterday and the Los Angeles day the plan step last ran, OK or FAIL. Not "older than today": the pass runs three times a day, so "today" alone would be red between midnight and the first pass every day. Since v27.160 the first pass of a New York night (01:35 New York) writes that night's partition (as_of is the New York date, never earlier than the Los Angeles day of the same build), so every pass that saved its partition meets the Los Angeles due date; the clock itself is unchanged. The detail says the last plan date and the nights missing | red > 0 |
 | `pipeline_step_failing` | **ALARM, GENERIC.** Any procedure whose three most recent runs in the last 30 days all logged FAIL, with the first 120 characters of its latest error and the length of the streak. This is the check that would have named the builder on day 1 of the outage, and the next outage needs no new check | red > 0 |
 
 **The surface.** `V_DAILY_BRIEF` carries one SYSTEM line (section_rank 7, appended) that reads

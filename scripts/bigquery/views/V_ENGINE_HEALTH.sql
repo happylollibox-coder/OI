@@ -447,12 +447,21 @@ c23 AS (  -- the window is complete days only, fenced to age 2, and exactly wind
   -- The Task 5 draft asserted window_to = watermark - 1, which is P-10 without the P-14a fence and
   -- fails by construction after 22:00 Los Angeles, when FN_ADS_ANCHOR_CAP() advances and the
   -- fence gives up a day (FACT_PLAN_NEXT_WEEK_acceptance.sql C01). The fence is the convention.
+  -- v27.160 (2026-10-02, P-24, piece-1 plan Task 6): the fence is two days before the LOS ANGELES
+  -- date of the build, as the judge applies it, not before as_of — as_of is the New York date
+  -- from v27.160, and on the ~22:35 Los Angeles pass (already the next New York date) as_of - 2 is
+  -- a day past the fence while the watermark has advanced to the Los Angeles date, so the v27.152
+  -- form reads every row of that partition RED (722 of 722 on a simulated 22:40 Los Angeles pass of
+  -- 2026-10-02; this form 0 — NEXT_WEEK_MONEY.md §3, "Which clock keys a night"). The acceptance's
+  -- C01 carries the same restatement; check_plan_clock_controls.py controls this check's text.
   SELECT 'plan_window_complete_days' AS check_name,
-    CAST(COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY), DATE_SUB(as_of, INTERVAL 2 DAY))
+    CAST(COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
+                                    DATE_SUB(DATE(built_at, 'America/Los_Angeles'), INTERVAL 2 DAY))
                  OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days) AS FLOAT64),
-    'rows whose window touches the filling day, breaks the age-2 fence, or is not window_days long · red > 0 (P-10, P-14a); red when the partition is empty',
+    'rows whose window touches the filling day, breaks the age-2 fence (two days before the Los Angeles date of the build), or is not window_days long · red > 0 (P-10, P-14a, P-24); red when the partition is empty',
     CASE WHEN COUNT(*) = 0 THEN 'RED'
-         WHEN COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY), DATE_SUB(as_of, INTERVAL 2 DAY))
+         WHEN COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
+                                         DATE_SUB(DATE(built_at, 'America/Los_Angeles'), INTERVAL 2 DAY))
                       OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days) > 0 THEN 'RED'
          ELSE 'GREEN' END,
     CONCAT('plan of ', COALESCE((SELECT CAST(MAX(as_of) AS STRING) FROM pl), 'none'),
@@ -616,10 +625,15 @@ c30 AS (  -- REPORTS: how far the live plan sits behind the proposal snapshot
            ' · the proposal snapshot (Task 20.6) runs before the plan (20.8c) inside one pass, so the proposals read the plan an earlier pass wrote — one pass of lag is by design (open ruling for Ori)')
 ),
 plan_clock AS (  -- the day the plan step was last REACHED (OK or FAIL) and the latest plan saved
-  -- The orchestrator passes three times a day (about 01:35, 04:10 and 12:40 New York) and the
-  -- plan step writes as_of = CURRENT_DATE('America/Los_Angeles'), so a plan for Los Angeles day D
-  -- first exists after the 04:10 New York pass. "MAX(as_of) < today" alone is therefore RED every
-  -- day between midnight and that pass for no reason. The due date is the LATER of two days: the
+  -- The orchestrator passes three times a day (about 01:35, 04:10 and 12:40 New York). Until
+  -- v27.159 the plan step wrote as_of = CURRENT_DATE('America/Los_Angeles'), so a plan for Los
+  -- Angeles day D first existed after the 04:10 New York pass; from v27.160 (P-24) it writes the New
+  -- York date, so the 01:35 pass already writes New York day D. A New York as_of is never earlier
+  -- than the Los Angeles day of the same build, so every pass that saved its partition meets the
+  -- Los Angeles due date below, and a pass that reached the step on Los Angeles day L while no
+  -- partition dated L or later exists still reads RED (this clock is unchanged by v27.160).
+  -- "MAX(as_of) < today" alone would be RED every
+  -- day between midnight and the first pass for no reason. The due date is the LATER of two days: the
   -- Los Angeles day of the last LOG_PIPELINE_RUNS row the plan step itself logged (a pass that
   -- reached the step and did not save a partition for its own day is the outage — OK or FAIL,
   -- because an OK that saved nothing is the same failure), and yesterday (so a dead orchestrator

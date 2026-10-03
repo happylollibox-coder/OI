@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.159 (2026-10-02). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.160 (2026-10-02). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -11,7 +11,8 @@
 --   C01 the draft asserted window_to = watermark - 1. That is P-10 WITHOUT the P-14a fence, and
 --       it FAILS by construction after 22:00 Los Angeles, when FN_ADS_ANCHOR_CAP() advances and
 --       the fence gives up a day. The fence is the house convention, so the check asserts the
---       fence: window_to = LEAST(watermark - 1, as_of - 2).
+--       fence: window_to = LEAST(watermark - 1, as_of - 2) — restated v27.160 to the Los Angeles
+--       date of built_at, as_of being the New York date from then (see C01 below).
 --   C06 the draft required one of four moves on EVERY not-good row. Spec §9 (v27.135) says the
 --       guarantee is about CANDIDATES: a keyword with no spend, no clicks and no probe nomination
 --       has nothing to repair, so it takes no seat, no queue position and NO MOVE. The check now
@@ -148,6 +149,50 @@
 --   sentence term, T4's unseated-probe term, S07, S11 or the board. Its four conditional
 --   expectations expected 0 when the row they doctor was absent, so a control that tested nothing
 --   passed.
+--
+-- v27.160 (2026-10-02, piece-1 plan Task 6 — Ori's ruling R11 = spec P-24, audit fix #25). RESTATED:
+-- C01 (the fence is two days before the LOS ANGELES date of built_at, not before as_of, which is the
+-- New York date from v27.160). NEW: K1 (as_of is the New York date of the build on every partition
+-- written since the v27.160 deploy, 2026-10-03 02:45:20 UTC), K2 (one calendar state per partition;
+-- the latest partition carries its own New York date's state), K3 (no shadow row names a side its
+-- side column does not hold; no priced row says it carries no planned price). Each has an emptiness
+-- term.
+-- RUN 2026-10-02 19:36-19:41 Los Angeles, before deploy: the v27.160 builder body (partition write
+-- to a copy, OI._tmp_t6_plan) on the judgement snapshot OI._tmp_t6_judge, K1's cutover set to
+-- 02:30 UTC so the copy's partition (built 02:38 UTC) was in scope: 37 rows PASS (job
+-- bqjob_r21243ddd93881322_000001a0ffa28d5b_1). The v27.159 partition of 2026-10-02 (built 01:20 UTC,
+-- K1's cutover set to 01:00 UTC): K3 244 (118 shadow rows on a side other than the live plan's
+-- naming no plan-A side, 110 GOOD rows carrying the not-good side's words, 8 NOT_GOOD rows the good
+-- side's, 8 priced rows saying "carries no planned price"), C01 0, K1 0, K2 0 (job
+-- bqjob_r6c02f51fa68ccd38_000001a0ffa29e50_1).
+-- After deploy, on the live partition the first v27.160 CALL wrote (2026-10-03 02:50:03 UTC): 37 rows
+-- PASS (job t6_acc_live1_1790995837, 1,383.0 slot-seconds).
+-- NEGATIVE CONTROLS, run 2026-10-03 02:50-02:53 UTC by scripts/bigquery/tests/check_plan_clock_controls.py
+-- (this file's and V_ENGINE_HEALTH c23's own text on doctored, materialized copies of every
+-- partition, the latest the 2026-10-02 partition of that CALL, the judgement read from the deployed
+-- view; job bqjob_r28d04f5d6d9da7e1_000001a0ffabd93a_1, 2,642.4 slot-seconds; exit 0, all 11 copies
+-- exercised):
+--   LIVE: 39 readings, every one 0 (37 here, and plan_window_complete_days' measured value H23M and
+--     RED status H23S).
+--   NC_EMPTY: K1 1, K2 1, K3 1, H23S 1.
+--   NC_C01_WINDOW_SHIFTED (one live row's window a day earlier, its length kept): C01 1, H23M 1, H23S 1.
+--   NC_K1_NOT_NY_DATE (the latest partition stamped as built at 22:40 Los Angeles on its as_of, as a
+--     Los Angeles-keyed late pass wrote): K1 1.
+--   NC_K2_TWO_STATES (one row given another state): K2 2.
+--   NC_K2_REWRITTEN_WHOLE (every row of the latest partition given another state — the 2026-09-30
+--     defect): K2 1, from the date term alone.
+--   NC_K3_RULE_B_WORDS_ON_GOOD (a plan-A GOOD row given v27.159's sentence: the P-9 prefix + its live
+--     row's NOT_GOOD sentence): K3 2.  NC_K3_RULE_B_WORDS_ON_NOT_GOOD (a priced plan-A NOT_GOOD row
+--     given v27.159's sentence over a GOOD live row): K3 3.  NC_K3_PRICED_SAYS_NONE: K3 1.
+--   NC_K3_FOREIGN_WORDS_SAME_SIDE (a plan-A GOOD row on the live side + "It competes for a seat at
+--     $1.00."): K3 1.  NC_K3_NO_SHADOW (no plan-A row): K3 1, C02 1.
+-- R11's GUARD, controlled on the builder's own body (the procedure with the plan table swapped for the
+-- copy OI._tmp_t6_plan and the judgement for OI._tmp_t6_judge), 2026-10-02 Los Angeles, as_of
+-- 2026-10-02: over the copy's BOOST partition of that date it wrote (job
+-- bqjob_r6404f94f7c901ee6_000001a0ff9f7e81_1, 627.4 slot-seconds); with that partition set to OFF_PEAK
+-- it raised "partition 2026-10-02 was written under OFF_PEAK; tonight reads BOOST; refusing to
+-- rewrite (P-24 / R11: ...)" and the OFF_PEAK partition stood, 722 rows, built_at unchanged (job
+-- bqjob_r2bb92973bce26f6f_000001a0ffa7a4c2_1, 1,070.2 slot-seconds).
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -178,10 +223,19 @@ claims AS (
                                           CAST(keyword_id AS STRING)
                              ORDER BY as_of DESC) = 1
 ),
+-- C01 RESTATED v27.160 (P-24, piece-1 plan Task 6): the fence is two days before the LOS ANGELES
+-- date of the build, not before as_of. as_of is the New York date from v27.160, and the ~22:35 Los
+-- Angeles pass is already the next New York date: on it as_of - 2 is a day later than the fence the
+-- judge applies (window_to = LEAST(watermark - 1, today_la - 2)), and at that hour FN_ADS_ANCHOR_CAP
+-- has advanced the watermark to the Los Angeles date (watermark = the build's LA date on all eight
+-- partitions built after 22:00 Los Angeles, 2026-08-23 .. 09-30), so the v27.159 form fails every
+-- row of such a partition. On a partition keyed on the Los Angeles date the two forms are equal.
+-- A build that straddled Los Angeles midnight would read a day off here (built_at is stamped at the
+-- INSERT, the judge read its date at the start); no orchestrator pass runs then.
 c01 AS (
-  SELECT 'C01 window is complete days only and fenced to age 2 (P-10, P-14a)' AS check_name,
+  SELECT 'C01 window is complete days only and fenced to age 2 on the Los Angeles date of the build (P-10, P-14a, P-24)' AS check_name,
          COUNTIF(window_to != LEAST(DATE_SUB(watermark, INTERVAL 1 DAY),
-                                    DATE_SUB(as_of, INTERVAL 2 DAY))
+                                    DATE_SUB(DATE(built_at, 'America/Los_Angeles'), INTERVAL 2 DAY))
                  OR DATE_DIFF(window_to, window_from, DAY) + 1 != window_days) AS violations
   FROM p
 ),
@@ -751,6 +805,58 @@ t5 AS (
                                   w_clk DESC, campaign_id, keyword_id) AS rn
                 FROM p WHERE is_candidate))
        + (SELECT IF(COUNTIF(is_candidate) = 0, 1, 0) FROM p)
+),
+-- ---- v27.160 (2026-10-02, piece-1 plan Task 6): which clock keys a night (P-24), the shadow's words ----
+-- K1 (P-24, R11): as_of is the New York date of the build, on every partition SP_BUILD_NEXT_WEEK_PLAN
+-- v27.160 wrote — built_at at or after its deploy (2026-10-03 02:45:20+00, INFORMATION_SCHEMA.ROUTINES
+-- last_altered). Partitions written before it are keyed on the Los Angeles date: the eight built
+-- after 22:00 Los Angeles (2026-08-23 .. 09-30) carry an as_of one day before the New York date of
+-- their build. Emptiness: no partition written since the deploy reads 1.
+all_p AS (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`),
+k1 AS (
+  SELECT 'K1 P-24: as_of is the New York date of the build on every partition written since v27.160',
+         (SELECT COUNT(DISTINCT as_of) FROM all_p
+          WHERE built_at >= TIMESTAMP '2026-10-03 02:45:20+00'
+            AND as_of != DATE(built_at, 'America/New_York'))
+       + (SELECT IF(COUNTIF(built_at >= TIMESTAMP '2026-10-03 02:45:20+00') = 0, 1, 0) FROM all_p)
+),
+-- K2 (P-24, R11's guard): no partition carries two calendar states (or none), on the whole history;
+-- and the latest partition carries the state of its own New York date — the night it is keyed on is
+-- the night its calendar was read on. The second term is what catches a partition REWRITTEN whole
+-- under another night's state (the 2026-09-30 partition carries BOOST while
+-- FN_PLAN_CALENDAR_STATE('2026-09-30') is OFF_PEAK; one state per partition cannot see that). It
+-- reads the latest partition only: FN_PLAN_CALENDAR_STATE reads the live DIM_US_HOLIDAYS, and an
+-- old partition was right under the calendar of its night. Emptiness: an empty table reads 1.
+k2 AS (
+  SELECT 'K2 P-24: one calendar state per partition, and the latest partition carries its own New York date state',
+         (SELECT COUNTIF(n_state != 1 OR n_null > 0)
+          FROM (SELECT as_of, COUNT(DISTINCT calendar_state) n_state, COUNTIF(calendar_state IS NULL) n_null
+                FROM all_p GROUP BY 1))
+       + (SELECT IF(COUNTIF(calendar_state IS DISTINCT FROM
+                            `onyga-482313.OI.FN_PLAN_CALENDAR_STATE`(as_of)) > 0, 1, 0) FROM p)
+       + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
+),
+-- K3 (audit fix #25): a SHADOW row names the side its own `side` column holds. A plan-A row whose
+-- side differs from the live plan's names plan A's side in words ("so plan A puts it on the good |
+-- not-good side"); no plan-A row on the good side carries the not-good side's verdict, seat or queue
+-- words, and no plan-A row on the not-good side carries the good side's; and no row that publishes a
+-- planned bid says it carries none (P-4's clause). On the 2026-10-02 v27.159 partition: 118 shadow
+-- rows sided differently from the live plan, none naming plan A's side, 54 GOOD rows reading
+-- "competes for a seat at" beside "No move: the good side is never cut", 8 priced rows reading
+-- "carries no planned price". Emptiness: a partition with no shadow row reads 1.
+k3 AS (
+  SELECT 'K3 fix #25: no shadow row names a side its side column does not hold, and no priced row says it carries no price',
+         (SELECT COUNTIF(a.side != lb.side
+                         AND STRPOS(a.sentence, FORMAT('so plan A puts it on the %s side',
+                                                       IF(a.side = 'GOOD', 'good', 'not-good'))) = 0)
+               + COUNTIF(a.side = 'GOOD'
+                         AND REGEXP_CONTAINS(a.sentence, r'competes for a seat|queues at the park price|QUEUED at rank|SEAT \d+ of |OPEN PROBE at|LOSING on the window|NO SALE —|NOT SERVING —|WAITING, one order|this keyword is on the not-good side|does not compete for a seat'))
+               + COUNTIF(a.side = 'NOT_GOOD'
+                         AND REGEXP_CONTAINS(a.sentence, r'GOOD on the window —|HELD — |HELD, |GRACE — |No move: the good side is never cut'))
+          FROM p a JOIN b lb USING (campaign_id, keyword_id)
+          WHERE NOT a.is_live_plan)
+       + (SELECT COUNTIF(planned_bid IS NOT NULL AND STRPOS(sentence, 'carries no planned price') > 0) FROM p)
+       + (SELECT IF(COUNTIF(NOT is_live_plan) = 0, 1, 0) FROM p)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
@@ -764,5 +870,6 @@ FROM (SELECT * FROM c01 UNION ALL SELECT * FROM c02 UNION ALL SELECT * FROM c03
       UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM m1
       UNION ALL SELECT * FROM m2 UNION ALL SELECT * FROM m3 UNION ALL SELECT * FROM t1
       UNION ALL SELECT * FROM t2 UNION ALL SELECT * FROM t3 UNION ALL SELECT * FROM t4
-      UNION ALL SELECT * FROM t5)
+      UNION ALL SELECT * FROM t5 UNION ALL SELECT * FROM k1 UNION ALL SELECT * FROM k2
+      UNION ALL SELECT * FROM k3)
 ORDER BY check_name;
