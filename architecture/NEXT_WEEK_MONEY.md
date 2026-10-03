@@ -1243,7 +1243,7 @@ maintains and the judgement reads the snapshot 20.8 writes.
 | 1 POT | the **GOOD side's** window spend per day, per family — **every GOOD keyword of the family, holdout included** (P-15, built v27.158). Not the family total, and not a budget anyone set — it is what the good keywords actually bought. | P-2, P-15 |
 | 2 ALLOWANCE | `allowance_share × pot`. The share and the window come from `DE_PLAN_CONFIG` for today's calendar state; neither is a literal anywhere in the procedure. | P-2, P-13 |
 | 3 RAMP | close **one third of the gap** between today's not-good spend and the allowance this window. As built (the builder's own comment in `fam2`): the ramp term alone closes one third of the gap in whichever direction it runs, and the `GREATEST` removes the downward half for a family already inside its allowance — instead of being ramped up one third at a time, it is handed **the whole allowance target on night one**, so a family whose target exceeds its not-good side gets a bigger loss budget immediately (audit 2026-10-02: Lollibox on 09-30, $3.43 a day above its not-good spend; 13 of 24 August family-nights). **Ruled 2026-10-02 (P-21), built v27.158:** the ramped allowance is capped at today's not-good spend, `LEAST(notgood_today, GREATEST(target, notgood_today − (notgood_today − target) / ramp_steps))`, so it never raises a family's loser spend above what it spends tonight (acceptance `M1`, `C04`). The ramp is re-anchored on tonight's actual not-good spend, so it descends only as uploads cut that spend: with no upload, each night re-takes the same one-third step from a base that drifts with the window. `ramp_step` counts the plan uploads that **landed** for the family since its first plan night (`plan_uploads_landed`, capped at `ramp_steps`; 0 prints "no step taken yet") — until v27.157 it was a calendar count of windows and read 3 of 3 on every live row although no plan batch had landed since 2026-08-25 (audit fix #15). | P-8, P-21 |
-| 4 SEATS | **incumbents first** (v27.159, P-16): last partition's seats written under P-16, before their verdict date and still candidates, keep their seat, number, price, verdict date and question, walked in the order they took their seats, each costing **its kept price on tonight's window** (v27.164, follow-up F2 — until v27.160 the cost its seat was granted at). Then candidates ranked (P-7's score, then money burned with no return, P-20), each costing its spend **at the repaired price**, walked in rank order into what the incumbents left: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. Each walk is a recursive walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, P-16, P-20, §4.4 |
+| 4 SEATS | **incumbents first** (v27.159, P-16): last partition's seats written under P-16, before their verdict date and still candidates, keep their seat, number, price, verdict date and question, walked in the order they took their seats, each costing **its kept price on tonight's window** (v27.164, follow-up F2 — until v27.160 the cost its seat was granted at); when tonight's allowance cannot carry them all they **leave latest-seated first until the rest fit** — the incumbents' walk is a prefix, not a fit test (v27.167, follow-up F8). Then candidates ranked (P-7's score, then money burned with no return, P-20), each costing its spend **at the repaired price**, walked in rank order into what the incumbents left: a candidate takes the lowest free seat **whenever its own cost fits the allowance still unspent**, and one it cannot afford is skipped rather than closing the queue behind it. Each walk is a recursive walk over a total order, so it is exactly as reproducible as a prefix sum and does not park candidates the allowance can pay for. | P-6, P-7, P-16, P-20, §4.4 |
 | 5 QUEUE | everything that did not fit: parked at the engine park price, **held** at the price it already has when that is at or below the park price (nothing to upload), or **paused only when the ladder has already closed the keyword** (`ladder_state = 'DEAD'`); an **unseated probe gets no move** and nothing is uploaded (v27.159, P-25). Since v27.158 the family's **expected spend after the upload** (seats + the queue at the price the plan leaves it at) and the **share of the gap it closes** are published beside the allowance (P-22). | §4.5, P-22, P-25 |
 | 6 MOVES | exactly one executable instruction per **candidate**; none on the good side. A seated probe is `OPEN_PROBE` (v27.159). Every seat names its question over its settle horizon (P-26). | P-4, §4.6, P-25, P-26 |
 | 7 BUDGETS | `GREATEST(current + (need − current) / ramp_steps, need, good side, $1.00)` — **need** being the good side + the seats + the queue at today's rate — snapped out of the forbidden $20.01–$31.99 band. No move on a brand-defense, an unmeasured or (v27.158) a **holdout** campaign. `campaign_budget_basis` names what bound the cap (v27.158): `RAMPED` (the one-third number), `FLOORED_AT_NEED`, `BAND_SNAPPED_UP` / `_DOWN`, `FLOORED_AT_MINIMUM`, `NO_MOVE_*`. | §4.7, P-27 |
@@ -1566,8 +1566,10 @@ the seat (`seat_since`) and its question; its cost — since v27.164 its kept pr
 not the cost it was seated at (see "An incumbent's cost is tonight's money" below) — comes off the
 allowance first. The
 builder walks the incumbents in the order they took their seats (earliest first, tonight's rank
-breaking a tie) with the same fit test as newcomers, then walks every other candidate in rank order
-into what is left. `seat_tenure` says which: `INCUMBENT`, `NEW`, or `LEFT_ALLOWANCE_SHRANK` on an
+breaking a tie) — since v27.167 as a prefix: when the allowance cannot carry them all, they leave
+latest-seated first until the rest fit (see "Incumbents leave latest-seated first" below; v27.159 ..
+v27.164 used the newcomers' fit test) — then walks every other candidate in rank order into what is
+left. `seat_tenure` says which: `INCUMBENT`, `NEW`, or `LEFT_ALLOWANCE_SHRANK` on an
 incumbent tonight's allowance could not carry; each sentence says it in words ("TENURE: …",
 "TENURE ENDS EARLY: …"). The previous partition is the latest one **before** tonight's `as_of`, so a
 rewrite of the same night derives the same incumbents from the same rows.
@@ -1582,14 +1584,14 @@ Three readings the builder had to make, recorded for Ori:
    therefore starts with the 2026-10-02 partition and is first honoured by the 2026-10-03 one.
    *To overrule:* drop `AND seat_since IS NOT NULL` from `prior_seat` (and re-price the old seats
    under P-19 first, or the raises come back).
-2. **"Those seated latest leave first" is a fit test in seat order.** When the allowance cannot carry
-   every incumbent, the walk keeps each incumbent whose cost fits what the incumbents seated before it
-   left. The latest seated are the ones that find no room, except that a senior seat whose cost alone
-   exceeds the room left leaves and a cheaper junior one that fits stays — the §4.4 fit test, not a
-   prefix stop (the v27.136 defect). On a doctored judgement with LolliME's allowance share halved
-   (allowance $136.03 → $118.83 a day), the simulated 2026-10-03 night kept 25 incumbents of 49
-   ($118.82 a day) and released 24 ($13.57 a day); all 49 took their seats the same night, so
-   tonight's rank decided the order.
+2. **"Those seated latest leave first" — read as a fit test in seat order until v27.164; a prefix
+   since v27.167 (follow-up F8, which restores R2's words).** v27.159 kept each incumbent whose cost
+   fitted what the incumbents seated before it left, so a senior seat whose cost alone exceeded the
+   room left went out and a cheaper junior one that fitted stayed. On a doctored judgement with
+   LolliME's allowance share halved (allowance $136.03 → $118.83 a day), the simulated 2026-10-03
+   night kept 25 incumbents of 49 ($118.82 a day) and released 24 ($13.57 a day); all 49 took their
+   seats the same night, so tonight's rank decided the order. The proof (2026-10-03) listed this as
+   R2 not built as worded; v27.167 builds the words.
 3. **An incumbent keeps its price** even when tonight's window would price it differently: settle
    discipline at the new price is the point of the verdict date. P-19 was applied the night the
    price was set; the sentence prints tonight's price beside the kept one when they differ.
@@ -2234,6 +2236,126 @@ anchored rule, 33 saying "ONE quiet window") and 0 on the new one; the v27.156 f
 7-night run's sentence saying 3 `C22` 1; every GRACE verdict made GOOD `C22` 1; the empty judgement
 `C22` 1. A GRACE row with a NULL sentence (C22's CTE alone on a copy of the new snapshot) reads 1; the
 v27.156 form read 0 on it.
+
+### Incumbents leave latest-seated first (v27.167, piece-1 follow-up F8 — P-16)
+
+**The defect.** R2 (P-16): if tonight's allowance cannot carry every incumbent, those seated latest
+leave first. v27.159–v27.164 walked the incumbents in seat order with the newcomers' fit test (skip
+and continue), so an earlier, costlier incumbent could leave while a later, cheaper one kept its seat
+(reading 2 of "Tenure, probes, the question and the numbers"; the Task 10 proof listed it as R2 not
+built as worded). The live 2026-10-03 partition (v27.164, built 08:58 UTC) carries 0
+`LEFT_ALLOWANCE_SHRANK` rows in either plan; the proof counted 0 plan-B rows and 2 plan-A Lollibox
+rows on the v27.160 build of that night, sent out by the stale costs F2 retired.
+
+**The rule (v27.167).** The incumbents' walk (`walk_inc`) is a **prefix** of the incumbents in seat
+order (`seat_since`, then tonight's rank): it keeps them while the running cost fits the ramped
+allowance, and the first one that does not fit leaves together with every incumbent seated after it,
+however cheap. No incumbent's cost is negative (each branch of `inc_cost` multiplies a bid, a click
+goal or a window spend), so this is exactly the set left by dropping the latest seated one at a time
+until the rest fit. An incumbent that leaves is then a candidate like any other in the newcomers'
+walk, at tonight's price and in rank order (unchanged). The TENURE ENDS EARLY sentence states R2's
+rule and what the kept incumbents cost: "… cannot carry every incumbent, so incumbents leave
+latest-seated first until the rest fit (P-16): the 9 that keep their seats were all seated before it
+(tonight's rank breaking a tie of seat dates) and cost $69.00 a day, so it gives the seat up before
+its date." (v27.164: "incumbents keep their seats in the order they took them, and this one no longer
+fits behind those seated before it" — the fit test's words.)
+
+*A reading recorded for Ori:* the newcomers' walk still re-seats an incumbent the prefix sent out when
+its rank comes up and its cost at tonight's price fits (as since v27.159). It then holds a NEW seat —
+a new verdict date and question — not its old contract. On the doctored copy below, 20 of the 84
+incumbents v27.167 sends out are re-seated that way, so a later-seated keyword can end the night in a
+seat while an earlier one queues. *To overrule:* leave walk 1's leavers out of `new_order`.
+
+**Checks.** The builder's P-16 assertion and acceptance `T1` read walk 1's order (`inc_pos`: the
+previous partition's `seat_since`, then tonight's rank): no incumbent that left (a re-seat as NEW
+included) comes before one that kept its seat, and the **first** one that left costs more than the
+allowance leaves after the kept ones. Until v27.164 both asked that of **every** incumbent that left
+— the fit test's own invariant, which passes the skip and refuses the prefix (a later leaver can be
+cheap enough to fit). `T1`'s sentence term asks a `LEFT_ALLOWANCE_SHRANK` row for R2's words.
+
+### Deploy and verify v27.167 (2026-10-03, piece-1 follow-up F8)
+
+```bash
+cd /Users/ori/Develop/OI
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/procedures/SP_BUILD_NEXT_WEEK_PLAN.sql)"
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache --nosync \
+  "$(grep -v '^[[:space:]]*--' scripts/bigquery/tests/FACT_PLAN_NEXT_WEEK_acceptance.sql)"   # bq wait <job> 60
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit --judge-table <a snapshot of the judgement>
+python3 scripts/bigquery/tests/check_plan_seat_controls.py --collect <the JOB it printed>
+```
+
+```sql
+-- incumbents on the latest partition, in walk 1's order: first_left_pos < last_kept_pos is a leaver
+-- seated before a kept incumbent, the skip v27.167 retires
+WITH h AS (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+           WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+                          WHERE as_of < (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`))),
+p AS (SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
+      WHERE as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`)),
+e AS (SELECT p.plan, p.family, p.seat_tenure,
+             ROW_NUMBER() OVER (PARTITION BY p.plan, p.family ORDER BY h.seat_since, p.rank_no, p.campaign_id, p.keyword_id) AS pos
+      FROM h JOIN p USING (plan, family, campaign_id, keyword_id)
+      WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
+        AND p.is_candidate AND COALESCE(p.ladder_state, '') != 'DEAD')
+SELECT plan, family, COUNT(*) AS incumbents, COUNTIF(seat_tenure = 'INCUMBENT') AS kept,
+       COUNTIF(seat_tenure = 'LEFT_ALLOWANCE_SHRANK') AS left_allowance_shrank,
+       COUNTIF(seat_tenure = 'NEW') AS left_and_reseated_new,
+       MAX(IF(seat_tenure = 'INCUMBENT', pos, 0)) AS last_kept_pos,
+       MIN(IF(COALESCE(seat_tenure, '') != 'INCUMBENT', pos, NULL)) AS first_left_pos
+FROM e GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+Measured 2026-10-03 (11:00–11:22 UTC, Los Angeles and New York both 10-03).
+
+- **No change on tonight's data.** One judgement snapshot, `OI._tmp_f8_judge` (taken 11:00 UTC, window
+  09-29 … 10-01, BOOST, 356 rows; 610.0 slot-seconds). Both bodies dry-run on it (the partition write
+  swapped for a scratch table; v27.164 812.9, v27.167 884.1 slot-seconds): every builder assertion
+  passed, and the two would-be 10-03 partitions are equal on all 712 rows, every column but
+  `built_at`, floats exactly. Against the live 10-03 partition (built 08:58 UTC by v27.164) the v27.167 dry run differs
+  only in `sentence` on 66 rows — the 33 GRACE rows of each plan, which carry F3's words (deployed after
+  that build) — and by at most 2.9e-14 on floats. No incumbent leaves on that night.
+- **A night that shrinks.** A copy of the snapshot with LolliME's and Fresh's `allowance_share` 0.25 and
+  `ramp_steps` 1 (`OI._tmp_f8_judge_shrunk`, so their allowance is a quarter of the pot) shrinks four
+  plan × family walks; the other four carry every incumbent under both bodies. Every incumbent took
+  its seat on 10-02, so tonight's rank decides the order. Costs are each incumbent's kept price on
+  tonight's window.
+
+  | plan · family | allowance $/day | incumbents ($/day) | v27.164 kept ($/day) · left · kept after one that left ($/day) | v27.167 kept ($/day) · left · re-seated as NEW |
+  |---|---|---|---|---|
+  | A · Fresh | 38.86 | 14 (53.31) | 10 (38.80) · 4 · 6 (5.85) | 4 (32.94) · 10 · 6 |
+  | A · LolliME | 83.73 | 16 (130.52) | 7 (83.70) · 9 · 6 (29.54) | 1 (54.16) · 15 · 8 |
+  | B · Fresh | 18.69 | 22 (61.43) | 7 (18.64) · 15 · 6 (15.23) | 1 (3.42) · 21 · 5 |
+  | B · LolliME | 69.68 | 47 (115.93) | 10 (69.67) · 37 · 1 (0.67) | 9 (69.00) · 38 · 1 |
+
+  v27.164: 19 incumbents kept a seat after an earlier one left ($51.29 a day), and 45 that left were
+  seated before one that kept its seat. v27.167: 0 and 0; 84 leave, 64 as `LEFT_ALLOWANCE_SHRANK` and
+  20 re-seated by the newcomers' walk as NEW.
+- **The builder's assertion, controlled on that copy.** The v27.167 body with walk 1 put back to the fit
+  test was refused by the P-16 assertion (job `f8_dry__tmp_f8_ncwalk_shrunk_1791025762`, 1,094.3
+  slot-seconds); the prefix walk under v27.164's eviction test was refused by the same assertion (job
+  `f8_dry__tmp_f8_oldassert_shrunk_1791025765`, 1,142.1 slot-seconds); the v27.164 body (job
+  `f8_dry__tmp_f8_old_shrunk_1791025558`, 1,457.5) and the v27.167 body (job
+  `f8_dry__tmp_f8_new_shrunk_1791025760`, 1,803.6) passed every assertion.
+- **Acceptance.** On the live partition and the deployed view: 37 rows PASS (job
+  `f8_acc167_live_1791025929`, 2,365.3 slot-seconds). On the shrunk copy (history = the live table
+  before 10-03 + the dry run's 10-03 partition): this form reads 37 PASS on the v27.167 partition and
+  `T1` 110 on the v27.164 one (45 leavers before a kept incumbent + 65 TENURE ENDS EARLY sentences in
+  the fit test's words); v27.164's form reads `T1` 59 on the v27.167 partition (later leavers cheap
+  enough to fit the room the kept ones leave) and 37 PASS on the v27.164 one.
+- **The negative controls** (`check_plan_seat_controls.py --judge-table onyga-482313.OI._tmp_f8_judge`,
+  job `bqjob_r7aa7d0f7442a1a18_000001a10177bacd_1`, 10,719.1 slot-seconds): exit 0, LIVE 50 readings 0,
+  all 35 copies exercised and as expected. New: two contracts behind every kept incumbent, the earlier
+  priced out and the later at $0.00, both leaving → `T1` 0; an eviction dated before every kept
+  incumbent of its family → `T1` 1; an eviction in v27.164's words → `T1` 1. The same three copies
+  under v27.164's acceptance form (job `bqjob_r3e728f553dd863_000001a1017a55a5_1`, 1,357.7
+  slot-seconds) read 1, 0 and 0, so each tells the two forms apart. The eviction copies now doctor a
+  queued row ranked after every kept incumbent of its family (LolliME `207390974307873`, rank 56; the
+  second, LolliME `273302151474906`, rank 57).
+- **Deployed** 11:16:17 UTC (`INFORMATION_SCHEMA.ROUTINES.last_altered`); the deployed body equals the
+  file with comment lines stripped (50,034 characters, whitespace collapsed). No CALL was run: on the
+  11:00 UTC judgement snapshot the v27.167 partition equals v27.164's on every column but `built_at`,
+  so the next orchestrator pass is the first v27.167 write.
 
 ### Four checks that depart from the plan's draft, and why
 

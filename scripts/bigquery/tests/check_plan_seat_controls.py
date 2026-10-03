@@ -53,6 +53,18 @@ HS = 1 when its status is RED)
     NC_T1_SHRANK_SILENT           the same without "TENURE ENDS EARLY" in the sentence: C23 0, T1 1
                                   (the sentence term alone).
     NC_T1_EVICTION_UNJUSTIFIED    the justified copy with the contract priced $0.00: C23 0, T1 1.
+    (v27.167, follow-up F8: incumbents leave latest-seated first until the rest fit.) The queued row
+    the eviction copies doctor is ranked after every INCUMBENT of its plan x family (families with
+    kept incumbents first), so its contract, dated the night before, is the latest seated in the
+    walk's order (seat date, then tonight's rank), and SHRANK_SAID's sentence carries R2's words.
+    HC_T1_LATER_LEAVES_BEHIND_EARLIER  two such queued rows of one family, contracts dated the night
+                                  before: the earlier priced $1,000,000 (does not fit), the later
+                                  $0.00 (fits on its own); both LEFT_ALLOWANCE_SHRANK: C23 0, T1 0.
+    NC_T1_EARLIER_LEFT_LATER_KEPT the justified eviction with its contract dated a day before the
+                                  earliest kept incumbent of its family (seated before every kept
+                                  one, as the fit test let happen): C23 0, T1 1 (the order term).
+    NC_T1_SHRANK_OLD_WORDS        the justified eviction saying v27.164's fit-test sentence instead
+                                  of R2's words: C23 0, T1 1 (the sentence term).
     NC_S04_NEW_SEAT_COST_OFF      (v27.164) a NEW seat's cost + $0.50 off its implied spend: S04 1,
                                   T3 1 (both now compare the two on seats taken tonight only).
     NC_C23_RENUMBERED             a continuing occupant (same number both nights; the register holds
@@ -99,8 +111,9 @@ EXIT CODES
 
 USAGE (one BigQuery script job: 121 statements, 8 min 34 s and 5,789.9 slot-seconds on 2026-10-03,
 job bqjob_r4ed37cefafebd407_000001a0ff7ee55d_1; with the five v27.164 copies, 32 copies, 8,715.2
-slot-seconds on 2026-10-03 09:00–09:09 UTC, job bqjob_r78febaf76288764f_000001a100fdebd9_1; both exit
-0. It is submitted asynchronously and polled.)
+slot-seconds on 2026-10-03 09:00–09:09 UTC, job bqjob_r78febaf76288764f_000001a100fdebd9_1; with the
+three v27.167 copies, 35 copies, 10,719.1 slot-seconds on 2026-10-03 11:13–11:22 UTC, job
+bqjob_r7aa7d0f7442a1a18_000001a10177bacd_1; all exit 0. It is submitted asynchronously and polled.)
     python3 scripts/bigquery/tests/check_plan_seat_controls.py [--judge-table PROJECT.DATASET.TABLE]
         submit, poll with `bq wait JOB 60` (printing the state each minute), collect.
     python3 scripts/bigquery/tests/check_plan_seat_controls.py --submit [--judge-table ...]
@@ -169,14 +182,19 @@ def at(col, **repl):
 
 def two(col_tonight, col_prev, tonight, prev):
     """doctor one row tonight and one row in the previous partition (both by rn), in one copy"""
+    return many([(col_prev, prev), (col_tonight, tonight)])
+
+
+def many(pairs):
+    """doctor several rows (each picked by rn from a pick column), in one copy: [(pick column,
+    {column: expression}), ...]"""
     sets = []
-    keys = set(tonight) | set(prev)
+    keys = set().union(*[set(d) for _, d in pairs])
     for k in sorted(keys):
         e = k
-        if k in prev:
-            e = f"IF(rn = (SELECT {col_prev} FROM pick), {prev[k]}, {e})"
-        if k in tonight:
-            e = f"IF(rn = (SELECT {col_tonight} FROM pick), {tonight[k]}, {e})"
+        for col, d in pairs:
+            if k in d:
+                e = f"IF(rn = (SELECT {col} FROM pick), {d[k]}, {e})"
         sets.append(f"{e} AS {k}")
     return f"SELECT * EXCEPT (rn) REPLACE ({', '.join(sets)}) FROM hbase"
 
@@ -232,12 +250,23 @@ DROP_PREV = {  # a seat dated tomorrow in the previous partition, for a keyword 
     "clicks_requested": "7", "clicks_due_date": "DATE_ADD((SELECT mx FROM pick), INTERVAL 1 DAY)",
     "expected_cpc": "0.01", "implied_daily_spend": "0.01", "request_basis": "'HORIZON_WINDOW_RATE'",
 }
+# v27.167 (F8): a LEFT_ALLOWANCE_SHRANK row says R2's rule in R2's words
 SHRANK_SAID = {"seat_tenure": "'LEFT_ALLOWANCE_SHRANK'",
-               "sentence": "CONCAT(sentence, ' TENURE ENDS EARLY: doctored.')"}
+               "sentence": "CONCAT(sentence, ' TENURE ENDS EARLY: doctored, so incumbents leave latest-seated first until the rest fit (P-16).')"}
 SHRANK_SILENT = {"seat_tenure": "'LEFT_ALLOWANCE_SHRANK'",
                  "sentence": "REPLACE(sentence, 'TENURE ENDS EARLY', 'tenure ends early')"}
+# v27.164's words, which named the fit test
+SHRANK_OLD_WORDS = {"seat_tenure": "'LEFT_ALLOWANCE_SHRANK'",
+                    "sentence": "CONCAT(sentence, ' TENURE ENDS EARLY: doctored; incumbents keep their seats in the order they took them, and this one no longer fits behind those seated before it (P-16).')"}
 INC = ["inc_rn", "inc_prev_rn", "prev_as_of"]
 QUEUED = ["queued_rn", "queued_prev_rn", "prev_as_of", "mx"]
+# v27.167 (F8): a second queued row of the same plan x family, ranked after the first; and the
+# earliest seat date of that family's kept incumbents
+QUEUED2 = QUEUED + ["queued2_rn", "queued2_prev_rn"]
+EARLIER = QUEUED + ["queued_fam_inc_since"]
+DEAR = dict(DROP_PREV, planned_bid="1000000.0")      # costs more than any allowance at that price
+CHEAP2 = dict(DROP_PREV, seat_no="998")              # $0.00: fits any room on its own
+EARLIER_DEAR = dict(DEAR, seat_since="DATE_SUB((SELECT queued_fam_inc_since FROM pick), INTERVAL 1 DAY)")
 HORIZON = "DATE_DIFF(clicks_due_date, seat_since, DAY)"
 
 # name -> (copy SQL, [(check, expected)], pick columns the copy needs: NULL = NOT EXERCISED)
@@ -267,14 +296,25 @@ COPIES = {
     # v27.164 (F2): the eviction test reads the contract's kept price on tonight's window, so the
     # justified copy prices the contract at $1,000,000 (any spend or probe goal costs more than any
     # allowance at it) and the unjustified one at $0.00
-    "HC_T1_EVICTION_JUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID,
-                                     dict(DROP_PREV, planned_bid="1000000.0")),
+    "HC_T1_EVICTION_JUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID, DEAR),
                                  [("C23", 0), ("T1", 0)], QUEUED),
-    "NC_T1_SHRANK_SILENT": (two("queued_rn", "queued_prev_rn", SHRANK_SILENT,
-                                dict(DROP_PREV, planned_bid="1000000.0")),
+    "NC_T1_SHRANK_SILENT": (two("queued_rn", "queued_prev_rn", SHRANK_SILENT, DEAR),
                             [("C23", 0), ("T1", 1)], QUEUED),
     "NC_T1_EVICTION_UNJUSTIFIED": (two("queued_rn", "queued_prev_rn", SHRANK_SAID, DROP_PREV),
                                    [("C23", 0), ("T1", 1)], QUEUED),
+    # v27.167 (F8): incumbents leave latest-seated first until the rest fit. Two contracts dated the
+    # night before for two queued rows ranked after every kept incumbent of their family: the
+    # earlier ($1,000,000) does not fit, so the later ($0.00, which would fit on its own) leaves too
+    "HC_T1_LATER_LEAVES_BEHIND_EARLIER": (many([("queued_prev_rn", DEAR), ("queued2_prev_rn", CHEAP2),
+                                                ("queued_rn", SHRANK_SAID), ("queued2_rn", SHRANK_SAID)]),
+                                          [("C23", 0), ("T1", 0)], QUEUED2),
+    # the fit test's outcome F8 retires: an incumbent seated before every kept one of its family
+    # ($1,000,000, so the v27.164 test passed it) leaves while the later ones keep their seats
+    "NC_T1_EARLIER_LEFT_LATER_KEPT": (two("queued_rn", "queued_prev_rn", SHRANK_SAID, EARLIER_DEAR),
+                                      [("C23", 0), ("T1", 1)], EARLIER),
+    # a justified eviction whose sentence names v27.164's fit test instead of R2's rule
+    "NC_T1_SHRANK_OLD_WORDS": (two("queued_rn", "queued_prev_rn", SHRANK_OLD_WORDS, DEAR),
+                               [("C23", 0), ("T1", 1)], QUEUED),
     # v27.164 (F2): S04 and T3 hold implied spend = seat cost on a seat taken tonight
     "NC_S04_NEW_SEAT_COST_OFF": (at("new_rn", seat_cost_per_day="seat_cost_per_day + 0.50"),
                                  [("S04", 1), ("T3", 1)], ["new_rn"]),
@@ -323,10 +363,19 @@ cl AS (SELECT plan, family, campaign_id, keyword_id, seat_no AS claim_no, as_of 
 cont AS (SELECT t.rn, y.rn AS prev_rn FROM b0 t JOIN prev0 y USING (plan, family, campaign_id, keyword_id)
          WHERE t.seat_no IS NOT NULL AND y.seat_no = t.seat_no AND NOT COALESCE(t.is_probe, FALSE)
            AND t.seat_tenure IN ('NEW', 'INCUMBENT')),
--- a live candidate tonight's walk queued (not an incumbent that left), present the night before
-queued AS (SELECT t.rn, y.rn AS prev_rn FROM b0 t JOIN prev0 y USING (plan, family, campaign_id, keyword_id)
+-- a live candidate tonight's walk queued (not an incumbent that left), present the night before.
+-- v27.167 (F8): ranked after every INCUMBENT of its plan x family, so a contract doctored onto it
+-- dated the night before (the latest an incumbent can be seated) is the latest seated of them in
+-- the walk's order (seat date, then tonight's rank); families with kept incumbents first
+incfam AS (SELECT plan, family, MAX(rank_no) AS max_inc_rank, MIN(seat_since) AS min_inc_since
+           FROM b0 WHERE seat_tenure = 'INCUMBENT' GROUP BY 1, 2),
+queued AS (SELECT t.rn, y.rn AS prev_rn, t.plan, t.family, t.rank_no, m.min_inc_since,
+                  ROW_NUMBER() OVER (ORDER BY m.max_inc_rank IS NULL, t.rn) AS qix
+           FROM b0 t JOIN prev0 y USING (plan, family, campaign_id, keyword_id)
+           LEFT JOIN incfam m USING (plan, family)
            WHERE t.is_candidate AND t.seat_no IS NULL AND COALESCE(t.ladder_state, '') != 'DEAD'
-             AND COALESCE(t.seat_tenure, '') != 'LEFT_ALLOWANCE_SHRANK'),
+             AND COALESCE(t.seat_tenure, '') != 'LEFT_ALLOWANCE_SHRANK'
+             AND t.rank_no > COALESCE(m.max_inc_rank, 0)),
 -- a continuing occupant (either plan) whose number the register holds for no OTHER keyword
 contnoreg AS (SELECT t.rn FROM hbase t JOIN prev0 y USING (plan, family, campaign_id, keyword_id)
               WHERE t.as_of = (SELECT MAX(as_of) FROM hbase) AND t.seat_no IS NOT NULL AND y.seat_no = t.seat_no
@@ -347,8 +396,13 @@ SELECT
   (SELECT prev_rn FROM cont WHERE rn = (SELECT MIN(rn) FROM cont)) AS inc_prev_rn,
   (SELECT MIN(rn) FROM b0 WHERE seat_no IS NOT NULL AND NOT COALESCE(is_probe, FALSE)) AS seat_rn,
   (SELECT MIN(rn) FROM b0 WHERE seat_tenure = 'NEW' AND NOT COALESCE(is_probe, FALSE)) AS new_rn,
-  (SELECT MIN(rn) FROM queued) AS queued_rn,
-  (SELECT prev_rn FROM queued WHERE rn = (SELECT MIN(rn) FROM queued)) AS queued_prev_rn,
+  (SELECT rn FROM queued WHERE qix = 1) AS queued_rn,
+  (SELECT prev_rn FROM queued WHERE qix = 1) AS queued_prev_rn,
+  (SELECT min_inc_since FROM queued WHERE qix = 1) AS queued_fam_inc_since,
+  (SELECT q2.rn FROM queued q2 JOIN queued q1 ON q1.qix = 1 AND q2.plan = q1.plan AND q2.family = q1.family
+   WHERE q2.rank_no > q1.rank_no ORDER BY q2.rank_no LIMIT 1) AS queued2_rn,
+  (SELECT q2.prev_rn FROM queued q2 JOIN queued q1 ON q1.qix = 1 AND q2.plan = q1.plan AND q2.family = q1.family
+   WHERE q2.rank_no > q1.rank_no ORDER BY q2.rank_no LIMIT 1) AS queued2_prev_rn,
   (SELECT MIN(rn) FROM contnoreg) AS cont_rn,
   (SELECT MIN(rn) FROM ret) AS ret_rn,
   (SELECT MIN(l.seat_no) FROM led l WHERE l.family = (SELECT family FROM a0 WHERE seat_no IS NOT NULL ORDER BY rn LIMIT 1)

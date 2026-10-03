@@ -1,5 +1,5 @@
 -- =============================================================================================
--- FACT_PLAN_NEXT_WEEK acceptance — v27.160 (2026-10-02). The spec's §9 guarantees, read on the
+-- FACT_PLAN_NEXT_WEEK acceptance — v27.167 (2026-10-03). The spec's §9 guarantees, read on the
 -- latest as_of partition. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
 -- Spec: docs/superpowers/specs/2026-08-23-next-week-money-plan-design.md §9, P-2, P-4, P-6..P-9,
@@ -226,6 +226,35 @@
 --   NC_S04_NEW_SEAT_COST_OFF (a NEW seat's cost + $0.50, LolliME 174400329814141): S04 1, T3 1.
 --   NC_EMPTY: S04 1 (its new emptiness term) with C23 T1 T2 T3 T4 T5 HS 1. Every other copy read its
 --   expected value (listed above).
+--
+-- v27.167 (2026-10-03, piece-1 follow-up F8 — P-16). RESTATED: T1 (incumbents leave latest-seated
+-- first until the rest fit: in walk 1's order — the previous partition's seat_since, then tonight's
+-- rank — no incumbent that left comes before one that kept its seat, the first one that left did not
+-- fit what the kept ones leave, and a LEFT_ALLOWANCE_SHRANK sentence says R2's words).
+-- RUN 2026-10-03 on the live 10-03 partition (written by v27.164; 0 LEFT_ALLOWANCE_SHRANK rows) and
+-- the deployed view: 37 rows PASS (job f8_acc167_live_1791025929, 2,365.3 slot-seconds). On a copy of
+-- the judgement snapshot OI._tmp_f8_judge (11:00 UTC) with LolliME's and Fresh's allowance_share 0.25
+-- and ramp_steps 1 (OI._tmp_f8_judge_shrunk), under both builder bodies' dry runs (history = the live
+-- table before 10-03 + the dry run's 10-03 partition): this form reads 37 PASS on the v27.167
+-- partition (job f8_acc167_on_new_shrunk_1791025906) and T1 110 on the v27.164 one (45 incumbents
+-- that left before one that kept its seat + 65 TENURE ENDS EARLY sentences in the fit test's words;
+-- job f8_acc167_on_old_shrunk_1791025906); the v27.164 form reads T1 59 on the v27.167 partition
+-- (later leavers cheap enough to fit the room the kept ones leave; job
+-- f8_acc164_on_new_shrunk_1791025906) and 37 PASS on the v27.164 one.
+-- NEGATIVE CONTROLS, run 2026-10-03 11:13-11:22 UTC by scripts/bigquery/tests/check_plan_seat_controls.py
+-- --judge-table onyga-482313.OI._tmp_f8_judge on every partition, the latest the 10-03 partition
+-- (job bqjob_r7aa7d0f7442a1a18_000001a10177bacd_1, 10,719.1 slot-seconds; exit 0, all 35 copies
+-- exercised): LIVE 50 readings 0. The eviction copies now doctor a queued row ranked after every kept
+-- incumbent of its family (LolliME 207390974307873, rank 56), so its contract dated the night before
+-- is the latest seated; NC_C23_SEAT_DROPPED C23 1 T1 1, HC_T1_EVICTION_JUSTIFIED T1 0,
+-- NC_T1_SHRANK_SILENT T1 1, NC_T1_EVICTION_UNJUSTIFIED T1 1 as before. New:
+--   HC_T1_LATER_LEAVES_BEHIND_EARLIER (that row's contract priced $1,000,000 and a second queued row's,
+--     LolliME 273302151474906 at rank 57, priced $0.00, both LEFT_ALLOWANCE_SHRANK): C23 0, T1 0.
+--   NC_T1_EARLIER_LEFT_LATER_KEPT (the $1,000,000 contract dated a day before the family's earliest
+--     kept incumbent): C23 0, T1 1.
+--   NC_T1_SHRANK_OLD_WORDS (the justified eviction in v27.164's sentence): C23 0, T1 1.
+--   The v27.164 form of this file on the same three copies (job
+--   bqjob_r3e728f553dd863_000001a1017a55a5_1, 1,357.7 slot-seconds): T1 1, 0, 0.
 -- =============================================================================================
 WITH p AS (
   SELECT * FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`
@@ -709,9 +738,9 @@ m3 AS (
 ),
 -- ---- v27.159 (2026-10-02, piece-1 plan Task 5): the builder's seats ----
 -- T1 (P-16): an incumbent keeps its contract — number (C23), price, verdict date, the night it took
--- the seat, the question — or leaves only when the allowance cannot carry it: its cost is above what
--- the allowance leaves after every incumbent that kept its seat (the walk tests incumbents in seat
--- order, so one that left found less room than that). No other row claims tenure; a seat is
+-- the seat, the question — or leaves only when the allowance cannot carry every incumbent (since
+-- v27.167 latest-seated first until the rest fit; see the RESTATED v27.167 note below; v27.159 ..
+-- v27.164 asked every leaver to cost more than the room the kept ones leave). No other row claims tenure; a seat is
 -- INCUMBENT or NEW and carries seat_since (as_of on a NEW seat); and each tenure says itself in the
 -- sentence. Vacuous on the first v27.159 partition (no contract written before it); the controls
 -- exercise it.
@@ -723,7 +752,29 @@ m3 AS (
 -- v27.159 form compared the cost with the previous partition's, which is the rule F2 retired: on the
 -- 2026-10-03 partition built 08:12 UTC by v27.160 it held 30 live incumbents that printed "A RAISE"
 -- ($15.24 a day) while their price was held or cut.
+-- RESTATED v27.167 (piece-1 follow-up F8): INCUMBENTS LEAVE LATEST-SEATED FIRST UNTIL THE REST FIT.
+-- The eviction term reads the builder's walk order (the previous partition's seat_since, then
+-- tonight's rank; inc_ord): no incumbent that left (any tenure but INCUMBENT, a re-seat as NEW
+-- included) comes before one that kept its seat, and the first one that left costs more than the
+-- allowance leaves after the kept ones. The v27.164 form asked that of every incumbent that left —
+-- the fit test's invariant, which passes an earlier, costlier incumbent sent out while a later,
+-- cheaper one keeps its seat, and fails a later leaver cheap enough to fit on its own. The sentence
+-- term now also asks a LEFT_ALLOWANCE_SHRANK row for R2's words ("incumbents leave latest-seated
+-- first until the rest fit"): v27.164's sentence named the fit test.
 inc_goal AS (SELECT campaign_id, keyword_id, click_goal_day FROM j),
+inc_ord AS (
+  SELECT x.*,
+         MAX(IF(x.seat_tenure = 'INCUMBENT', x.inc_pos, 0)) OVER (PARTITION BY x.plan, x.family) AS last_kept_pos,
+         MIN(IF(COALESCE(x.seat_tenure, '') != 'INCUMBENT', x.inc_pos, NULL))
+           OVER (PARTITION BY x.plan, x.family) AS first_left_pos
+  FROM (SELECT p.plan, p.family, p.campaign_id, p.keyword_id, p.seat_tenure,
+               ROW_NUMBER() OVER (PARTITION BY p.plan, p.family
+                                  ORDER BY h.seat_since, p.rank_no, p.campaign_id, p.keyword_id) AS inc_pos
+        FROM prev h
+        JOIN p USING (plan, family, campaign_id, keyword_id)
+        WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
+          AND p.is_candidate AND COALESCE(p.ladder_state, '') != 'DEAD') x
+),
 inc_cost AS (
   SELECT p.plan, p.campaign_id, p.keyword_id,
          COALESCE(CASE WHEN p.is_probe
@@ -737,7 +788,7 @@ inc_cost AS (
   WHERE h.seat_no IS NOT NULL AND h.seat_since IS NOT NULL AND h.verdict_date > p.as_of
 ),
 t1 AS (
-  SELECT 'T1 P-16: an incumbent keeps its contract and costs its kept price tonight, or leaves only when tonight allowance cannot carry it; tenure is written and said',
+  SELECT 'T1 P-16: an incumbent keeps its contract and costs its kept price tonight, or leaves only when tonight allowance cannot carry every incumbent, latest-seated first until the rest fit; tenure is written and said',
          (SELECT COUNTIF(p.seat_tenure = 'INCUMBENT'
                          AND (p.seat_no IS NULL
                               OR p.seat_since IS DISTINCT FROM h.seat_since
@@ -749,10 +800,13 @@ t1 AS (
                               OR p.expected_cpc IS DISTINCT FROM h.expected_cpc
                               OR p.request_basis IS DISTINCT FROM h.request_basis))
                 + COUNTIF(COALESCE(p.seat_tenure, '') != 'INCUMBENT'
-                          AND NOT (c.cost_tonight > fa.allow - fa.kept + 0.0001))
+                          AND (o.inc_pos < o.last_kept_pos
+                               OR (o.inc_pos = o.first_left_pos
+                                   AND NOT (c.cost_tonight > fa.allow - fa.kept + 0.0001))))
           FROM prev h
           JOIN p USING (plan, family, campaign_id, keyword_id)
           JOIN inc_cost c USING (plan, campaign_id, keyword_id)
+          JOIN inc_ord o USING (plan, family, campaign_id, keyword_id)
           JOIN (SELECT plan, family, MAX(allowance_ramped_per_day) allow,
                        SUM(IF(seat_tenure = 'INCUMBENT', seat_cost_per_day, 0)) kept
                 FROM p GROUP BY 1, 2) fa USING (plan, family)
@@ -769,7 +823,10 @@ t1 AS (
                          OR (seat_tenure = 'NEW' AND seat_since != as_of)
                          OR (seat_tenure = 'INCUMBENT' AND STRPOS(sentence, 'TENURE: it has held this seat since') = 0)
                          OR (seat_tenure = 'NEW' AND STRPOS(sentence, 'TENURE: seated tonight') = 0)
-                         OR (seat_tenure = 'LEFT_ALLOWANCE_SHRANK' AND STRPOS(sentence, 'TENURE ENDS EARLY') = 0))
+                         -- v27.167 (F8): and in R2's words, not v27.164's fit-test sentence
+                         OR (seat_tenure = 'LEFT_ALLOWANCE_SHRANK'
+                             AND (STRPOS(sentence, 'TENURE ENDS EARLY') = 0
+                                  OR STRPOS(sentence, 'incumbents leave latest-seated first until the rest fit') = 0)))
           FROM p)
        + (SELECT IF(COUNT(*) = 0, 1, 0) FROM p)
 ),

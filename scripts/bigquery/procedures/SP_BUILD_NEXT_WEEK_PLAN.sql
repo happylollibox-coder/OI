@@ -1,5 +1,28 @@
 -- =============================================================================================
--- SP_BUILD_NEXT_WEEK_PLAN — v27.164 (2026-10-03): the nightly plan for the working families.
+-- SP_BUILD_NEXT_WEEK_PLAN — v27.167 (2026-10-03): the nightly plan for the working families.
+-- v27.167 (piece-1 follow-up F8, 2026-10-03; P-16 = Ori's ruling R2 of 2026-10-02):
+--   WHEN THE ALLOWANCE SHRINKS, INCUMBENTS LEAVE LATEST-SEATED FIRST UNTIL THE REST FIT. Walk 1
+--   (`walk_inc`) is a PREFIX of the incumbents in the order they took their seats (seat_since,
+--   earliest first; tonight's rank breaks a tie): it keeps them while the running total fits the
+--   ramped allowance, and the first one that does not fit leaves together with every incumbent
+--   seated after it (LEFT_ALLOWANCE_SHRANK). Every branch of inc_cost multiplies non-negative
+--   factors (a bid, a click goal, a window spend), so the running total only grows along the order
+--   and this prefix is the set R2 names: the latest seated dropped one at a time until the rest fit.
+--   v27.159 .. v27.164 walked the incumbents with walk 2's fit test (skip and continue), so an
+--   earlier, costlier incumbent could leave while a later, cheaper one kept its seat. An incumbent
+--   that leaves is a candidate like any other in walk 2, at tonight's price and in rank order
+--   (unchanged). The P-16 assertion and acceptance T1 now test the order — no incumbent that left
+--   was seated before one that kept its seat — and that the first one to leave did not fit what the
+--   kept ones leave of the allowance; the TENURE ENDS EARLY sentence states the rule and what the
+--   kept incumbents cost (inc_spent.n_kept, .spent).
+--   Measured 2026-10-03 (dry runs, the partition write swapped for a scratch table; SOP §3,
+--   "Incumbents leave latest-seated first"): on the judgement snapshot OI._tmp_f8_judge (11:00 UTC)
+--   the v27.164 and v27.167 bodies write equal 10-03 partitions, 712 rows, every column but
+--   built_at (no incumbent leaves that night). On a copy with LolliME's and Fresh's
+--   allowance_share 0.25 and ramp_steps 1, four plan x family walks shrink: v27.164 kept 19
+--   incumbents seated after one that left ($51.29 a day); v27.167 keeps none, sends 84 out and walk 2
+--   re-seats 20 of them as NEW. On that copy the P-16 assertion refuses this body with walk 1 put
+--   back to the fit test, and the prefix under the v27.164 eviction test.
 -- v27.164 (piece-1 follow-up F2, 2026-10-03; P-16 = Ori's ruling R2 of 2026-10-02):
 --   AN INCUMBENT'S COST IS TONIGHT'S MONEY. P-16 keeps an incumbent's seat, number, planned price,
 --   verdict date and question — not the cost its seat was granted at, which was the window of the
@@ -42,9 +65,9 @@
 --                       previous partition under P-16, before its verdict date and still a
 --                       candidate (not GOOD, not holdout, ladder not DEAD), keeps its seat, number,
 --                       price, verdict date and question, and costs its kept price on tonight's
---                       window (v27.164); incumbents are walked in the order
---                       they took their seats, so when the allowance shrinks the latest seated find
---                       no room. Then not-good CANDIDATES ranked by P-7's score, the zero-score ones
+--                       window (v27.164); when tonight's allowance cannot carry
+--                       every incumbent they leave latest-seated first until the rest fit (a prefix
+--                       in seat order, v27.167). Then not-good CANDIDATES ranked by P-7's score, the zero-score ones
 --                       by money burned with no return (P-20, v27.159), each costing its spend AT
 --                       THE REPAIRED PRICE, walked in rank order into what the incumbents left: a
 --                       candidate takes the lowest free seat WHENEVER ITS OWN COST FITS THE
@@ -153,8 +176,9 @@
 --
 -- THE SEATS, AS ORI RULED THEM ON 2026-10-02 (v27.159, piece-1 plan Task 5).
 --   P-16 (R2)  a seat is held until its verdict date while its keyword is still a candidate:
---              prior_seat, two walks (incumbents in seat order, then newcomers in rank order into
---              what is left), seat_since / seat_tenure on the row, the tenure assertion. THE
+--              prior_seat, two walks (incumbents in seat order — a prefix since v27.167, follow-up
+--              F8 — then newcomers in rank order into what is left), seat_since / seat_tenure on
+--              the row, the tenure assertion. THE
 --              CUTOVER: a seat is an incumbent only if it was written with seat_since (from
 --              v27.159); seats written before were priced before P-19 / P-25 and asked before P-26.
 --   P-20 (R6)  the builder ranks as the judge orders: GREATEST(rank_score, 0), rank_money_burned,
@@ -194,7 +218,7 @@
 -- SOP: architecture/NEXT_WEEK_MONEY.md §3.
 -- =============================================================================================
 CREATE OR REPLACE PROCEDURE `onyga-482313.OI.SP_BUILD_NEXT_WEEK_PLAN`()
-OPTIONS (description = "v27.164 (2026-10-03, piece-1 follow-up F2, spec P-16): an incumbent keeps its seat, number, planned price, verdict date and question, and its seat cost is its kept price on TONIGHT's window -- (w_sp / window_days) x kept planned bid / current bid, a probe click_goal_day x its kept price -- charged to the allowance by the incumbents' walk and read by the direction clause, planned_spend_per_day, the campaign need, expected_after_upload_per_day and share_closed; until v27.160 it carried the cost its seat was granted at (30 live incumbent rows of the 2026-10-03 partition printed 'A RAISE', $15.24 a day, while their price was held or cut). The P-16 assertion recounts that cost from the row. v27.160 (2026-10-02, piece-1 plan Task 6, ruling R11 = spec P-24, audit fix #25): a night is keyed on the New York date -- as_of = CURRENT_DATE('America/New_York'), the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on and (from the same version) counts nights and reads the plan's history on; the window fence stays on Los Angeles; partitions written before v27.160 are keyed on the Los Angeles date. R11's guard: before the DELETE, a partition for tonight's date written under a different calendar state is never rewritten (the build raises 'partition <date> was written under <state>; tonight reads <state>; refusing to rewrite'), and every row of a night carries one calendar state (asserted). Fix #25: a shadow (plan A) row whose side differs from the live plan's names the ladder state, plan A's side and rule B's verdict, then plan A's own move, instead of the judgement's rule-B sentence and its P-4 'carries no planned price' clause. The ramp step's upload count reads applied_at on the New York date. v27.159 (2026-10-02, piece-1 plan Task 5, rulings R2/R6/R12/R13/R15 = spec P-16/P-20/P-25/P-26/P-28, audit fix #19): a seat is held until its verdict date while its keyword is still a candidate -- incumbents (last partition's seats written with seat_since, dated after tonight, still candidates, ladder not DEAD) keep their seat, number, price, cost, verdict date and question, are walked first in the order they took their seats, and leave only when tonight's allowance cannot carry them (LEFT_ALLOWANCE_SHRANK); newcomers are walked in rank order into what is left; candidates rank as the judge orders them (P-7 score, then money burned with no return, then clicks); a seated probe is OPEN_PROBE, an unseated probe gets NONE and nothing uploaded, and the queue's words branch on service; clicks_requested spans the settle horizon (window click rate x settle_days, probes click_goal_day x settle_days) with expected_cpc so that clicks x CPC / horizon = implied_daily_spend = the seat's cost; a seat number is the keyword's most recent seat in any earlier partition, the register numbers the live plan only, and the continuity assertion reads that memory; seat_since, seat_tenure and is_probe are written (migration 2026-10-02_plan_seat_tenure_columns.sql). v27.158 (2026-10-02, piece-1 plan Task 4, rulings R1/R7/R8 = spec P-15/P-21/P-22, audit fixes #11 #12 #15 #24): the pot is every GOOD keyword of the family, holdout included (P-15); the ramped allowance is capped at today's not-good spend (P-21); expected_after_upload_per_day (seats + the queue at the price the plan leaves it at) and share_closed (the share of the gap to the allowance target that closes; NULL when the family is at or under its target) are published per family and printed in a FAMILY clause on every row (P-22); a holdout campaign's cap is not moved (NO_MOVE_HOLDOUT, asserted); campaign_budget_basis names what bound the cap (RAMPED only when the cap is the one-third ramp's number to the cent, asserted; FLOORED_AT_NEED, BAND_SNAPPED_UP / BAND_SNAPPED_DOWN, FLOORED_AT_MINIMUM); ramp_step = plan uploads landed since the family's first plan night (BRAIN / PACING / CATALOG batches in V_PPC_CHANGE_LOG_APPLIED or confirmed by an observed change), capped at ramp_steps, published as plan_uploads_landed. The budget floor at need binds only a cap the plan moves. v27.156 (2026-10-02): copies hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap from V_PLAN_WINDOW_JUDGMENT (spec P-17, P-18, P-29; the judge reads memory_cleared_by_gap back as a reset); the HELD assertion reads hold_kept_by -- every HELD row names LAST_DAY (with last_day_strong) or STRONG_DAY_IN_WINDOW (with window_from <= hold_strong_day), and no other row names one -- instead of requiring a very good last day on every hold. v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
+OPTIONS (description = "v27.167 (2026-10-03, piece-1 follow-up F8, spec P-16): when tonight's allowance cannot carry every incumbent, incumbents leave latest-seated first until the rest fit -- walk 1 keeps the longest prefix of the incumbents in seat order (seat_since, tonight's rank breaking a tie) whose running cost fits the ramped allowance, and the first that does not fit leaves with every incumbent seated after it (LEFT_ALLOWANCE_SHRANK), each then a candidate like any other in walk 2 at tonight's price; v27.159 to v27.164 walked the incumbents with the fit test, so an earlier, costlier incumbent could leave while a later, cheaper one kept its seat. The P-16 assertion checks that no incumbent that left was seated before one that kept its seat and that the first to leave did not fit; the TENURE ENDS EARLY sentence states the rule and what the kept incumbents cost. v27.164 (2026-10-03, piece-1 follow-up F2, spec P-16): an incumbent keeps its seat, number, planned price, verdict date and question, and its seat cost is its kept price on TONIGHT's window -- (w_sp / window_days) x kept planned bid / current bid, a probe click_goal_day x its kept price -- charged to the allowance by the incumbents' walk and read by the direction clause, planned_spend_per_day, the campaign need, expected_after_upload_per_day and share_closed; until v27.160 it carried the cost its seat was granted at (30 live incumbent rows of the 2026-10-03 partition printed 'A RAISE', $15.24 a day, while their price was held or cut). The P-16 assertion recounts that cost from the row. v27.160 (2026-10-02, piece-1 plan Task 6, ruling R11 = spec P-24, audit fix #25): a night is keyed on the New York date -- as_of = CURRENT_DATE('America/New_York'), the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on and (from the same version) counts nights and reads the plan's history on; the window fence stays on Los Angeles; partitions written before v27.160 are keyed on the Los Angeles date. R11's guard: before the DELETE, a partition for tonight's date written under a different calendar state is never rewritten (the build raises 'partition <date> was written under <state>; tonight reads <state>; refusing to rewrite'), and every row of a night carries one calendar state (asserted). Fix #25: a shadow (plan A) row whose side differs from the live plan's names the ladder state, plan A's side and rule B's verdict, then plan A's own move, instead of the judgement's rule-B sentence and its P-4 'carries no planned price' clause. The ramp step's upload count reads applied_at on the New York date. v27.159 (2026-10-02, piece-1 plan Task 5, rulings R2/R6/R12/R13/R15 = spec P-16/P-20/P-25/P-26/P-28, audit fix #19): a seat is held until its verdict date while its keyword is still a candidate -- incumbents (last partition's seats written with seat_since, dated after tonight, still candidates, ladder not DEAD) keep their seat, number, price, cost, verdict date and question, are walked first in the order they took their seats, and leave only when tonight's allowance cannot carry them (LEFT_ALLOWANCE_SHRANK); newcomers are walked in rank order into what is left; candidates rank as the judge orders them (P-7 score, then money burned with no return, then clicks); a seated probe is OPEN_PROBE, an unseated probe gets NONE and nothing uploaded, and the queue's words branch on service; clicks_requested spans the settle horizon (window click rate x settle_days, probes click_goal_day x settle_days) with expected_cpc so that clicks x CPC / horizon = implied_daily_spend = the seat's cost; a seat number is the keyword's most recent seat in any earlier partition, the register numbers the live plan only, and the continuity assertion reads that memory; seat_since, seat_tenure and is_probe are written (migration 2026-10-02_plan_seat_tenure_columns.sql). v27.158 (2026-10-02, piece-1 plan Task 4, rulings R1/R7/R8 = spec P-15/P-21/P-22, audit fixes #11 #12 #15 #24): the pot is every GOOD keyword of the family, holdout included (P-15); the ramped allowance is capped at today's not-good spend (P-21); expected_after_upload_per_day (seats + the queue at the price the plan leaves it at) and share_closed (the share of the gap to the allowance target that closes; NULL when the family is at or under its target) are published per family and printed in a FAMILY clause on every row (P-22); a holdout campaign's cap is not moved (NO_MOVE_HOLDOUT, asserted); campaign_budget_basis names what bound the cap (RAMPED only when the cap is the one-third ramp's number to the cent, asserted; FLOORED_AT_NEED, BAND_SNAPPED_UP / BAND_SNAPPED_DOWN, FLOORED_AT_MINIMUM); ramp_step = plan uploads landed since the family's first plan night (BRAIN / PACING / CATALOG batches in V_PPC_CHANGE_LOG_APPLIED or confirmed by an observed change), capped at ramp_steps, published as plan_uploads_landed. The budget floor at need binds only a cap the plan moves. v27.156 (2026-10-02): copies hold_strong_day, hold_kept_by, grace_since and memory_cleared_by_gap from V_PLAN_WINDOW_JUDGMENT (spec P-17, P-18, P-29; the judge reads memory_cleared_by_gap back as a reset); the HELD assertion reads hold_kept_by -- every HELD row names LAST_DAY (with last_day_strong) or STRONG_DAY_IN_WINDOW (with window_from <= hold_strong_day), and no other row names one -- instead of requiring a very good last day on every hold. v27.154 follow-up (2026-10-01): carries strong_day_mult and strong_day_min_orders, the P-14c rule each row was judged under, from V_PLAN_WINDOW_JUDGMENT into the plan table so FN_PLAN_SCORECARD grades every decision against its own rule; a column copy, no assertion changed. v27.147 (2026-09-28): the P-14b assertion checks the judgement is COMPLETE (guard_released_by present on every demotion under the guard's preconditions; every HELD row on the good side with a very good last day, P-14c) instead of re-deriving the guard as a veto -- the v27.136 form refused every partition from 2026-08-29 to 2026-09-28 once the judge's hold clock first expired. Carries hold_since / hold_settles_on / hold_expired, last_day_* and guard_released_by into the plan table. v27.138 (2026-08-24): builds the next-week money plan for the HARVEST families and writes today's partition of FACT_PLAN_NEXT_WEEK, both plans (P-9). Reads V_PLAN_WINDOW_JUDGMENT once. Pot = the GOOD side's window spend per day (P-2); allowance = allowance_share x pot from DE_PLAN_CONFIG, ramped one third of the gap to today's not-good spend each window (P-8); not-good CANDIDATES are ranked by dollars at stake x closeness to the bar (P-7) and walked in rank order, each taking a numbered dollar-sized seat costing its spend at the repaired price (P-6) WHENEVER ITS OWN COST FITS THE ALLOWANCE STILL UNSPENT (spec 4.4 is a fit test, not a prefix stop), the rest queueing at the engine park price, held at a price already at or below it, or paused when the ladder has already closed them; seat numbers come from DE_FAMILY_SEAT_LEDGER and a number the register still holds OPEN is never reissued; one move per candidate, none on the good side (P-4) and none on a not-good keyword with nothing to repair (spec 9); EVERY SEAT carries a verdict date, held or repriced (P-12); every row publishes planned_spend_delta_per_day, so a repair that RAISES a keyword's spend says so in a column; campaign budgets are the sum of planned spend, ramped, floored at the spend the plan itself planned inside the campaign, snapped out of the forbidden $20.01-$31.99 band and floored at $1.00. Every guarantee is ASSERTed on a temp table BEFORE the partition is touched, so a broken build leaves yesterday's plan standing. Writing this table ARMS P-5's one-window grace limit and becomes the P-14b guard's memory, so GRACE is written as GRACE and never collapsed into GOOD. A holdout campaign's money is excluded from the pot, the not-good side and the ramp, and its row carries the counterfactual and no move. A queued row's planned spend is zero by the spec's arithmetic; the row says in words that parking lowers a price and does not stop a spend. Idempotent on one pass, deterministic. Called by SP_ORCHESTRATE_DAILY_REFRESH Task 20.8c. Spec 4, 5, 9. SOP: architecture/NEXT_WEEK_MONEY.md 3")
 BEGIN
   -- P-24 (Ori 2026-10-02, R11 option (a); v27.160, piece-1 plan Task 6): A NIGHT IS KEYED ON THE
   -- NEW YORK DATE, the date V_PLAN_WINDOW_JUDGMENT reads the calendar state on, so one partition is
@@ -428,16 +452,20 @@ BEGIN
   -- with, because the remaining allowance only ever falls as the walk proceeds.
   -- P-16 (v27.159): TWO WALKS, INCUMBENTS FIRST. Walk 1 takes the incumbents in the order they took
   -- their seats (seat_since, earliest first; tonight's rank breaks a tie), each costing its kept
-  -- price on tonight's window (inc_cost, v27.164; until v27.160 the cost its contract carried), and
-  -- keeps every one whose cost fits what the incumbents before it left. When
-  -- tonight's allowance can carry them all, all keep their seats. When it cannot (it shrank), the
-  -- latest seated are the ones that find no room — a reading of "those seated latest leave first"
-  -- recorded for Ori (SOP §3): an incumbent seated earlier whose cost alone exceeds the room left
-  -- leaves, and a cheaper one seated after it that still fits stays, because the walk is a fit
-  -- test, not a prefix stop (the v27.136 defect above). Walk 2 is the v27.137 walk over every
-  -- other candidate — newcomers, and an incumbent walk 1 could not carry, at TONIGHT's price — in
-  -- rank order, starting from what walk 1 spent. Remaining allowance still only falls, so C18's
-  -- invariant holds across both walks.
+  -- price on tonight's window (inc_cost, v27.164; until v27.160 the cost its contract carried).
+  -- When tonight's allowance can carry them all, all keep their seats. When it cannot (it shrank),
+  -- INCUMBENTS LEAVE LATEST-SEATED FIRST UNTIL THE REST FIT (R2's words; v27.167, follow-up F8):
+  -- walk 1 is a PREFIX, not a fit test — it keeps incumbents while the running total fits, and the
+  -- first one that does not fit leaves together with every incumbent seated after it, however cheap.
+  -- No inc_cost is negative (each branch multiplies a bid, a click goal or a window spend), so the
+  -- running total only grows along the order and the prefix is exactly what dropping the latest
+  -- seated one at a time until the rest fit leaves. Seniority is the contract P-16 protects, so the
+  -- fit test that keeps the newcomers' queue open (the v27.136 defect above) is the wrong walk here:
+  -- v27.159 .. v27.164 used it, so an earlier, costlier incumbent could leave while a later, cheaper
+  -- one kept its seat (19 kept seats of that kind on the doctored copy in the header). Walk 2 is the
+  -- v27.137 walk over every other candidate — newcomers, and every
+  -- incumbent walk 1 sent out, at TONIGHT's price — in rank order, starting from what walk 1 spent.
+  -- Remaining allowance still only falls, so C18's invariant holds across both walks.
   CREATE OR REPLACE TEMP TABLE inc_order AS
   SELECT plan, family, campaign_id, keyword_id, rank_no, inc_cost AS cost,
          ROW_NUMBER() OVER (PARTITION BY plan, family
@@ -455,18 +483,22 @@ BEGIN
     JOIN fam2 f ON f.plan = k.plan AND f.family = k.family
     WHERE k.inc_no = 1
     UNION ALL
+    -- v27.167 (F8): a prefix — once one incumbent has not fitted (w.took false), nobody seated
+    -- after it takes a seat in this walk
     SELECT k.plan, k.family, k.campaign_id, k.keyword_id, k.rank_no, k.inc_no, k.cost,
            w.allow,
-           (w.spent + k.cost <= w.allow + 0.0001),
-           w.spent + IF(w.spent + k.cost <= w.allow + 0.0001, k.cost, 0.0)
+           (w.took AND w.spent + k.cost <= w.allow + 0.0001),
+           w.spent + IF(w.took AND w.spent + k.cost <= w.allow + 0.0001, k.cost, 0.0)
     FROM w
     JOIN inc_order k ON k.plan = w.plan AND k.family = w.family AND k.inc_no = w.inc_no + 1
   )
   SELECT * FROM w;
 
-  -- what walk 1 spent, per plan x family (0 where nobody was an incumbent)
+  -- what walk 1 spent, and how many incumbents it kept, per plan x family (0 where nobody was an
+  -- incumbent); the TENURE ENDS EARLY sentence prints both (v27.167)
   CREATE OR REPLACE TEMP TABLE inc_spent AS
-  SELECT f.plan, f.family, COALESCE(SUM(IF(w.took, w.cost, 0)), 0) AS spent
+  SELECT f.plan, f.family, COALESCE(SUM(IF(w.took, w.cost, 0)), 0) AS spent,
+         COUNTIF(COALESCE(w.took, FALSE)) AS n_kept
   FROM fam2 f
   LEFT JOIN walk_inc w ON w.plan = f.plan AND w.family = f.family
   GROUP BY 1, 2;
@@ -630,8 +662,9 @@ BEGIN
   -- v27.164, follow-up F2; until v27.160 the cost the seat was granted at). Tonight's own price and
   -- cost stay on the row as tonight_bid / tonight_cost for the sentence. Every other row keeps
   -- tonight's.
-  -- seat_tenure: INCUMBENT | NEW on a seat; LEFT_ALLOWANCE_SHRANK on an incumbent walk 1 could not
-  -- carry and walk 2 did not re-seat; NULL otherwise.
+  -- seat_tenure: INCUMBENT | NEW on a seat; LEFT_ALLOWANCE_SHRANK on an incumbent walk 1 sent out
+  -- (the first that did not fit, and every one seated after it; v27.167) and walk 2 did not
+  -- re-seat; NULL otherwise.
   CREATE OR REPLACE TEMP TABLE assembled0 AS
   SELECT
     r2.* REPLACE (
@@ -646,9 +679,12 @@ BEGIN
          WHEN k.is_incumbent        THEN 'LEFT_ALLOWANCE_SHRANK'
     END AS seat_tenure,
     ps.held_seat_no, ps.held_since, ps.held_verdict_date, ps.held_clicks, ps.held_due,
-    ps.held_cpc, ps.held_implied, ps.held_basis
+    ps.held_cpc, ps.held_implied, ps.held_basis,
+    -- v27.167 (F8): the incumbents walk 1 kept, for the TENURE ENDS EARLY sentence
+    s.n_kept AS inc_kept_n, s.spent AS inc_kept_per_day
   FROM r2
   JOIN fam2 f USING (plan, family)
+  LEFT JOIN inc_spent s ON s.plan = r2.plan AND s.family = r2.family
   LEFT JOIN ranked k ON k.plan = r2.plan AND k.family = r2.family
                     AND k.campaign_id = r2.campaign_id AND k.keyword_id = r2.keyword_id
   LEFT JOIN seat_no_map m ON m.plan = r2.plan AND m.family = r2.family
@@ -1121,11 +1157,18 @@ BEGIN
           COALESCE(p.allowance_ramped_per_day, 0)),
              FORMAT(' QUEUED at rank %d, no seat: park the bid at $%.2f. Not serving: it bought no clicks and spent nothing at $%.2f in the window, so the park price is a floor it already does not reach, and it adds nothing to the family\'s not-good spend.',
                     COALESCE(p.rank_no, 0), COALESCE(p.planned_bid_final, 0), COALESCE(p.current_bid, 0))),
-          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so
+          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so; v27.167 (F8):
+          -- in R2's words, with what the incumbents that kept their seats cost
           IF(p.seat_tenure = 'LEFT_ALLOWANCE_SHRANK',
-             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent; incumbents keep their seats in the order they took them, and this one no longer fits behind those seated before it, so it gives the seat up before its date (P-16).',
+             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent, so incumbents leave latest-seated first until the rest fit (P-16): %s, so it gives the seat up before its date.',
                     COALESCE(p.held_seat_no, 0), p.family, p.held_since, p.held_verdict_date,
-                    COALESCE(p.allowance_ramped_per_day, 0)),
+                    COALESCE(p.allowance_ramped_per_day, 0),
+                    CASE COALESCE(p.inc_kept_n, 0)
+                      WHEN 0 THEN 'none keeps its seat, because the earliest seated does not fit on its own'
+                      WHEN 1 THEN FORMAT('the one that keeps its seat was seated before it (tonight\'s rank breaking a tie of seat dates) and costs $%.2f a day',
+                                         COALESCE(p.inc_kept_per_day, 0))
+                      ELSE FORMAT('the %d that keep their seats were all seated before it (tonight\'s rank breaking a tie of seat dates) and cost $%.2f a day',
+                                  p.inc_kept_n, COALESCE(p.inc_kept_per_day, 0)) END),
              ''))
         WHEN p.move = 'HOLD_AT_PARK' THEN CONCAT(
           IF(p.served, FORMAT(
@@ -1133,11 +1176,18 @@ BEGIN
           COALESCE(p.rank_no, 0), COALESCE(COALESCE(p.bid_park, p.bid_floor), 0)),
              FORMAT(' QUEUED at rank %d, no seat, and nothing to upload. Not serving: it bought no clicks and spent nothing in the window, so the park price is a floor it already does not reach, and it adds nothing to the family\'s not-good spend.',
                     COALESCE(p.rank_no, 0))),
-          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so
+          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so; v27.167 (F8):
+          -- in R2's words, with what the incumbents that kept their seats cost
           IF(p.seat_tenure = 'LEFT_ALLOWANCE_SHRANK',
-             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent; incumbents keep their seats in the order they took them, and this one no longer fits behind those seated before it, so it gives the seat up before its date (P-16).',
+             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent, so incumbents leave latest-seated first until the rest fit (P-16): %s, so it gives the seat up before its date.',
                     COALESCE(p.held_seat_no, 0), p.family, p.held_since, p.held_verdict_date,
-                    COALESCE(p.allowance_ramped_per_day, 0)),
+                    COALESCE(p.allowance_ramped_per_day, 0),
+                    CASE COALESCE(p.inc_kept_n, 0)
+                      WHEN 0 THEN 'none keeps its seat, because the earliest seated does not fit on its own'
+                      WHEN 1 THEN FORMAT('the one that keeps its seat was seated before it (tonight\'s rank breaking a tie of seat dates) and costs $%.2f a day',
+                                         COALESCE(p.inc_kept_per_day, 0))
+                      ELSE FORMAT('the %d that keep their seats were all seated before it (tonight\'s rank breaking a tie of seat dates) and cost $%.2f a day',
+                                  p.inc_kept_n, COALESCE(p.inc_kept_per_day, 0)) END),
              ''))
         WHEN p.move = 'PAUSE' THEN FORMAT(
           ' QUEUED at rank %d, and THE LADDER HAS ALREADY CLOSED THIS KEYWORD (state DEAD): pause it. THIS SUPERSEDES THE WHOLE JUDGEMENT ABOVE — a closed keyword does not compete for a seat at any price, holds none of the family allowance, and is stopped rather than parked or re-priced, so the plan publishes no bid on this row.',
@@ -1149,11 +1199,18 @@ BEGIN
           COALESCE(p.rank_no, 0),
           IF(p.served, FORMAT(', and it keeps buying clicks at its current bid of $%.2f', COALESCE(p.current_bid, 0)),
              ' to a keyword that bought no clicks')),
-          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so
+          -- P-16 (v27.159): an incumbent tonight's allowance could not carry says so; v27.167 (F8):
+          -- in R2's words, with what the incumbents that kept their seats cost
           IF(p.seat_tenure = 'LEFT_ALLOWANCE_SHRANK',
-             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent; incumbents keep their seats in the order they took them, and this one no longer fits behind those seated before it, so it gives the seat up before its date (P-16).',
+             FORMAT(' TENURE ENDS EARLY: it held SEAT %d of %s from %t with its verdict due on %t, but tonight\'s $%.2f a day allowance cannot carry every incumbent, so incumbents leave latest-seated first until the rest fit (P-16): %s, so it gives the seat up before its date.',
                     COALESCE(p.held_seat_no, 0), p.family, p.held_since, p.held_verdict_date,
-                    COALESCE(p.allowance_ramped_per_day, 0)),
+                    COALESCE(p.allowance_ramped_per_day, 0),
+                    CASE COALESCE(p.inc_kept_n, 0)
+                      WHEN 0 THEN 'none keeps its seat, because the earliest seated does not fit on its own'
+                      WHEN 1 THEN FORMAT('the one that keeps its seat was seated before it (tonight\'s rank breaking a tie of seat dates) and costs $%.2f a day',
+                                         COALESCE(p.inc_kept_per_day, 0))
+                      ELSE FORMAT('the %d that keep their seats were all seated before it (tonight\'s rank breaking a tie of seat dates) and cost $%.2f a day',
+                                  p.inc_kept_n, COALESCE(p.inc_kept_per_day, 0)) END),
              ''))
         -- v27.158 (P-15): the holdout's GOOD keywords now count in the pot, so the clause says
         -- which of its money the plan leaves out — the not-good side's — and which it counts.
@@ -1466,13 +1523,19 @@ BEGIN
   -- P-16 (v27.159): A SEAT IS HELD UNTIL ITS VERDICT DATE. Every incumbent — last partition's seat,
   -- written under P-16 (seat_since), before its date, still a candidate tonight and not closed —
   -- keeps the seat and its whole contract (number checked above; price, verdict date, the night it
-  -- was taken, the question), or leaves only because tonight's allowance cannot carry it: its cost
-  -- exceeds what the allowance leaves after every incumbent that kept its seat. No other row
-  -- carries an incumbent's tenure.
+  -- was taken, the question), or leaves only because tonight's allowance cannot carry every
+  -- incumbent, latest-seated first (v27.167, below). No other row carries an incumbent's tenure.
   -- v27.164 (follow-up F2): the cost is not part of the contract. cost_tonight recounts it from the
   -- row about to be written — its kept price (prior_seat.held_bid) on tonight's window, click goal x
   -- kept price on a probe — and both the kept seat's cost and the eviction test read it (until
   -- v27.160 both read the cost the seat was granted at).
+  -- v27.167 (follow-up F8): AN EVICTION FOLLOWS THE SEAT ORDER. Incumbents leave latest-seated
+  -- first until the rest fit, so in walk 1's order (held_since, then tonight's rank — inc_order's,
+  -- recounted here as inc_pos) no incumbent that left comes before one that kept its seat, and the
+  -- FIRST one that left did not fit what the kept ones leave of the allowance. Until v27.164 the
+  -- test asked "did not fit" of EVERY incumbent that left: the fit test's own invariant, which
+  -- passes a walk that sends an earlier, costlier incumbent out and keeps a later, cheaper one, and
+  -- refuses the prefix, whose later leavers may be cheap enough to fit on their own.
   ASSERT (SELECT COUNTIF(f.seat_tenure = 'INCUMBENT'
                          AND (f.seat_no IS NULL
                               OR f.seat_since IS DISTINCT FROM ps.held_since
@@ -1483,23 +1546,33 @@ BEGIN
                               OR f.clicks_due_date IS DISTINCT FROM ps.held_due
                               OR f.request_basis IS DISTINCT FROM ps.held_basis))
                 + COUNTIF(COALESCE(f.seat_tenure, '') != 'INCUMBENT'
-                          AND NOT (f.cost_tonight > fa.allow - fa.kept + 0.0001))
-          FROM (SELECT f0.*,
-                       COALESCE(CASE WHEN f0.is_probe
-                                       THEN g.click_goal_day * ps0.held_bid
-                                     WHEN f0.w_sp > 0 AND COALESCE(f0.current_bid, 0) > 0
-                                       THEN (f0.w_sp / f0.window_days) * SAFE_DIVIDE(ps0.held_bid, f0.current_bid)
-                                     ELSE 0 END, 0) AS cost_tonight
-                FROM final f0
-                JOIN prior_seat ps0 ON ps0.plan = f0.plan AND ps0.family = f0.family
-                                   AND ps0.campaign_id = f0.campaign_id AND ps0.keyword_id = f0.keyword_id
-                LEFT JOIN j g ON g.campaign_id = f0.campaign_id AND g.keyword_id = f0.keyword_id) f
+                          AND (f.inc_pos < f.last_kept_pos
+                               OR (f.inc_pos = f.first_left_pos
+                                   AND NOT (f.cost_tonight > fa.allow - fa.kept + 0.0001))))
+          FROM (SELECT f1.*,
+                       MAX(IF(f1.seat_tenure = 'INCUMBENT', f1.inc_pos, 0))
+                         OVER (PARTITION BY f1.plan, f1.family) AS last_kept_pos,
+                       MIN(IF(COALESCE(f1.seat_tenure, '') != 'INCUMBENT', f1.inc_pos, NULL))
+                         OVER (PARTITION BY f1.plan, f1.family) AS first_left_pos
+                FROM (SELECT f0.*,
+                             COALESCE(CASE WHEN f0.is_probe
+                                             THEN g.click_goal_day * ps0.held_bid
+                                           WHEN f0.w_sp > 0 AND COALESCE(f0.current_bid, 0) > 0
+                                             THEN (f0.w_sp / f0.window_days) * SAFE_DIVIDE(ps0.held_bid, f0.current_bid)
+                                           ELSE 0 END, 0) AS cost_tonight,
+                             ROW_NUMBER() OVER (PARTITION BY f0.plan, f0.family
+                                                ORDER BY ps0.held_since, f0.rank_no,
+                                                         f0.campaign_id, f0.keyword_id) AS inc_pos
+                      FROM final f0
+                      JOIN prior_seat ps0 ON ps0.plan = f0.plan AND ps0.family = f0.family
+                                         AND ps0.campaign_id = f0.campaign_id AND ps0.keyword_id = f0.keyword_id
+                      LEFT JOIN j g ON g.campaign_id = f0.campaign_id AND g.keyword_id = f0.keyword_id
+                      WHERE f0.is_candidate AND COALESCE(f0.ladder_state, '') != 'DEAD') f1) f
           JOIN prior_seat ps ON ps.plan = f.plan AND ps.family = f.family
                             AND ps.campaign_id = f.campaign_id AND ps.keyword_id = f.keyword_id
           JOIN (SELECT plan, family, MAX(allowance_ramped_per_day) allow,
                        SUM(IF(seat_tenure = 'INCUMBENT', seat_cost_per_day, 0)) kept
-                FROM final GROUP BY 1, 2) fa ON fa.plan = f.plan AND fa.family = f.family
-          WHERE f.is_candidate AND COALESCE(f.ladder_state, '') != 'DEAD')
+                FROM final GROUP BY 1, 2) fa ON fa.plan = f.plan AND fa.family = f.family)
         + (SELECT COUNT(*)
            FROM final f
            LEFT JOIN prior_seat ps ON ps.plan = f.plan AND ps.family = f.family
@@ -1509,7 +1582,7 @@ BEGIN
         + (SELECT COUNTIF((seat_no IS NOT NULL) != (COALESCE(seat_tenure, '') IN ('INCUMBENT', 'NEW'))
                           OR (seat_no IS NOT NULL) != (seat_since IS NOT NULL))
            FROM final) = 0
-    AS 'an incumbent before its verdict date that is still a candidate keeps its seat and its contract, or leaves only when tonight allowance cannot carry it (P-16)';
+    AS 'an incumbent before its verdict date that is still a candidate keeps its seat and its contract, or leaves only when tonight allowance cannot carry every incumbent, latest-seated first until the rest fit (P-16)';
   -- P-25 (v27.159): a seated probe OPENS, an unseated probe gets no move, and only a probe does either.
   ASSERT (SELECT COUNTIF(is_candidate AND is_probe AND COALESCE(ladder_state, '') != 'DEAD'
                          AND seat_no IS NOT NULL AND move != 'OPEN_PROBE')

@@ -516,7 +516,7 @@ each with its own check and negative control.
   subtracts counts (it read −1). Compare the key sets both ways; the value is never negative.
 - [x] **F7 judge acceptance Run line.** The header's direct Run line did not finish in 16.6 minutes
   (1.79 M slot-seconds). Point it at `check_judge_memory_controls.py` and say why.
-- [ ] **F8 R2 shrink order.** When tonight's allowance cannot carry every incumbent, incumbents leave
+- [x] **F8 R2 shrink order.** When tonight's allowance cannot carry every incumbent, incumbents leave
   latest-seated first until the rest fit — no fit-test skipping, which let an earlier, costlier incumbent
   leave while a later, cheaper one stayed.
 - [ ] **F9 controls vacuous today.** `NC_G4_CLEARED_HONOURED` (no memory cleared tonight) and
