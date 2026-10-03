@@ -488,3 +488,39 @@ THREE_LAYERS contract).
 Steps give the rule, the SQL for each rule's core expression, the checks and their negative controls;
 the integration into each 700–900-line file is left to the implementer, who must read the file first,
 because pasting whole files into this plan would go stale on the first edit.
+
+---
+
+## Follow-up fixes (2026-10-03), from the Task 10 proof
+
+The proof (workflow `wf_3f633eab-f92`) found every ruling built except the items below. None needs a
+ruling; each restores what the plan or the ruling already says. Same house rules. One commit per fix,
+each with its own check and negative control.
+
+- [ ] **F1 PLAN_SCORECARD C08a.** The control only fired while zero guard decisions were gradable; on
+  2026-10-03 20 of 136 became gradable and C08a now FAILs. Rebuild it on a moved-clock copy (grade date
+  pinned before the first decision's settle date) so it fires whatever today's date is.
+- [ ] **F2 incumbent seat cost.** Under P-16 an incumbent keeps its seat and its planned price, not last
+  window's cost. Recompute an incumbent's seat cost tonight as `(w_sp / window_days) × planned_bid /
+  current_bid` on tonight's window (probes: `click_goal_day × probe price`), so the direction clause
+  ("A RAISE / a cut / no change") and `expected_after_upload` / `share_closed` read tonight's money.
+  Measured on 2026-10-03: 30 incumbent rows said "A RAISE" while their price was held or cut ($15.24/day).
+- [ ] **F3 GRACE sentence.** State the anchored rule: "grace lasts N nightly judgments (the window length
+  in force when it was granted, <date>) through <date>" — not "ONE quiet window (P-5)" while granting 7
+  nights on a 3-day window.
+- [ ] **F4 the scorecard's clock.** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` date nights on the New York
+  date that keys `as_of` since Task 6; fix the view description that still says "below 10".
+- [ ] **F5 spec P-7.** Restate P-7's "ties by clicks" to point at P-20 (zero-score candidates by money
+  burned, then clicks).
+- [ ] **F6 SEAT_REQUEST R02.** It claims the ledger matches the plan's seats "count and content" but
+  subtracts counts (it read −1). Compare the key sets both ways; the value is never negative.
+- [ ] **F7 judge acceptance Run line.** The header's direct Run line did not finish in 16.6 minutes
+  (1.79 M slot-seconds). Point it at `check_judge_memory_controls.py` and say why.
+- [ ] **F8 R2 shrink order.** When tonight's allowance cannot carry every incumbent, incumbents leave
+  latest-seated first until the rest fit — no fit-test skipping, which let an earlier, costlier incumbent
+  leave while a later, cheaper one stayed.
+- [ ] **F9 controls vacuous today.** `NC_G4_CLEARED_HONOURED` (no memory cleared tonight) and
+  `NC_M3_QUEUE_DROPPED` (the dropped queued row has $0 spend) must inject a row that exercises them.
+
+Out of these fixes, recorded for Ori: the holdout trial's contamination (R9 as built censors 61 of 69
+units) and `tools/build_reprice_bulksheet.py`, which still prices by the pre-piece-1 rules (piece 3).
