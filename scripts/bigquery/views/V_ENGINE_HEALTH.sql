@@ -98,6 +98,21 @@
 -- Reads LOG_PIPELINE_RUNS only (no FACT_AMAZON_ADS). V_DAILY_BRIEF quotes its detail on the SYSTEM
 -- line beside the two alarms. Negative controls: PLAN_HEALTH_acceptance.sql A1 (results in its
 -- header). Only the ppr, ppf and c34 CTEs and the final UNION changed.
+-- v27.176 (2026-10-04, learning-contract piece 2, Task 6; architecture/LEARNING.md §6, spec §9): c35-c37,
+-- the learning contract's checks. prediction_grades_fresh: RED when a ledger row of V_PREDICTION_LEDGER
+-- has no grade in FACT_PREDICTION_GRADE one night after the house watermark LEAST(MAX(FACT_AMAZON_ADS
+-- .date), FN_ADS_ANCHOR_CAP()) made it gradable (horizon_to + SETTLE_HORIZON_DAYS + 1 <= watermark),
+-- and RED on an empty population; the detail prints the watermark beside both its terms.
+-- prediction_regression: per predictor, the report card's trailing MIN_GRADED_WINDOWS WINDOW rows
+-- against the MIN_GRADED_WINDOWS before them, pooled, on mae_net_share (applied scenario) and
+-- counterfactual_net_per_alloc; RED when either is worse by more than REGRESSION_MAX of the earlier
+-- value (the setting is a ratio), INFO YOUNG until a predictor has twice MIN_GRADED_WINDOWS windows,
+-- RED on an empty card; the detail names the rule and builder versions that changed between the spans.
+-- response_model_unverified: INFO until a current ACT grade applied on a row with a move, then GREEN.
+-- Measured before deploy (the three checks' text run as a query, 2026-10-03 22:41 UTC, job
+-- t6_proto_1791067312): 116.5 slot-s, 15,229,779 bytes processed; prediction_grades_fresh GREEN 0 of
+-- 8,944 rows past due, prediction_regression INFO (YOUNG, 1 of 6 windows per plan),
+-- response_model_unverified INFO 0. Only the lrn_* and c35-c37 CTEs and the final UNION changed.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -800,6 +815,207 @@ c34 AS (  -- ALARM: a pass of the plan step failed — the latest run, or any ru
   FROM ppf
 ),
 -- ───────────────────────────────────────────────────────────────────────────────────────────
+-- c35–c37: the learning contract (v27.176, piece-2 Task 6; header; architecture/LEARNING.md §6). The
+-- plan's predictions (V_PREDICTION_LEDGER) are graded nightly by SP_GRADE_PREDICTIONS (Refresh Task
+-- 20.8f) into FACT_PREDICTION_GRADE and summed into the report card T_PREDICTION_SCORECARD.
+-- lrn_set / lrn_wm / lrn_led / lrn_grd / lrn_act / lrn_card / lrn_card_meta are the seven inputs;
+-- lrn_due through c37 read nothing else, so PLAN_HEALTH_acceptance.sql (P1-P3) runs the lrn_due ..
+-- c37 text verbatim on doctored copies of them. THE TWO MUST CHANGE TOGETHER. No whole-line comment
+-- inside that text: the deploy strips those, and the text-identity command compares the file's
+-- block with the deployed body. Placed before c33, which must stay last (HOLDOUT_INTEGRITY).
+-- Settings: DE_COACH_THRESHOLDS, strategy_id LEARNING, coach_mode GUARDIAN, product_family NULL,
+-- today's values (the rows the grader reads); never literals here.
+-- ───────────────────────────────────────────────────────────────────────────────────────────
+lrn_set AS (  -- the three LEARNING settings these checks read, today's values (one row even when none is present)
+  SELECT CAST(MAX(IF(threshold_key = 'SETTLE_HORIZON_DAYS', threshold_value, NULL)) AS INT64) AS settle_days,
+         CAST(MAX(IF(threshold_key = 'MIN_GRADED_WINDOWS', threshold_value, NULL)) AS INT64) AS min_windows,
+         MAX(IF(threshold_key = 'REGRESSION_MAX', threshold_value, NULL)) AS regression_max
+  FROM `onyga-482313.OI.DE_COACH_THRESHOLDS`
+  WHERE strategy_id = 'LEARNING' AND coach_mode = 'GUARDIAN' AND product_family IS NULL
+    AND threshold_key IN ('SETTLE_HORIZON_DAYS', 'MIN_GRADED_WINDOWS', 'REGRESSION_MAX')
+),
+lrn_wm AS (  -- the house watermark, the grader's own expression, with its two terms for the detail line
+  SELECT MAX(date) AS ads_max, `onyga-482313.OI.FN_ADS_ANCHOR_CAP`() AS anchor_cap,
+         LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS wm
+  FROM `onyga-482313.OI.FACT_AMAZON_ADS`
+),
+lrn_led AS (  -- every prediction of the ledger: its grade key and its horizon end
+  SELECT predictor, variant, as_of, campaign_id, keyword_id, scenario, horizon_to
+  FROM `onyga-482313.OI.V_PREDICTION_LEDGER`
+),
+lrn_grd AS (  -- every prediction that holds a grade (any regrade_seq); the contract suite's fixtures excluded
+  SELECT DISTINCT predictor, variant, as_of, campaign_id, keyword_id, scenario
+  FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
+  WHERE predictor <> 'FIXTURE'
+),
+lrn_act AS (  -- the current grade (highest regrade_seq) of every ACT prediction, fixtures excluded
+  SELECT is_applied, act_is_noop, applied_scenario, grade
+  FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
+  WHERE predictor <> 'FIXTURE' AND scenario = 'ACT'
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY predictor, variant, as_of, campaign_id, keyword_id, scenario
+                             ORDER BY regrade_seq DESC) = 1
+),
+lrn_card AS (  -- the report card's WINDOW rows of each predictor's rollup: the applied scenario's accuracy, and the money
+  SELECT predictor, row_type, window_from, mae_net_usd, real_spend, counterfactual_net_per_alloc, alloc_spend,
+         rule_versions, builder_versions
+  FROM `onyga-482313.OI.T_PREDICTION_SCORECARD`
+  WHERE level = 'WINDOW' AND family = 'ALL' AND calendar_state = 'ALL' AND predictor <> 'FIXTURE'
+    AND ((row_type = 'ACCURACY' AND scenario = 'APPLIED') OR row_type = 'MONEY')
+),
+lrn_card_meta AS (  -- the card's size and when the grader last rebuilt it; an empty card is a grader that has not run
+  SELECT COUNT(*) AS n_rows, MAX(scored_at) AS scored_at
+  FROM `onyga-482313.OI.T_PREDICTION_SCORECARD`
+  WHERE predictor <> 'FIXTURE'
+),
+lrn_due AS (  -- each ledger row: past due (one night after the house watermark made it gradable) or not, graded or not
+  SELECT l.predictor, l.as_of,
+         DATE_ADD(l.horizon_to, INTERVAL (s.settle_days + 1) DAY) AS due_on,
+         COALESCE(DATE_ADD(l.horizon_to, INTERVAL (s.settle_days + 1) DAY) <= w.wm, FALSE) AS is_due,
+         g.predictor IS NOT NULL AS graded
+  FROM lrn_led l
+  CROSS JOIN lrn_set s
+  CROSS JOIN lrn_wm w
+  LEFT JOIN lrn_grd g
+    ON g.predictor = l.predictor AND g.variant = l.variant AND g.as_of = l.as_of
+   AND g.campaign_id = l.campaign_id AND g.keyword_id = l.keyword_id AND g.scenario = l.scenario
+),
+c35 AS (  -- the grader keeps up: no ledger row stays ungraded a night after the house watermark made it gradable
+  SELECT 'prediction_grades_fresh' AS check_name,
+    CAST(COUNTIF(is_due AND NOT graded) AS FLOAT64),
+    'ledger rows (V_PREDICTION_LEDGER, both scenarios) with no grade in FACT_PREDICTION_GRADE one night after they became gradable: horizon_to + SETTLE_HORIZON_DAYS + 1 on or before the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) · red > 0; red when no ledger row is that old (an empty population), or the setting or the watermark is missing',
+    CASE WHEN (SELECT settle_days FROM lrn_set) IS NULL OR (SELECT wm FROM lrn_wm) IS NULL THEN 'RED'
+         WHEN COUNTIF(is_due) = 0 THEN 'RED'
+         WHEN COUNTIF(is_due AND NOT graded) > 0 THEN 'RED'
+         ELSE 'GREEN' END,
+    CONCAT(
+      IF((SELECT settle_days FROM lrn_set) IS NULL,
+         'SETTLE_HORIZON_DAYS is not in DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL), so no row can fall due · ', ''),
+      IF((SELECT wm FROM lrn_wm) IS NULL, 'the house watermark is NULL (FACT_AMAZON_ADS holds no row) · ', ''),
+      CAST(COUNTIF(is_due AND NOT graded) AS STRING), ' of ', CAST(COUNTIF(is_due) AS STRING),
+      ' ledger rows past due have no grade',
+      IF(COUNTIF(is_due AND NOT graded) > 0,
+         CONCAT(' (nights ', CAST(MIN(IF(is_due AND NOT graded, as_of, NULL)) AS STRING), ' to ',
+                CAST(MAX(IF(is_due AND NOT graded, as_of, NULL)) AS STRING), ')'),
+         ''),
+      ' · watermark ', COALESCE(CAST((SELECT wm FROM lrn_wm) AS STRING), 'NULL'),
+      ' = LEAST(FACT_AMAZON_ADS newest day ', COALESCE(CAST((SELECT ads_max FROM lrn_wm) AS STRING), 'none'),
+      ', FN_ADS_ANCHOR_CAP() ', COALESCE(CAST((SELECT anchor_cap FROM lrn_wm) AS STRING), 'NULL'), ')',
+      ' · a row is gradable at horizon end + ', COALESCE(CAST((SELECT settle_days FROM lrn_set) AS STRING), '(no setting)'),
+      ' days, past due one night later · ', CAST(COUNTIF(NOT is_due) AS STRING), ' ledger rows not yet past due',
+      COALESCE(CONCAT(', the next when the watermark reaches ', CAST(MIN(IF(NOT is_due, due_on, NULL)) AS STRING)), ''),
+      ' · the grader is SP_GRADE_PREDICTIONS (Refresh Task 20.8f); nothing re-runs it by itself')
+  FROM lrn_due
+),
+lrn_win AS (  -- one row per predictor and graded window (the Sunday-start week of as_of: the card's WINDOW level), newest first
+  SELECT predictor, window_from,
+         SUM(IF(row_type = 'ACCURACY', mae_net_usd, NULL)) AS mae_usd,
+         SUM(IF(row_type = 'ACCURACY', real_spend, NULL)) AS real_spend,
+         SUM(IF(row_type = 'MONEY', counterfactual_net_per_alloc * alloc_spend, NULL)) AS cf_net,
+         SUM(IF(row_type = 'MONEY', alloc_spend, NULL)) AS alloc,
+         STRING_AGG(IF(row_type = 'MONEY', rule_versions, NULL), ',') AS rvs,
+         STRING_AGG(IF(row_type = 'MONEY', builder_versions, NULL), ',') AS bvs,
+         ROW_NUMBER() OVER (PARTITION BY predictor ORDER BY window_from DESC) AS wr
+  FROM lrn_card
+  GROUP BY predictor, window_from
+),
+lrn_span AS (  -- per predictor: the trailing MIN_GRADED_WINDOWS windows (t) and the MIN_GRADED_WINDOWS before them (p), each pooled
+  SELECT w.predictor, COUNT(*) AS n_windows,
+         STRING_AGG(CAST(w.window_from AS STRING), ' ' ORDER BY w.window_from) AS all_weeks,
+         STRING_AGG(IF(w.wr <= s.min_windows, CAST(w.window_from AS STRING), NULL), ' ' ORDER BY w.window_from) AS t_weeks,
+         STRING_AGG(IF(w.wr > s.min_windows AND w.wr <= 2 * s.min_windows, CAST(w.window_from AS STRING), NULL), ' '
+                    ORDER BY w.window_from) AS p_weeks,
+         SAFE_DIVIDE(SUM(IF(w.wr <= s.min_windows, w.mae_usd, NULL)),
+                     SUM(IF(w.wr <= s.min_windows, w.real_spend, NULL))) AS mae_t,
+         SAFE_DIVIDE(SUM(IF(w.wr > s.min_windows AND w.wr <= 2 * s.min_windows, w.mae_usd, NULL)),
+                     SUM(IF(w.wr > s.min_windows AND w.wr <= 2 * s.min_windows, w.real_spend, NULL))) AS mae_p,
+         SAFE_DIVIDE(SUM(IF(w.wr <= s.min_windows, w.cf_net, NULL)),
+                     SUM(IF(w.wr <= s.min_windows, w.alloc, NULL))) AS cf_t,
+         SAFE_DIVIDE(SUM(IF(w.wr > s.min_windows AND w.wr <= 2 * s.min_windows, w.cf_net, NULL)),
+                     SUM(IF(w.wr > s.min_windows AND w.wr <= 2 * s.min_windows, w.alloc, NULL))) AS cf_p
+  FROM lrn_win w
+  CROSS JOIN lrn_set s
+  GROUP BY w.predictor
+),
+lrn_chg AS (  -- per predictor, every rule or builder version behind one span and not the other: what changed between them
+  SELECT predictor, STRING_AGG(CONCAT(kind, IF(in_t, ' new ', ' gone '), v), ', ' ORDER BY kind, in_t, v) AS changed
+  FROM (SELECT w.predictor, x.kind, v,
+               LOGICAL_OR(w.wr <= s.min_windows) AS in_t,
+               LOGICAL_OR(w.wr > s.min_windows) AS in_p
+        FROM lrn_win w
+        CROSS JOIN lrn_set s
+        CROSS JOIN UNNEST([STRUCT('rule_version' AS kind, w.rvs AS vs), STRUCT('builder_version' AS kind, w.bvs AS vs)]) AS x
+        CROSS JOIN UNNEST(SPLIT(x.vs, ',')) AS v
+        WHERE w.wr <= 2 * s.min_windows
+        GROUP BY w.predictor, x.kind, v)
+  WHERE in_t != in_p
+  GROUP BY predictor
+),
+lrn_reg AS (  -- per predictor: judged once it has twice MIN_GRADED_WINDOWS windows; worse = by more than REGRESSION_MAX of the earlier value
+  SELECT p.predictor, p.n_windows, p.all_weeks, p.t_weeks, p.p_weeks, p.mae_t, p.mae_p, p.cf_t, p.cf_p, c.changed,
+         p.n_windows >= 2 * s.min_windows AS judged,
+         COALESCE(p.mae_t - p.mae_p > s.regression_max * ABS(p.mae_p), FALSE) AS mae_worse,
+         COALESCE(p.cf_p - p.cf_t > s.regression_max * ABS(p.cf_p), FALSE) AS cf_worse,
+         s.min_windows
+  FROM lrn_span p
+  CROSS JOIN lrn_set s
+  LEFT JOIN lrn_chg c ON c.predictor = p.predictor
+),
+lrn_reg_line AS (  -- one sentence per predictor, built one level below the check's aggregate
+  SELECT predictor, judged, mae_worse, cf_worse,
+         IF(COALESCE(judged, FALSE),
+            CONCAT(predictor, ': mae_net_share ', COALESCE(FORMAT('%.4f', mae_t), 'none'), ' over ', COALESCE(t_weeks, '-'),
+                   ' against ', COALESCE(FORMAT('%.4f', mae_p), 'none'), ' over ', COALESCE(p_weeks, '-'),
+                   ', counterfactual_net_per_alloc ', COALESCE(FORMAT('%.4f', cf_t), 'none'),
+                   ' against ', COALESCE(FORMAT('%.4f', cf_p), 'none'),
+                   CASE WHEN mae_worse AND cf_worse THEN ' — WORSE on accuracy and on money'
+                        WHEN mae_worse THEN ' — WORSE on accuracy'
+                        WHEN cf_worse THEN ' — WORSE on money'
+                        ELSE ' — not worse by more than the margin' END,
+                   IF(changed IS NULL, ' · no rule or builder version changed between them',
+                      CONCAT(' · changed between them: ', changed))),
+            CONCAT(predictor, ': YOUNG, ', CAST(n_windows AS STRING), ' of ', COALESCE(CAST(2 * min_windows AS STRING), '?'),
+                   ' windows graded (', COALESCE(all_weeks, '-'), ')')) AS line
+  FROM lrn_reg
+),
+c36 AS (  -- the predictions do not get quietly worse: trailing windows against the ones before them, per predictor
+  SELECT 'prediction_regression',
+    CAST(COUNTIF(COALESCE(judged, FALSE) AND (mae_worse OR cf_worse)) AS FLOAT64),
+    'predictors whose trailing MIN_GRADED_WINDOWS graded windows (the Sunday-start weeks of as_of: the report card\'s WINDOW rows, family ALL) are worse than the MIN_GRADED_WINDOWS before them by more than REGRESSION_MAX of the earlier value, on mae_net_share of the applied scenario (higher is worse) or counterfactual_net_per_alloc (lower is worse) · red > 0; INFO (YOUNG) while no predictor has twice MIN_GRADED_WINDOWS graded windows; red when the report card is empty or a setting is missing',
+    CASE WHEN (SELECT min_windows FROM lrn_set) IS NULL OR (SELECT regression_max FROM lrn_set) IS NULL THEN 'RED'
+         WHEN (SELECT n_rows FROM lrn_card_meta) = 0 THEN 'RED'
+         WHEN COUNTIF(COALESCE(judged, FALSE) AND (mae_worse OR cf_worse)) > 0 THEN 'RED'
+         WHEN COUNTIF(COALESCE(judged, FALSE)) = 0 THEN 'INFO'
+         ELSE 'GREEN' END,
+    CONCAT(
+      IF((SELECT min_windows FROM lrn_set) IS NULL OR (SELECT regression_max FROM lrn_set) IS NULL,
+         'MIN_GRADED_WINDOWS or REGRESSION_MAX is not in DE_COACH_THRESHOLDS (LEARNING, GUARDIAN, family NULL) · ', ''),
+      IF((SELECT n_rows FROM lrn_card_meta) = 0,
+         'the report card T_PREDICTION_SCORECARD is empty: SP_GRADE_PREDICTIONS has not rebuilt it · ', ''),
+      IF(COUNTIF(COALESCE(judged, FALSE)) = 0, 'YOUNG — ', ''),
+      COALESCE(STRING_AGG(line, '; ' ORDER BY predictor), 'no graded window on the card'),
+      ' · the trailing ', COALESCE(CAST((SELECT min_windows FROM lrn_set) AS STRING), '(no setting)'),
+      ' windows against the ', COALESCE(CAST((SELECT min_windows FROM lrn_set) AS STRING), '(no setting)'),
+      ' before them; RED when worse by more than ', COALESCE(CAST((SELECT regression_max FROM lrn_set) AS STRING), '(no setting)'),
+      ' of the earlier value · the card was scored ',
+      COALESCE(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', (SELECT scored_at FROM lrn_card_meta), 'America/New_York'), 'never'),
+      ' New York')
+  FROM lrn_reg_line
+),
+c37 AS (  -- REPORTS: the response model is tested only where an uploaded plan matched a move
+  SELECT 'response_model_unverified',
+    CAST(COUNTIF(is_applied AND NOT COALESCE(act_is_noop, FALSE) AND grade != 'UNGRADABLE') AS FLOAT64),
+    'current ACT-scenario grades that applied (an uploaded plan matched every component) on a plan row with a bid, state or budget component: the grades that test the response model RM1 · INFO (reports) until one exists, then GREEN; never red',
+    IF(COUNTIF(is_applied AND NOT COALESCE(act_is_noop, FALSE) AND grade != 'UNGRADABLE') > 0, 'GREEN', 'INFO'),
+    CONCAT(CAST(COUNTIF(is_applied AND NOT COALESCE(act_is_noop, FALSE) AND grade != 'UNGRADABLE') AS STRING),
+           ' ACT grades applied with a move · ', CAST(COUNTIF(is_applied AND COALESCE(act_is_noop, FALSE)) AS STRING),
+           ' applied on rows the plan moved nothing · ',
+           CAST(COUNTIF(NOT COALESCE(act_is_noop, FALSE) AND applied_scenario = 'DO_NOTHING') AS STRING),
+           ' with a move whose row applied as DO_NOTHING (no uploaded plan matched) · ',
+           CAST(COUNTIF(applied_scenario = 'OTHER_ACTION') AS STRING), ' OTHER_ACTION · ',
+           CAST(COUNT(*) AS STRING), ' current ACT grades · RM1 is graded only where an uploaded plan matched (piece 3); until then ACT and lift are ungraded (architecture/LEARNING.md §9)')
+  FROM lrn_act
+),
+-- ───────────────────────────────────────────────────────────────────────────────────────────
 -- c33: the holdout's integrity (v27.162, piece-1 plan Task 8, R9 = P-23, audit fix #27; header).
 -- hu_asg / hu_led / hu_pre / hu_cens / hu_pre_ro / hu_obs are the six inputs; hu_gap, hu_pre_gap and
 -- c33 read nothing else, so HOLDOUT_INTEGRITY_acceptance.sql runs the hu_gap, hu_pre_gap and c33 text
@@ -913,4 +1129,5 @@ UNION ALL SELECT * FROM c22 UNION ALL SELECT * FROM c23 UNION ALL SELECT * FROM 
 UNION ALL SELECT * FROM c25 UNION ALL SELECT * FROM c26 UNION ALL SELECT * FROM c27
 UNION ALL SELECT * FROM c28 UNION ALL SELECT * FROM c29 UNION ALL SELECT * FROM c30
 UNION ALL SELECT * FROM c31 UNION ALL SELECT * FROM c32
-UNION ALL SELECT * FROM c33 UNION ALL SELECT * FROM c34;
+UNION ALL SELECT * FROM c33 UNION ALL SELECT * FROM c34
+UNION ALL SELECT * FROM c35 UNION ALL SELECT * FROM c36 UNION ALL SELECT * FROM c37;

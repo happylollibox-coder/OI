@@ -357,9 +357,9 @@ proposal 12.`
 | check | RED when |
 |---|---|
 | `prediction_grades_fresh` | any ledger row with `horizon_to` older than 14 days has no grade. *Corrected 2026-10-03 (Task-1 review): "older" on the house watermark of §7 — a row gradable there one night ago (`horizon_to` + 15 ≤ the watermark) has no current grade. A stalled `FACT_AMAZON_ADS` makes no row due, so this check stays GREEN through it; it measures the grader, not the ads feed.* |
-| `prediction_regression` | per predictor: trailing-3-window accuracy or money worse than the previous 3 by > `REGRESSION_MAX` (0.10); the line names any rule applied between |
+| `prediction_regression` | per predictor: trailing-3-window accuracy or money worse than the previous 3 by > `REGRESSION_MAX` (0.10); the line names any rule applied between. *Built 2026-10-04 (piece-2 Task 6): "by more than" is read as the setting's description says, a ratio of the earlier value (`mae_net_share` up by more than 0.10 × the earlier one, or `counterfactual_net_per_alloc` down by more than 0.10 × \|the earlier one\|), on the report card's `WINDOW` rows; INFO YOUNG until 6 graded weeks; `architecture/LEARNING.md` §6.* |
 | `proposals_open` | AMBER when an `OPEN` proposal is older than 14 days; the line lists them. *Corrected 2026-10-03 (§14): built in piece 6 with `DE_RULE_PROPOSALS`, which does not exist before then (§14 E7); piece 2 builds the other three.* |
-| `response_model_unverified` | INFO until the first `ACT` grade exists |
+| `response_model_unverified` | INFO until the first `ACT` grade exists. *Built 2026-10-04 (piece-2 Task 6, the plan's wording): until a current `ACT` grade applied on a plan row with a move (`is_applied`, `act_is_noop` FALSE, not UNGRADABLE), then GREEN — every `ACT` prediction is graded, applied or not.* |
 
 **Surfaces** (backend first, per the house rule; panels read `T_` tables): the Admin page gets a
 *Proposals* panel (accept / reject with a note, the evidence block expanded) and a *Learning* panel:

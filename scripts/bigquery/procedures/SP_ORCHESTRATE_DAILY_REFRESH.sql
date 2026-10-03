@@ -2582,6 +2582,46 @@ BEGIN
   END;
 
   -- ============================================
+  -- Refresh Task 20.8f (2026-10-04, v27.176, learning-contract piece 2 Task 6): THE PLAN'S
+  -- PREDICTIONS ARE GRADED. SP_GRADE_PREDICTIONS(NULL, NULL) appends a grade to FACT_PREDICTION_GRADE
+  -- for every prediction of V_PREDICTION_LEDGER whose horizon_to + SETTLE_HORIZON_DAYS has reached
+  -- the house watermark LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP()) and that holds no grade,
+  -- then rebuilds the report card T_PREDICTION_SCORECARD. Runs after SP_FACT_AMAZON_ADS (Task 16, the
+  -- outcomes), SP_RECORD_OBSERVED_CHANGES (Task 2.2a, which scenario applied), the keyword-state
+  -- history (Task 20.8a, placement) and the plan (Task 20.8c), so the card's NEXT_WEEK rows read
+  -- tonight's night; and before SP_REFRESH_CUBE_TABLES and the board's snapshot (Task 23), so
+  -- V_ENGINE_HEALTH's prediction_grades_fresh reads tonight's grades. IDEMPOTENT: a pass that finds
+  -- nothing newly gradable inserts no row (the 07:35 and 16:00 UTC passes, unless the ads table
+  -- advanced in between); the card is rebuilt every pass. It reads the plan and the ads and moves no
+  -- bid, budget or pause; a failure logs FAIL and the pass carries on. The step is Task 20.8e's byte
+  -- for byte except the name and the CALL's arguments. SOP: architecture/LEARNING.md §4, §5, §10.
+  -- ============================================
+
+  SET procedure_name = 'SP_GRADE_PREDICTIONS';
+  SET procedure_start_time = CURRENT_TIMESTAMP();
+  SET total_procedures = total_procedures + 1;
+
+  BEGIN
+    CALL `onyga-482313.OI.SP_GRADE_PREDICTIONS`(NULL, NULL);
+    SET success_count = success_count + 1;
+    SET error_msg = NULL;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'OK', NULL, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('OK %s completed successfully in %d seconds', procedure_name,
+      TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND)) as log_message;
+  EXCEPTION WHEN ERROR THEN
+    SET failure_count = failure_count + 1;
+    SET error_msg = @@error.message;
+    INSERT INTO `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      (run_id, run_date, procedure_name, status, error_message, started_at, finished_at, duration_seconds, inserted_at)
+    VALUES
+      (run_id, CURRENT_DATE(), procedure_name, 'FAIL', error_msg, procedure_start_time, CURRENT_TIMESTAMP(), TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), procedure_start_time, SECOND), CURRENT_TIMESTAMP());
+    SELECT FORMAT('FAIL %s failed: %s', procedure_name, @@error.message) as log_message;
+  END;
+
+  -- ============================================
   -- Refresh Task 21: Refresh Cube Tables (T_*)
   -- Convert all Cube-facing V_* logical views into physical T_* snapshot tables
   -- ============================================

@@ -125,6 +125,14 @@ ORDER BY section_rank, campaign_name;
   Asserted by `PLAN_HEALTH_acceptance.sql` A1f, A2a–A2f and C04f (the twin's live rendering equals
   the deployed row).
 
+  **The learning checks (v27.176, 2026-10-04, learning-contract piece 2 Task 6).** The board's two
+  RED-able learning checks follow the three alarms in the line's order — `prediction_grades_fresh`
+  fourth, `prediction_regression` fifth, every other check after — and their detail is quoted too, so
+  a RED one says which nights went ungraded, or which weeks got worse and which rule or builder
+  version changed between them, without opening the board (`LEARNING.md` §6, `ENGINE_HEALTH.md`). The
+  action is unchanged: a RED learning check reads NEW or standing like any other. Asserted by
+  `PLAN_HEALTH_acceptance.sql` P4a (quoted, on a board with it doctored RED) and P4b (the order).
+
 ## One keyword, one price (v27.102, 2026-08-21)
 
 The bulksheet is built **by hand** off PLANNED. So a keyword appearing twice there at two prices

@@ -119,6 +119,33 @@ brief named each RED with no date, while the board carried the same three REDs o
 Acceptance, with negative controls on doctored copies: `PLAN_HEALTH_acceptance.sql` A1 (the check),
 A2 (red_since and the line), A3 (the table: nothing twice, one row per check, one snapshot per pass).
 
+**The learning contract's checks (v27.176, 2026-10-04; learning-contract piece 2 Task 6; spec
+`docs/superpowers/specs/2026-10-01-learning-contract-design.md` §9; SOP `LEARNING.md` §6).** The
+plan's predictions (`V_PREDICTION_LEDGER`, two scenarios per keyword per night) are graded by
+`SP_GRADE_PREDICTIONS` (Refresh Task 20.8f) into `FACT_PREDICTION_GRADE` and summed into the report
+card `T_PREDICTION_SCORECARD`. Three checks, c35–c37, placed before c33 (which stays last):
+
+- **prediction_grades_fresh**: RED when a ledger row has no grade one night after the house watermark
+  `LEAST(MAX(FACT_AMAZON_ADS.date), FN_ADS_ANCHOR_CAP())` made it gradable (`horizon_to +
+  SETTLE_HORIZON_DAYS + 1 <= watermark`); RED as well on an empty population, a missing setting or a
+  NULL watermark. It reads the ledger, the grade table and the ads table's newest day — never the
+  report card — and stays GREEN while the ads table stalls (no row falls due); the detail prints the
+  watermark beside both its terms so a stall is visible.
+- **prediction_regression**: per predictor, the report card's trailing `MIN_GRADED_WINDOWS` graded
+  weeks against the `MIN_GRADED_WINDOWS` before them, pooled, on `mae_net_share` (the applied
+  scenario) and `counterfactual_net_per_alloc`; RED when either is worse by more than
+  `REGRESSION_MAX` of the earlier value; INFO (YOUNG) until a predictor has twice
+  `MIN_GRADED_WINDOWS` graded weeks; RED on an empty card or a missing setting. The detail names the
+  rule and builder versions that changed between the two spans.
+- **response_model_unverified**: INFO until a current `ACT` grade applied on a plan row with a move
+  (an uploaded plan matched it), then GREEN; never RED.
+
+The settings come from `DE_COACH_THRESHOLDS` (LEARNING scope), never literals. Seven input CTEs read
+the tables and the rest read only them, so `PLAN_HEALTH_acceptance.sql` P1–P3 run the board's own
+c35–c37 text on doctored inputs and P5 ties that text to the deployed rows. `V_DAILY_BRIEF` quotes
+the detail of the two RED-able ones (`DAILY_BRIEF.md`). The measured cost and the first readings are
+in `LEARNING.md` §10 "Task 6".
+
 Read the memory — every status each check has held, with the first and last snapshot it held it on
 (a status held in two separate runs shows once, spanning both; the brief's `red_since` is the
 run-aware reading):

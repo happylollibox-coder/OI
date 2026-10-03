@@ -12,9 +12,11 @@ reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Task 4 (2026-10-03) deploye
 `V_PREDICTION_LEDGER` v27.172, with the campaign-budget clause in its recommended form (§3; §10
 "Task 4"). Task 5 (2026-10-03) deployed the grader `SP_GRADE_PREDICTIONS` v27.173, its grades
 `FACT_PREDICTION_GRADE` and its report card `T_PREDICTION_SCORECARD`, and ran it once: the six
-August nights are graded (§4, §5; §10 "Task 5"). Nothing else below is deployed yet: the schedule
-and the health checks are Task 6, the rest of the contract suite Task 7. Each task appends its own
-entry to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
+August nights are graded (§4, §5; §10 "Task 5"). Task 6 (2026-10-04) put the grader on the
+schedule (orchestrator Refresh Task 20.8f, v27.176), the three health checks on the board
+(`V_ENGINE_HEALTH` c35–c37) and the two RED-able ones on the brief's SYSTEM line (§6; §10 "Task
+6"). Nothing else below is deployed yet: the rest of the contract suite is Task 7. Each task appends
+its own entry to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
 > nothing* and *if you upload the plan* — and once the days they forecast have settled, both are
@@ -510,31 +512,59 @@ list (§10 "Task 5" compares them).
 
 ## 6. The health checks
 
-In `V_ENGINE_HEALTH` (Task 6), inserted before c33, which stays last
+In `V_ENGINE_HEALTH` v27.176 (Task 6) as c35–c37, inserted before c33, which stays last
 (`HOLDOUT_INTEGRITY_acceptance.sql` slices the file there); see `architecture/ENGINE_HEALTH.md`.
+Seven input CTEs read the tables — `lrn_set` (the three settings below), `lrn_wm` (the house
+watermark and its two terms), `lrn_led` (the ledger's grade keys and `horizon_to`), `lrn_grd` (the
+keys that hold a grade), `lrn_act` (the current `ACT` grades), `lrn_card` and `lrn_card_meta` (the
+report card) — and the CTEs from `lrn_due` to `c37` read nothing else, so
+`scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (P1–P3) runs that text verbatim on doctored
+copies of the seven inputs. THE TWO MUST CHANGE TOGETHER. The settings are read from
+`DE_COACH_THRESHOLDS` (the LEARNING scope, today's values: the rows the grader reads), never as
+literals. The contract suite's fixtures (`predictor = 'FIXTURE'`) are left out of every input.
 
-- **`prediction_grades_fresh`** — RED when a ledger row has no current grade although
+- **`prediction_grades_fresh`** — RED when a ledger row has no grade although
   `DATE_ADD(horizon_to, INTERVAL SETTLE_HORIZON_DAYS + 1 DAY) <= watermark`, the house watermark of
-  §4 step 1 (one night's grace). Reads the ledger, `FACT_AMAZON_ADS`'s newest `date` and
-  `FACT_PREDICTION_GRADE`, never the report card. An empty population is RED, not vacuously green.
-  It measures the grader against the data that exists: while `FACT_AMAZON_ADS` stops advancing no
-  row falls due, and the check stays GREEN. Its detail line prints the watermark beside
-  `FN_ADS_ANCHOR_CAP()` so a lag is visible; `V_ENGINE_HEALTH` has no check on the ads table's
-  newest date (read 2026-10-03), and `pipeline_step_failing` names a step that fails, not one that
-  loads nothing new. *Corrected 2026-10-03 (Task-1 review): was the calendar clock of §4 step 1's
-  first version.*
-- **`prediction_regression`** — per predictor: the trailing `MIN_GRADED_WINDOWS` windows against the
-  `MIN_GRADED_WINDOWS` before them on `mae_net_share` or `counterfactual_net_per_alloc`; RED when
-  worse by more than `REGRESSION_MAX`. INFO "YOUNG" until twice `MIN_GRADED_WINDOWS` windows are
-  graded. The detail names any `rule_version` or `builder_version` change between the two spans —
-  the rule that moved.
-- **`response_model_unverified`** — INFO until an `ACT`-applied grade with `act_is_noop = FALSE`
-  exists; that needs an uploaded plan (piece 3).
+  §4 step 1 (one night's grace after the grader could have graded it). A prediction with any grade
+  row has a current grade (its highest `regrade_seq`). Reads the ledger, `FACT_AMAZON_ADS`'s newest
+  `date` and `FACT_PREDICTION_GRADE`, never the report card. An empty population — no ledger row
+  that old — is RED, not vacuously green, and so is a missing `SETTLE_HORIZON_DAYS` or a NULL
+  watermark. It measures the grader against the data that exists: while `FACT_AMAZON_ADS` stops
+  advancing no row falls due, and the check stays GREEN. Its detail line prints the watermark beside
+  `FACT_AMAZON_ADS`'s newest day and `FN_ADS_ANCHOR_CAP()` so a lag is visible, and the day the next
+  row falls past due; `V_ENGINE_HEALTH` has no check on the ads table's newest date (read
+  2026-10-03), and `pipeline_step_failing` names a step that fails, not one that loads nothing new.
+  *Corrected 2026-10-03 (Task-1 review): was the calendar clock of §4 step 1's first version.*
+- **`prediction_regression`** — per predictor, from the report card's `WINDOW` rows of the
+  predictor's rollup (`family` and `calendar_state` `'ALL'`; `ACCURACY` with `scenario` `APPLIED`, and
+  `MONEY`). The graded windows are ranked newest first; the trailing `MIN_GRADED_WINDOWS` (t) and the
+  `MIN_GRADED_WINDOWS` before them (p) are each pooled — `mae_net_share` = Σ `mae_net_usd` ÷ Σ
+  `real_spend`, `counterfactual_net_per_alloc` = Σ (value × `alloc_spend`) ÷ Σ `alloc_spend`. "Worse
+  by more than `REGRESSION_MAX`" is read as the setting's description says, a ratio of the earlier
+  value (the margin form `FN_PLAN_SCORECARD`'s RECOMMENDATION uses): `mae_t − mae_p >
+  REGRESSION_MAX × |mae_p|` (more error is worse) or `cf_p − cf_t > REGRESSION_MAX × |cf_p|` (less
+  net per allocated dollar is worse). RED when any predictor is worse on either; INFO "YOUNG" while
+  no predictor has twice `MIN_GRADED_WINDOWS` graded windows; GREEN otherwise; RED as well when the
+  card holds no row at all (the grader has not rebuilt it) or a setting is missing. A window is a
+  graded Sunday-start week of `as_of`; the most recent graded weeks are compared, so a week with no
+  graded night (the September outage) is skipped, not counted. The detail gives, per predictor, the
+  two spans' weeks and values and names every `rule_version` and `builder_version` (from the `MONEY`
+  rows' `rule_versions` / `builder_versions`) that is in one span and not the other — the rule that
+  moved.
+- **`response_model_unverified`** — measured = current `ACT` grades that applied (`is_applied`) on a
+  plan row with a component (`act_is_noop = FALSE`) and are not `UNGRADABLE`. INFO while there is
+  none, GREEN once one exists, never RED; that needs an uploaded plan (piece 3). The detail counts
+  the `ACT` grades applied on rows the plan moved nothing, the moves whose row applied as
+  `DO_NOTHING` (the HONESTY row's `n_act_no_matching_action`) and the `OTHER_ACTION` rows.
 - `proposals_open` is piece 6's, with `DE_RULE_PROPOSALS`.
 
-`V_DAILY_BRIEF`'s SYSTEM line counts RED rows; the two RED-able checks go on its priority list, and
-the copies of that list in `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` are updated in the
-same step.
+`V_DAILY_BRIEF`'s SYSTEM line counts RED rows. The two RED-able checks join its priority list after
+the three alarms — `pipeline_step_failing` 1, `plan_partition_fresh` 2, `plan_pass_failed` 3,
+`prediction_grades_fresh` 4, `prediction_regression` 5, every other check 6 — and the board's detail
+of each of the five is quoted when it is RED (the other REDs are named by name). The action is
+unchanged: A NIGHT WAS NOT SAVED for the first two, A PLAN PASS FAILED for the third; a RED learning
+check reads NEW or standing like any other. The copy of that list in
+`scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (`sys_twin`) changed in the same step.
 
 ---
 
@@ -561,7 +591,8 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    (`--nosync`, polled).
 5. **The schedule and the board** (Task 6): the orchestrator's new step — after diffing the deployed
    body against the file, where the new step must be the only difference; the orchestrator is never
-   run by hand — then `V_ENGINE_HEALTH.sql`, `V_DAILY_BRIEF.sql`.
+   run by hand — then `V_ENGINE_HEALTH.sql`, `V_DAILY_BRIEF.sql`, then
+   `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (`--nosync`, polled; it reads the whole brief).
 6. **The contract** (Task 7): `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql`, the parity
    check, and the controls harness (`--submit` / `--collect`).
 
@@ -1757,4 +1788,108 @@ JOIN live l USING (predictor, variant, as_of, campaign_id, keyword_id)
 WHERE NOT EXISTS (SELECT 1 FROM fx WHERE fx.as_of = x.as_of AND fx.keyword_id = x.keyword_id)
 GROUP BY cp, x.predictor, x.applied_scenario, l.applied_scenario
 ORDER BY part, g, predictor, v175, v174;
+```
+
+### Task 6 — on the schedule, on the board, on the brief (2026-10-04)
+
+**The orchestrator.** Before the change the deployed `SP_ORCHESTRATE_DAILY_REFRESH` (last altered
+2026-10-03 06:30:45 UTC) equalled HEAD's file with its comment lines stripped, byte for byte (109,098
+characters, SHA-256 prefix `4e81dc09a4e6`). The new step, Refresh Task 20.8f
+`SP_GRADE_PREDICTIONS(NULL, NULL)`, sits between `SP_APPEND_CATALOG_FORECAST` (20.8e) and
+`SP_REFRESH_CUBE_TABLES` (21) and is Task 20.8e's block byte for byte except the procedure name and
+the CALL's arguments (string comparison); the new file's body differs from the deployed body by that
+block (25 lines, two of them blank) and nothing else. **Proved before the deploy on copies of the
+block** — two procedures with the block as written and `LOG_PIPELINE_RUNS` swapped for
+`OI._tmp_t6_log` (created `LIKE` it, expires 2026-10-11), both dropped after the runs:
+
+| case | what happened | job, slot-seconds |
+|---|---|---|
+| the block as deployed, the real grader | the grader's log: `0 ledger rows due, 0 inserted … T_PREDICTION_SCORECARD 357 rows; 80 seconds` (watermark 2026-10-02); the step logged OK, 82 s; the summary counted 1 OK; `FACT_PREDICTION_GRADE` still 17,888 rows from two `graded_at`; the card rebuilt (357 rows, `scored_at` 22:44:34 UTC) | `t6_step_ok_1791067472`, 263.4 (46 child jobs) |
+| the CALL given `(DATE '2026-08-26', NULL)` — a re-grade without a reason, which the grader's first ASSERT refuses before any write | the step logged FAIL with the grader's message (`SP_GRADE_PREDICTIONS: a re-grade (regrade_from set) needs a reason; …`), 1 s; the summary counted 1 FAIL; the grade table unchanged (17,888 rows, highest `regrade_seq` 1) | `t6_step_fail_1791067615`, 22:46:58 UTC |
+
+**Deployed** 22:47:27 UTC 2026-10-03 (job `t6_deploy_orch_1791067644`), comment lines stripped:
+`INFORMATION_SCHEMA.ROUTINES.routine_definition` equals the file's `BEGIN … END` (110,511 characters,
+SHA-256 prefix `33c0066b8120`), the description unchanged. The orchestrator was not run. The first
+pass to run the step is the 05:00 UTC pass of 2026-10-04; it grades nothing until the 09-30 night
+falls due (watermark 2026-10-17) and rebuilds the card every pass.
+
+**The board.** `V_ENGINE_HEALTH` v27.176 deployed 22:47:49 UTC (job `t6_deploy_health_1791067666`);
+before it the deployed definition equalled HEAD's file, after it this file (62,184 characters, 23.72%
+of the 262,144-character ceiling). The three checks' text run as a query before the deploy (job
+`t6_proto_1791067312`): 116.5 slot-seconds, 15,229,779 bytes processed — of which the ledger's key
+columns alone cost 73.2 slot-seconds (job `t6_ledkeys_1791067079`; the whole ledger, 106.5, §10
+"Task 4"). The full board after the deploy (job `t6_board_full_1791067685`, 22:48 UTC): 37 checks, 3
+RED — `contradiction_rate`, `seat_every_occupant_numbered`, `seat_past_due_in_future_tense`, the
+same three as before — 13,519.0 slot-seconds, 191,527,985 bytes. HEAD's body run as a query right
+after it (job `t6_board_old_1791067743`): 26,210.3 slot-seconds, 186,983,538 bytes; the board's cost
+moves between runs with its other arms, and the three checks' share is the 116.5 above. The board
+filtered to the three checks costs 79.0 slot-seconds (25,715,539 bytes; the first statement of job
+`t6_ponly2_1791068157`). Their first readings:
+
+- `prediction_grades_fresh` GREEN, 0 — `0 of 8944 ledger rows past due have no grade · watermark
+  2026-10-02 = LEAST(FACT_AMAZON_ADS newest day 2026-10-03, FN_ADS_ANCHOR_CAP() 2026-10-02) · …
+  8644 ledger rows not yet past due, the next when the watermark reaches 2026-10-18`: the six August
+  nights, both plans, both scenarios, all graded; the 09-30 night (horizon 10-01 … 10-03) becomes
+  gradable on watermark 10-17 and past due on 10-18.
+- `prediction_regression` INFO, 0 — `YOUNG — PLAN_A: YOUNG, 1 of 6 windows graded (2026-08-23);
+  PLAN_B: …`: one graded week (the Sunday week of 08-23); twice `MIN_GRADED_WINDOWS` is six.
+- `response_model_unverified` INFO, 0 — `0 ACT grades applied with a move · 0 applied on rows the
+  plan moved nothing · 3832 with a move whose row applied as DO_NOTHING (no uploaded plan matched) ·
+  198 OTHER_ACTION · 4472 current ACT grades`.
+
+**The brief.** `V_DAILY_BRIEF` v27.176 deployed 22:51:01 UTC (job `t6_deploy_brief_1791067858`); its
+deployed definition equals this file (23,495 characters). Only `health` changed (§6: `pri` 4 and 5,
+the detail quoted for `pri <= 5`). No learning check is RED on the live board; C04 (the line
+counts and names every RED check of the board) and C04f (the twin's rendering equals the deployed
+row) pass on it (below). Run 23:05 UTC, before any pass had run the step, the two queries at the end
+of this entry returned no row.
+
+**Checked.** `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` v27.176, run as written after both
+deploys (job `t6_ph_full_1791068301`, 22:58–23:04 UTC, `--nosync`, 73 statements, 323 s): 49 rows,
+every one PASS — the 42 earlier rows and P0–P5. 68,535.0 slot-seconds (the brief read 54,735.8, the
+board read 13,165.9, the other 71 statements 633.3), 1,079,137,462 bytes. P1–P3 run the board's own
+`lrn_due` … `c37` text on doctored copies of its seven inputs (text identity, the command in the
+file's header: `file==acceptance True`, `deployed carries it True`; `HOLDOUT_INTEGRITY_acceptance.sql`'s
+own command still reads True and True). The controls, each read (job `t6_ponly2_1791068157`, the P
+section alone, 445.4 slot-seconds; the full run passed on the same picks):
+
+- `prediction_grades_fresh` — NC_P1_UNGRADED (the plan's control: the first past-due ledger row's
+  grade removed, the 08-23 night) RED 1; NC_P1_PAST_GRACE (an ungraded row one night past the grace)
+  RED 1; HC_P1_GRACE (an ungraded row in the grace night, gradable tonight) GREEN 0; NC_P1_EMPTY (no
+  ledger row), NC_P1_NO_SETTING, NC_P1_NO_WATERMARK RED 0.
+- `prediction_regression` — on synthetic cards, six weeks a plan: HC_P2_FLAT GREEN 0;
+  NC_P2_MAE_WORSE (the plan's control: PLAN_B's trailing three weeks 20% worse on `mae_net_share`,
+  with a builder change between the spans) RED 1, naming `builder_version gone pre-v27.170,
+  builder_version new v27.171, rule_version gone R0:pre-v27.170, rule_version new R0:v27.171`;
+  HC_P2_MAE_WITHIN (8% worse) GREEN 0; NC_P2_CF_WORSE (`counterfactual_net_per_alloc` −0.2 against
+  −0.1) RED 1; NC_P2_YOUNG (five weeks) INFO 0; NC_P2_EMPTY (no card) RED 0; NC_P2_NO_SETTING RED 0.
+- `response_model_unverified` — NC_P3_ACT_APPLIED (the plan's control: one current ACT grade with a
+  move set applied) GREEN 1; HC_P3_NOOP_APPLIED (one with no move) INFO 0; HC_P3_UNGRADABLE (the move
+  applied on an UNGRADABLE row) INFO 0.
+- No check a copy did not doctor moved on any copy. P5: the deployed rows equal the twin's LIVE copy
+  on measured, threshold, status and detail.
+- P4a (`prediction_grades_fresh` doctored RED on an otherwise green board): RED, `a NEW check is
+  RED`, its detail quoted. P4b (`plan_pass_failed`, both learning checks and `plan_both_plans_written`
+  RED): the list in that order, the first three quoted, the action A PLAN PASS FAILED. The v27.163
+  list on the same two boards (job `t6_pri_mut_1791068659`) reads `prediction_grades_fresh` bare and
+  `plan_pass_failed (…); plan_both_plans_written; prediction_grades_fresh; prediction_regression`, so
+  both checks fail on it.
+
+`config.yaml`: `V_ENGINE_HEALTH` (description, and its six new dependencies), `V_DAILY_BRIEF`,
+`SP_ORCHESTRATE_DAILY_REFRESH` and `SP_GRADE_PREDICTIONS` (descriptions); it parses. SOPs:
+`architecture/ENGINE_HEALTH.md` (the three checks), `architecture/DAILY_BRIEF.md` (their place on the
+line), this file §6 and §7.
+
+**Not yet measured: the first scheduled run.** Read after the 05:00 UTC pass of 2026-10-04:
+
+```sql
+-- the step's runs, and the board's three rows as the pass's snapshot stored them
+SELECT procedure_name, status, error_message, started_at, duration_seconds
+FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+WHERE procedure_name = 'SP_GRADE_PREDICTIONS' ORDER BY started_at DESC LIMIT 6;
+
+SELECT snapshot_at, check_name, status, measured, detail
+FROM `onyga-482313.OI.FACT_ENGINE_HEALTH_HISTORY`
+WHERE check_name IN ('prediction_grades_fresh', 'prediction_regression', 'response_model_unverified')
+ORDER BY snapshot_at DESC, check_name LIMIT 9;
 ```

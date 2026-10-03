@@ -193,6 +193,16 @@
 -- read once; the hs_* CTEs read only the history table. Only hs, hs_meta, hs_run, health and
 -- system_health changed. Acceptance: PLAN_HEALTH_acceptance.sql A1f, A2a–A2f, C04f (the twin's live
 -- rendering equals this row); measured results in its header.
+--
+-- v27.176 (2026-10-04, learning-contract piece 2, Task 6; architecture/LEARNING.md §6). V_ENGINE_HEALTH
+-- now carries prediction_grades_fresh, prediction_regression and response_model_unverified (c35-c37).
+-- The two RED-able ones join `pri` after the three alarms (4 and 5; every other check moves from 4 to 6),
+-- and the line quotes the board's detail for every check with pri <= 5 where it quoted pri <= 3 — so a
+-- RED learning check says which nights went ungraded, or which spans got worse and which rule or builder
+-- version changed between them, without opening the board. The action is unchanged (A NIGHT WAS NOT
+-- SAVED for pri <= 2, A PLAN PASS FAILED for pri 3; a RED learning check reads NEW or standing). Only
+-- `health` changed. The twin in PLAN_HEALTH_acceptance.sql (sys_twin) changed with it; P4 there runs it
+-- on a board with the learning checks doctored RED.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_DAILY_BRIEF` AS
 WITH latest AS (
@@ -623,9 +633,12 @@ hs_run AS (
 -- EVERY morning, so the healthy line still says what it checked and the plan's date is readable
 -- without opening the board.
 -- v27.163: plan_pass_failed is third (its detail is quoted too, and its first clause — the latest
--- plan run — joins the healthy line). A RED check is NEW when the history is not empty and either it
--- was not RED on the latest snapshot (red_since NULL: it turned RED since that snapshot) or its run
--- started inside the last 24 hours (the brief is read once a day) on a snapshot after the first one.
+-- plan run — joins the healthy line).
+-- v27.176: the learning contract's two RED-able checks follow the three alarms — prediction_grades_fresh
+-- fourth, prediction_regression fifth, every other check sixth — and their detail is quoted too (pri
+-- <= 5); n_alarm (pri <= 2) and n_pass_failed (pri = 3), so the action, are unchanged.
+-- A RED check is NEW when the history is not empty and either it was not RED on the latest snapshot
+-- (red_since NULL: it turned RED since that snapshot) or its run started inside the last 24 hours (the brief is read once a day) on a snapshot after the first one.
 -- A run that reaches back to the memory's first snapshot may have begun before it, so it is
 -- standing, "since <that date> or earlier", never new: on the first morning after the memory
 -- starts, the REDs older than the memory are not called new.
@@ -647,7 +660,7 @@ health AS (
          STRING_AGG(IF(status = 'RED' AND NOT is_new AND n_snaps > 0,
                        CONCAT(check_name, ' since ', FORMAT_TIMESTAMP('%Y-%m-%d', red_since, 'America/New_York'),
                               IF(red_since = first_at, ' or earlier', ''),
-                              IF(pri <= 3, CONCAT(' (', COALESCE(detail, 'no detail'), ')'), '')),
+                              IF(pri <= 5, CONCAT(' (', COALESCE(detail, 'no detail'), ')'), '')),
                        NULL), ', ' ORDER BY pri, check_name) AS standing_list,
          COALESCE(MAX(IF(check_name = 'plan_partition_fresh',  SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
                   'plan_partition_fresh is not on the board') AS plan_clause,
@@ -656,16 +669,18 @@ health AS (
          COALESCE(MAX(IF(check_name = 'pipeline_step_failing', SPLIT(detail, ' · ')[SAFE_OFFSET(0)], NULL)),
                   'pipeline_step_failing is not on the board') AS pipe_clause
   FROM (SELECT *,
-               IF(pri <= 3, CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name) AS said,
+               IF(pri <= 5, CONCAT(check_name, ' (', COALESCE(detail, 'no detail'), ')'), check_name) AS said,
                (status = 'RED' AND n_snaps > 0
                 AND (red_since IS NULL
                      OR (red_since > first_at
                          AND red_since >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)))) AS is_new
         FROM (SELECT b.check_name, b.status, b.detail, r.red_since, m.n_snaps, m.first_at, m.last_at,
-                     CASE b.check_name WHEN 'pipeline_step_failing' THEN 1
-                                       WHEN 'plan_partition_fresh'  THEN 2
-                                       WHEN 'plan_pass_failed'      THEN 3
-                                       ELSE 4 END AS pri
+                     CASE b.check_name WHEN 'pipeline_step_failing'   THEN 1
+                                       WHEN 'plan_partition_fresh'    THEN 2
+                                       WHEN 'plan_pass_failed'        THEN 3
+                                       WHEN 'prediction_grades_fresh' THEN 4
+                                       WHEN 'prediction_regression'   THEN 5
+                                       ELSE 6 END AS pri
               FROM `onyga-482313.OI.V_ENGINE_HEALTH` b
               LEFT JOIN hs_run r ON r.check_name = b.check_name
               CROSS JOIN hs_meta m))
