@@ -2515,6 +2515,37 @@ Measured 2026-10-03 (12:57–13:20 UTC; Los Angeles and New York both 10-03).
   question would cost them $0.00, which is why that contract now asks a probe's question;
   `HC_T1_EVICTION_JUSTIFIED` reads `T1` 0.
 
+### Who reads the seat-request ledger, and the append after a hand CALL (piece-1 follow-up G2)
+
+**R12 restated.** `SEAT_REQUEST_acceptance.sql` R12 said "nothing in the warehouse reads this table
+yet". That stopped being true when `V_SEAT_REQUEST_OUTCOME` (§6.0's grade) began reading
+`FACT_SEAT_REQUEST`, and R12 read 1 from then on, piece 1 included. Measured 2026-10-03 on region-us
+`INFORMATION_SCHEMA`: the ledger is named in the code of exactly two objects, `V_SEAT_REQUEST_OUTCOME`
+and its writer `SP_APPEND_SEAT_REQUEST` (which reads it back for its prune and its `built_at` guard).
+No view or routine names `V_SEAT_REQUEST_OUTCOME`, and Cube, the dashboard, the Flask app and `tools/`
+name neither object. R12 now holds that: the views and routines whose code names the ledger are exactly
+those two, compared both ways (a dropped reader or a blind search reads too), and nothing names the
+grade. It searches every dataset in the region and ignores `--` comments. A new reader is a decision:
+add it to `r12_named` in the commit that adds it. Its controls on doctored copies of
+`INFORMATION_SCHEMA` are in the file's header: a new reader of either object, in OI or another dataset,
+reads 1; a dropped reader reads 1; empty copies read 2; a comment naming both reads 0.
+
+**R02 after a hand CALL.** The orchestrator runs `SP_APPEND_SEAT_REQUEST` (Task 20.8d) right after
+`SP_BUILD_NEXT_WEEK_PLAN` (Task 20.8c). Its deployed body has no other CALL between the two. A hand CALL of
+the builder rewrites the night's plan partition without that append, so R02 reads the difference. On
+2026-10-03 it read 9 after the 08:58, 12:18 and 13:04:57 UTC hand CALLs that followed the 08:12 UTC
+pass. The suite's header now says so under its Run line. The remedy is one call:
+
+```bash
+bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache \
+  "CALL \`onyga-482313.OI.SP_APPEND_SEAT_REQUEST\`()"
+```
+
+It is idempotent for the day: it replaces the newest plan day's ledger partition with that partition's
+seats, and it refuses a plan build older than the one already recorded. One call at 13:35:01 UTC
+(job `g2_append_1791034499`) recorded the 13:04:57 build's 126 seats. After it, the suite read 0 on all
+12 checks (job `g2_after_append_1791034531`).
+
 ### Four checks that depart from the plan's draft, and why
 
 - **C01** asserts the P-14a **fence** (`window_to = LEAST(watermark − 1, as_of − 2)`), not

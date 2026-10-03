@@ -2,6 +2,8 @@
 -- FACT_SEAT_REQUEST acceptance — the Brain's ledger. v27.147 (2026-08-25). Plan step 5, §6.0.
 -- Every check returns a VIOLATION COUNT; every row must read PASS.
 -- Run: bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
+-- A hand CALL of SP_BUILD_NEXT_WEEK_PLAN must be followed by CALL SP_APPEND_SEAT_REQUEST() (orchestrator
+-- Task 20.8d, the step the orchestrator runs right after the builder's Task 20.8c), or R02 reads the difference.
 --
 -- v27.159 (2026-10-02, piece-1 plan Task 5, spec P-26): R04 accepts the two bases written from
 -- v27.159 (HORIZON_WINDOW_RATE, HORIZON_PROBE_GOAL) and R11 divides each row by the horizon its basis
@@ -57,6 +59,41 @@
 -- NOTE ON R02: the ledger is expected to go RED if the plan is rebuilt without the append. That is
 -- a true staleness alarm, not a false one, and the fix is CALL SP_APPEND_SEAT_REQUEST(), which is
 -- safe at any time.
+--
+-- piece-1 follow-up G2 (2026-10-03): R12 restated, and R02's hand-CALL sentence under the Run line.
+-- WHO READS THE LEDGER, measured 13:31 UTC on region-us INFORMATION_SCHEMA (263 views and 117 routines,
+-- all in OI; INFORMATION_SCHEMA.TABLES lists no materialized view in the region): FACT_SEAT_REQUEST is
+-- named in the code of the view V_SEAT_REQUEST_OUTCOME and the procedure SP_APPEND_SEAT_REQUEST and of
+-- nothing else (SP_ORCHESTRATE_DAILY_REFRESH names only SP_APPEND_SEAT_REQUEST), with or without `--`
+-- comments removed. No view or routine names V_SEAT_REQUEST_OUTCOME. A grep of cube/schema,
+-- dashboard-react/src, data-entry-app and tools finds neither name. The old form counted
+-- V_SEAT_REQUEST_OUTCOME, hence its 1.
+-- NEGATIVE CONTROLS, run 2026-10-03 13:33 UTC: this file's own text, comment lines stripped, with the two
+-- region-us INFORMATION_SCHEMA views swapped for copies taken at 13:33 UTC (job g2_setup_1791034411:
+-- OI._tmp_g2_v_base and OI._tmp_g2_r_base, which expire 2026-10-05), each doctored inline as named; "old"
+-- is the 5843b93 text with OI.INFORMATION_SCHEMA.VIEWS swapped for the views copy filtered to OI. Jobs
+-- g2_nc_*_1791034424, 22 jobs, 585.9 slot-seconds in all; nothing here reads FACT_AMAZON_ADS.
+--   LIVE, and COPY (the undoctored copies)   new R12 0, old 1.
+--   NC_NEW_VIEW               a view in OI that reads the ledger: new 1, old 2.
+--   NC_NEW_ROUTINE            a procedure in OI that reads the ledger: new 1, old 1 (its LIVE reading).
+--   NC_OTHER_DATASET          a view in another dataset that reads the ledger: new 1, old 1 (its LIVE reading).
+--   NC_GRADE_READ_BY_VIEW     a view that reads V_SEAT_REQUEST_OUTCOME: new 1, old 1 (its LIVE reading).
+--   NC_GRADE_READ_BY_ROUTINE  a procedure that materializes V_SEAT_REQUEST_OUTCOME: new 1, old 1.
+--   NC_GRADE_DROPPED          V_SEAT_REQUEST_OUTCOME removed: new 1, old 0.
+--   NC_WRITER_DROPPED         SP_APPEND_SEAT_REQUEST removed: new 1, old 1.
+--   NC_EMPTY                  both copies empty: new 2 (the emptiness term), old 0.
+--   HC_COMMENT_ONLY           a procedure that names both objects only in `--` comments: new 0, old 1.
+--   Every other check read the same on every copy under both texts: R01, R03..R11 0, R02 9.
+-- R02 ON THE SAME DAY. It read 9 at 13:30 UTC (job g2_before_1791034228): the plan's 10-03 partition was
+-- rebuilt by hand CALLs (08:58, 12:18 and 13:04:57 UTC) after the orchestrator's 08:12 UTC append, 126
+-- seats against 125 ledger rows. The deployed SP_ORCHESTRATE_DAILY_REFRESH (last_altered 2026-10-03
+-- 06:30:45 UTC) holds one CALL of SP_BUILD_NEXT_WEEK_PLAN (Task 20.8c), and the next CALL in its body is
+-- SP_APPEND_SEAT_REQUEST (Task 20.8d), with no other CALL between them. LOG_PIPELINE_RUNS shows the
+-- append starting 1 to 2 s after the builder finished on each pass (10-02 17:04, 10-03 05:36 and 08:12
+-- UTC). One hand CALL of SP_APPEND_SEAT_REQUEST (job g2_append_1791034499, 13:35:01 UTC, 28.9
+-- slot-seconds) replaced the 10-03 partition with the 13:04:57 build's 126 seats (ledger 987 -> 988
+-- rows; the procedure stamps a hand call source = 'ORCHESTRATOR'). The whole suite then read 0 on all 12
+-- checks (job g2_after_append_1791034531, 21.5 slot-seconds).
 -- =============================================================================================
 WITH led AS (SELECT * FROM `onyga-482313.OI.FACT_SEAT_REQUEST`),
 plan_day AS (SELECT MAX(as_of) AS d FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`),
@@ -144,10 +181,37 @@ r11 AS (SELECT COUNTIF(ABS(implied_daily_spend
                                             IF(channel = 'SB', 14, 7)))) > 0.01) AS v
         FROM led WHERE expected_cpc IS NOT NULL),
 
--- R12 READ-ONLY BY CONSTRUCTION: nothing in the warehouse reads this table yet, and the day it
---     does is a decision, not an accident.
-r12 AS (SELECT COUNT(*) AS v FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
-        WHERE view_definition LIKE '%FACT_SEAT_REQUEST%')
+-- R12 ONLY THE GRADE AND THE WRITER READ THE LEDGER, AND NOTHING READS THE GRADE. Restated in
+--     piece-1 follow-up G2 (2026-10-03). It used to assert "nothing in the warehouse reads this table
+--     yet", which stopped being true when V_SEAT_REQUEST_OUTCOME (§6.0's closing half, plan step 6)
+--     began reading it; it read 1 from then on, piece 1 included. What is true now (G2 block in the
+--     header): FACT_SEAT_REQUEST is named in the code of exactly two objects: the view
+--     V_SEAT_REQUEST_OUTCOME, which grades each promise, and SP_APPEND_SEAT_REQUEST, which writes the
+--     ledger and reads it back for its prune and its built_at guard. No view or routine names
+--     V_SEAT_REQUEST_OUTCOME, so neither the promises nor their grades reach anything that decides.
+--     What must hold: the views and routines whose code names FACT_SEAT_REQUEST are exactly r12_named,
+--     and no view or routine names V_SEAT_REQUEST_OUTCOME. The value is a sum of three counts: readers
+--     outside r12_named, named readers not found (both ways like R02, so a dropped reader or a search
+--     that comes back blind reads too: the emptiness term), and objects naming V_SEAT_REQUEST_OUTCOME.
+--     A new reader is a decision: add it to r12_named in the commit that adds it. It searches every
+--     dataset in the region, not OI alone as the old form did, and reads code with `--` line comments
+--     removed, so a comment naming the table is not a reader.
+r12_obj AS (
+  SELECT 'VIEW' AS kind, table_schema AS sch, table_name AS name,
+         UPPER(REGEXP_REPLACE(view_definition, r'--[^\n]*', '')) AS body
+  FROM `onyga-482313.region-us.INFORMATION_SCHEMA.VIEWS`
+  UNION ALL
+  SELECT 'ROUTINE', routine_schema, routine_name,
+         UPPER(REGEXP_REPLACE(routine_definition, r'--[^\n]*', ''))
+  FROM `onyga-482313.region-us.INFORMATION_SCHEMA.ROUTINES`),
+r12_named AS (
+  SELECT 'VIEW' AS kind, 'OI' AS sch, 'V_SEAT_REQUEST_OUTCOME' AS name UNION ALL
+  SELECT 'ROUTINE', 'OI', 'SP_APPEND_SEAT_REQUEST'),
+r12_readers AS (SELECT kind, sch, name FROM r12_obj WHERE STRPOS(body, 'FACT_SEAT_REQUEST') > 0),
+r12 AS (SELECT
+          (SELECT COUNT(*) FROM (SELECT * FROM r12_readers EXCEPT DISTINCT SELECT * FROM r12_named))
+        + (SELECT COUNT(*) FROM (SELECT * FROM r12_named EXCEPT DISTINCT SELECT * FROM r12_readers))
+        + (SELECT COUNT(*) FROM r12_obj WHERE STRPOS(body, 'V_SEAT_REQUEST_OUTCOME') > 0) AS v)
 
 SELECT * FROM (
   SELECT 1 AS n, 'R01 one captured_at per requested_on'                     AS check_name, v FROM r01 UNION ALL
@@ -161,6 +225,6 @@ SELECT * FROM (
   SELECT 9,  'R09 partition integrity',                                         v FROM r09 UNION ALL
   SELECT 10, 'R10 the Catalog claim travels with the promise',                  v FROM r10 UNION ALL
   SELECT 11, 'R11 the arithmetic survives the copy',                            v FROM r11 UNION ALL
-  SELECT 12, 'R12 nothing reads it yet',                                        v FROM r12
+  SELECT 12, 'R12 only the grade and the writer read it',                       v FROM r12
 )
 ORDER BY n;
