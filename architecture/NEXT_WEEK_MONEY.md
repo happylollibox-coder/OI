@@ -2994,9 +2994,25 @@ cd /Users/ori/Develop/OI
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/functions/FN_PLAN_SCORECARD.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/views/V_PLAN_SCORECARD.sql)"
 bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql)"
-# the hint's branches, run on doctored copies of the plan table (exit 0 = every branch as expected)
-python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py
+# the hint's branches, run on doctored copies of the plan table (exit 0 = every branch as expected;
+# 1 = a branch did not; 2 = it could not run). One BigQuery script job, submitted and collected
+# (follow-up G4); a FUNCTION_FILE argument after --submit runs a doctored copy of the function instead
+python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py --submit      # prints JOB=...
+bq wait <JOB> 60                                                                  # repeat until DONE
+python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py --collect <JOB>
 ```
+
+**The hint harness is submitted, not run in the foreground (follow-up G4, 2026-10-03).** Until G4
+the script ran its job synchronously under a 900 s subprocess timeout. In the follow-up proof on
+2026-10-03 one trivial CTAS child (`fp_s_band_expired`) sat RUNNING on BigQuery's side with no query
+plan and no slot use, the timeout expired, and the script exited 2 on a function that was fine. It now
+works like `check_judge_memory_controls.py`: `--submit` prints the job id and exits 0, `--collect JOB`
+waits for that job and applies the same assertions with the same exit codes, and with neither flag it
+submits and then polls (`bq wait`, 60 s a call, the state printed each time) with no overall timeout.
+A stalled job can be cancelled and resubmitted, or collected later. The scenarios, expected values
+and generated SQL did not change. `PLAN_SCORECARD_acceptance.sql`'s header records the G4 run on the
+deployed function and its negative control: the function file with `min_group_rows` set to 10 fails
+on S_HELD_SMALL, S_BAND_SMALL and S_OTHER_RULE.
 
 The rule columns ship before the judge and the builder that fill them, in this order:
 `scripts/bigquery/migrations/2026-10-01_plan_strong_day_rule_columns.sql`, then

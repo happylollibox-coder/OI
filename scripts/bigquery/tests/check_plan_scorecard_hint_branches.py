@@ -45,19 +45,33 @@ EXIT CODES
     1  a scenario did not (each mismatch is printed)
     2  the check could not run (bq failed, or the function file did not parse)
 
-USAGE
+USAGE (one BigQuery script job; every scenario INSERTs into one temp table and the last statement
+reads it, so the job can be submitted asynchronously and collected with bq wait / bq head)
     python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py [FUNCTION_FILE]
+    python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py --submit [FUNCTION_FILE]
+    python3 scripts/bigquery/tests/check_plan_scorecard_hint_branches.py --collect JOB
     FUNCTION_FILE defaults to the committed FN_PLAN_SCORECARD.sql; pass a doctored copy to
     prove the check fires (the negative control recorded in PLAN_SCORECARD_acceptance.sql).
+    --submit prints JOB=<id> and exits 0 (2 if the job could not be built or submitted).
+    --collect JOB waits for that job (bq wait, 60 s a call, the state printed on each), reads its
+    result (bq head) and applies the assertions, with the exit codes above. It needs no
+    FUNCTION_FILE: the assertions are this file's, the function is whatever the job ran.
+    With neither flag the script submits, then collects, with no overall timeout.
+    Follow-up G4 (2026-10-03): until then the script ran the job synchronously under a 900 s
+    subprocess timeout, and a BigQuery-side stall of one CTAS child (fp_s_band_expired, RUNNING
+    with no query plan and no slot use) made it exit 2 on a function that was fine.
 """
+import argparse
 import json
 import os
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 FN_FILE = os.path.join(ROOT, "scripts", "bigquery", "functions", "FN_PLAN_SCORECARD.sql")
 PLAN_TABLE = "`onyga-482313.OI.FACT_PLAN_NEXT_WEEK`"
+BQ = ["bq", "--project_id=onyga-482313"]
 
 
 def function_body(path):
@@ -189,19 +203,59 @@ def build_script(body):
     return out
 
 
-def main():
+def run(args, **kw):
+    return subprocess.run(BQ + args, capture_output=True, text=True, **kw)
+
+
+def submit(fn_file):
+    """build the script from FN_FILE (or a doctored copy) and start it as one job; never waits"""
     try:
-        script = build_script(function_body(sys.argv[1] if len(sys.argv) > 1 else FN_FILE))
-        run = subprocess.run(["bq", "query", "--project_id=onyga-482313", "--use_legacy_sql=false",
-                              "--nouse_cache", "--format=json"],
-                             input=script, capture_output=True, text=True, timeout=900)
-        if run.returncode != 0:
-            print("bq failed:\n" + run.stdout[-2000:] + run.stderr[-2000:])
-            return 2
-        rows = json.loads(run.stdout)[-1]
+        script = build_script(function_body(fn_file))
     except Exception as e:  # never a silent pass
-        print("could not run: %s" % e)
+        print("could not build the script: %s" % e)
+        return None, 2
+    job = "hint_branches_%d_%d" % (int(time.time()), os.getpid())
+    # the script goes on stdin, as before G4 (about 10 copies of the function body)
+    r = run(["--job_id=" + job, "query", "--nosync", "--format=none", "--use_legacy_sql=false", "--nouse_cache"],
+            input=script)
+    if r.returncode != 0:
+        print("bq failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+        return None, 2
+    print("function file: " + os.path.abspath(fn_file))
+    print("JOB=" + job, flush=True)
+    return job, 0
+
+
+def collect(job):
+    """wait for the job, read the res table its last statement returns, and assert every scenario"""
+    try:
+        while True:
+            r = run(["--format=json", "show", "-j", job])
+            if r.returncode != 0:
+                print("bq show failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+                return 2
+            info = json.loads(r.stdout)
+            state = info.get("status", {}).get("state")
+            print(time.strftime("%H:%M:%S"), job, state, flush=True)
+            if state == "DONE":
+                break
+            run(["wait", job, "60"])
+        err = info.get("status", {}).get("errorResult")
+        if err:
+            print("the job failed: %s" % err)
+            return 2
+        stats = info.get("statistics", {})
+        slot_s = int(stats.get("totalSlotMs", 0)) / 1000.0
+        secs = (int(stats.get("endTime", 0)) - int(stats.get("startTime", 0))) / 1000.0
+        r = run(["--format=json", "head", "-j", "-n", "1000", job])
+        if r.returncode != 0:
+            print("bq head failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+            return 2
+        rows = json.loads(r.stdout)
+    except Exception as e:  # never a silent pass
+        print("could not collect: %s" % e)
         return 2
+    print(f"job {job}: {secs:,.1f} s, {slot_s:,.1f} slot-seconds, {len(rows)} result rows")
     got = {r["scen"]: r for r in rows}
     bad = []
     for scen, (_, rec, (how, text)) in SCENARIOS.items():
@@ -209,20 +263,38 @@ def main():
         if r is None:
             bad.append(f"{scen}: no RULE_HINT row")
             continue
-        if r["recommendation"] != rec:
-            bad.append(f"{scen}: recommendation {r['recommendation']}, expected {rec}")
-        if not r["sentence"].startswith(text):
-            bad.append(f"{scen}: sentence does not open with {text!r}: {r['sentence'][:160]!r}")
+        if r.get("recommendation") != rec:
+            bad.append(f"{scen}: recommendation {r.get('recommendation')}, expected {rec}")
+        if not (r.get("sentence") or "").startswith(text):
+            bad.append(f"{scen}: sentence does not open with {text!r}: {(r.get('sentence') or '')[:160]!r}")
         for col, want in EXPECT_COUNTS[scen].items():
             if r.get(col) is None or int(r[col]) != want:
                 bad.append(f"{scen}: {col} = {r.get(col)}, expected {want}")
-        print(f"{scen:16s} {r['recommendation']:22s} graded {r['graded_rows']:>3s}  held {r['held_rows']}/{r['held_rows_wrong']} wrong  "
-              f"band {r['band_rows']}/{r['band_released_wrong']} wrong  rule {r['rule_value']}  other {r['other_rule_rows']}")
+        print(f"{scen:16s} {str(r.get('recommendation')):22s} graded {str(r.get('graded_rows')):>3s}  "
+              f"held {r.get('held_rows')}/{r.get('held_rows_wrong')} wrong  "
+              f"band {r.get('band_rows')}/{r.get('band_released_wrong')} wrong  rule {r.get('rule_value')}  "
+              f"other {r.get('other_rule_rows')}")
     if bad:
         print("\nFAIL:\n  " + "\n  ".join(bad))
         return 1
     print("\nPASS: every branch of the hint returned what its doctored input demands.")
     return 0
+
+
+def main():
+    ap = argparse.ArgumentParser(description="FN_PLAN_SCORECARD's RULE_HINT on doctored plan tables")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--submit", action="store_true", help="start the job, print JOB=<id>, exit 0")
+    mode.add_argument("--collect", metavar="JOB", help="wait for JOB, read it, assert every scenario")
+    ap.add_argument("function_file", nargs="?", default=FN_FILE,
+                    help="the function file to run (default: the committed FN_PLAN_SCORECARD.sql)")
+    a = ap.parse_args()
+    if a.collect:
+        return collect(a.collect)
+    job, rc = submit(a.function_file)
+    if rc or a.submit:
+        return rc
+    return collect(job)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 -- PLAN_SCORECARD acceptance — v27.154 (2026-10-01; follow-up the same day: C09 restated, C10
 -- replaced, C11 and C12 added; second follow-up, 2026-10-01 LA / 10-02 UTC: C13 added, C12 restated, CM widened;
 -- F1 2026-10-03: C08a's clock; F4 2026-10-03: two clocks, C08's count written, F4a-F4c added;
--- G3 2026-10-03: C08's REPORT label names today's state).
+-- G3 2026-10-03: C08's REPORT label names today's state; G4 2026-10-03: the hint harness is
+-- submitted and collected, not run in the foreground).
 -- V_PLAN_SCORECARD / FN_PLAN_SCORECARD (plan Task 5's grade) and the
 -- nine plan_* checks Task A put on V_ENGINE_HEALTH. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
@@ -195,6 +196,26 @@
 --   evaluated on literal states, print "none written yet", "none gradable yet; the first settles
 --   2026-10-03 (123 written)", "20 of 136 gradable; next settles 2026-10-04" and "136 of 136
 --   gradable; none left to settle".
+--
+-- G4 (2026-10-03, piece-1 follow-up). check_plan_scorecard_hint_branches.py ran its one script job
+-- synchronously under a 900 s subprocess timeout. In the follow-up proof that day one trivial CTAS
+-- child (fp_s_band_expired) sat RUNNING on BigQuery's side with no query plan and no slot use, and the
+-- script exited 2 on a function that was fine. It now has --submit (prints JOB=<id>, exits 0) and
+-- --collect JOB (waits with bq wait, reads the job's last statement with bq head, applies the same
+-- assertions and exit codes); with neither flag it submits, then collects, with no overall timeout.
+-- The scenarios, the expected values and the SQL it builds are unchanged. This file is unchanged
+-- apart from these comments.
+-- RUN 2026-10-03, deployed function (INFORMATION_SCHEMA.ROUTINES body, last altered 09:55:24 UTC,
+--   equal to the committed file's body with comment and blank lines dropped): --submit, then
+--   --collect hint_branches_1791035799_23961: 10 of 10 PASS, exit 0, 58.4 s, 154.8 slot-s. With
+--   neither flag (submit, one bq wait, collect), job hint_branches_1791035895_24472: 10 of 10 PASS,
+--   exit 0, 50.6 s, 158.9 slot-s. --collect on a job that does not exist, and --submit on a missing
+--   function file, each exit 2.
+-- NEGATIVE CONTROL, the same two calls on a copy of the function file with min_group_rows 16 -> 10
+--   (one line; scratchpad copy, not kept), job hint_branches_1791035806_24025: exit 1, 53.1 s,
+--   161.3 slot-s. S_HELD_SMALL read RAISE_STRONG_DAY_MULT from 15 held (expected WAIT);
+--   S_BAND_SMALL and S_OTHER_RULE read WAIT, but their sentences say "of the 10 needed". The other
+--   7 scenarios read as expected.
 -- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 16 graded holds or 16
 -- graded band rows (at most 9 and 2), so every real hint reads WAIT and LOWER / RAISE / KEEP /
 -- NO_CLEAN_SIGNAL have never come out of the function on real input. C09 and C11 judge the hint's
