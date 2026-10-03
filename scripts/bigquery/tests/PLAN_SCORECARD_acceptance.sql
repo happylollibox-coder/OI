@@ -1,7 +1,8 @@
 -- =============================================================================================
 -- PLAN_SCORECARD acceptance — v27.154 (2026-10-01; follow-up the same day: C09 restated, C10
 -- replaced, C11 and C12 added; second follow-up, 2026-10-01 LA / 10-02 UTC: C13 added, C12 restated, CM widened;
--- F1 2026-10-03: C08a's clock; F4 2026-10-03: two clocks, C08's count written, F4a-F4c added).
+-- F1 2026-10-03: C08a's clock; F4 2026-10-03: two clocks, C08's count written, F4a-F4c added;
+-- G3 2026-10-03: C08's REPORT label names today's state).
 -- V_PLAN_SCORECARD / FN_PLAN_SCORECARD (plan Task 5's grade) and the
 -- nine plan_* checks Task A put on V_ENGINE_HEALTH. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
@@ -174,6 +175,26 @@
 -- ads_date).
 -- COST of the F4 run: 1,522.3 slot-s, 87.3 s; the four new FN_PLAN_SCORECARD reads 153.7 to 196.2
 -- slot-s each, the view (sc_live) 163.7. The four control runs: 1,693.7 to 1,864.2 slot-s each.
+--
+-- G3 (2026-10-03, piece-1 follow-up). C08's REPORT label said "first settles <next_due>; 0 expected
+-- before then" in every state. next_due is the earliest settle date not yet reached on the Los
+-- Angeles date. It is the first settle date only while nothing is gradable. On 2026-10-03 the label
+-- read "20 of 136 written (first settles 2026-10-04; 0 expected before then)", while the first
+-- decisions had settled on 2026-10-03 and 20 were gradable (job g3_old_1791035221, the file at
+-- 86470a5). The label now names the state: "none gradable yet; the first settles <date> (<m>
+-- written)" before the first settle date, "<n> of <m> gradable; next settles <date>" after it,
+-- "<n> of <m> gradable; none left to settle" once every decision written is gradable, and "none
+-- written yet" with nothing written. The check's value expression is unchanged.
+-- RUN 2026-10-03 (job g3_new_1791035260): 46 of 46 PASS, 1,755.2 slot-s, 92.5 s. C08 reads "20 of
+--   136 gradable; next settles 2026-10-04" and 0. Every other row's label and value is identical to
+--   the run at 86470a5. FACT_PLAN_NEXT_WEEK has 136 live guard decisions written to 2026-10-03:
+--   20 settle on 2026-10-03, 8 on 2026-10-04, and the rest from 2026-10-05 to 2026-10-15.
+-- Control: this file with live_counts' three guard counts read on the YOUNG clock instead of LIVE
+--   (job g3_ctl_young_1791035260; scratchpad copy, not kept): C08 reads "none gradable yet; the
+--   first settles 2026-10-03 (123 written)". The other 45 rows were identical. The four branches,
+--   evaluated on literal states, print "none written yet", "none gradable yet; the first settles
+--   2026-10-03 (123 written)", "20 of 136 gradable; next settles 2026-10-04" and "136 of 136
+--   gradable; none left to settle".
 -- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 16 graded holds or 16
 -- graded band rows (at most 9 and 2), so every real hint reads WAIT and LOWER / RAISE / KEEP /
 -- NO_CLEAN_SIGNAL have never come out of the function on real input. C09 and C11 judge the hint's
@@ -772,9 +793,18 @@ checks AS (
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C07')
   -- THE GUARD'S GRADE IS SILENT: an empty GUARD reads as "nothing to grade" when decisions are gradable,
   -- or the youth sentence names the wrong date and Ori waits for a grade that is not coming.
-  UNION ALL SELECT FORMAT('C08 REPORT guard decisions graded today: %d of %d written (first settles %s; 0 expected before then) — the RULE_HINT row counts exactly the gradable ones and, while none is, says so with the settle date and the count written',
-                          (SELECT n_gradable FROM live_counts), (SELECT n_written FROM live_counts),
-                          COALESCE((SELECT next_due FROM live_counts), 'n/a')),
+  -- G3: the label names today's state. next_due is the earliest settle date not yet reached, which is
+  -- the first settle date only while nothing is gradable.
+  UNION ALL SELECT FORMAT('C08 REPORT guard decisions today: %s — the RULE_HINT row counts exactly the gradable ones and, while none is, says so with the settle date and the count written',
+                          (SELECT CASE
+                                    WHEN n_written = 0 THEN 'none written yet'
+                                    WHEN n_gradable = 0 THEN FORMAT('none gradable yet; the first settles %s (%d written)',
+                                                                    COALESCE(next_due, 'n/a'), n_written)
+                                    WHEN next_due IS NULL THEN FORMAT('%d of %d gradable; none left to settle',
+                                                                      n_gradable, n_written)
+                                    ELSE FORMAT('%d of %d gradable; next settles %s', n_gradable, n_written, next_due)
+                                  END
+                           FROM live_counts)),
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C08')
   -- THE HINT ARGUES FROM A GROUP TOO SMALL TO SHOW A DIRECTION, OR DISAGREES WITH ITS OWN ROWS: it
   -- says LOWER / RAISE / KEEP / NO_CLEAN_SIGNAL while the held group or the band has fewer graded rows

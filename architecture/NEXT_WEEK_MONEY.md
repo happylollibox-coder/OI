@@ -2980,6 +2980,12 @@ the function with the clock moved 30 days forward, where the guard has real deci
 C08's own control (C08a) runs on the function at the day before the first guard decision settles
 (read from the plan history), not on today's scorecard: on 2026-10-03, 20 of 136 decisions had become
 gradable, so a control built on today's youth sentence could no longer fire (follow-up F1).
+The acceptance's C08 REPORT row names which of the two states today is in. Before the first settle
+date it reads "none gradable yet; the first settles <date> (<m> written)". After it, it reads "<n> of
+<m> gradable; next settles <date>", where the date is the earliest settle date not yet reached. Until
+follow-up G3 the row said "first settles <date>; 0 expected before then" in both states, so on
+2026-10-03 it printed the next date (10-04) as the first while 20 of 136 decisions were already
+gradable. The check's value did not change.
 
 **Deploy and verify.**
 
