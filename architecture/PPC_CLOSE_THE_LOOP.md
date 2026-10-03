@@ -452,12 +452,22 @@ The settled half needed its own surface, on the page where the changes are actua
 The panel is titled **"How did last week's changes do?"**, collapsed by default with the verdict
 counts visible in the header (`N confirmed · N neutral · N reversed · N insufficient`). Inside,
 rows are grouped CONFIRMED → NEUTRAL → REVERSED → INSUFFICIENT and sorted newest-change-first
-within each group. Each row carries: change date · `source` (COACH / MANUAL) · `action` ·
+within each group. Each row carries: change date · `source` (who made it, below) · `action` ·
 campaign ▸ target/term · `old_value` → `new_value` (`value_kind` picks the $ label) · the settled
 window result (`win_clicks` · `win_spend` · `win_gp_roas` · `win_net_profit` over
 `[window_start, window_end]`) · the prior record (`prior_gp_roas` on `prior_clicks`, greyed when
 `prior_available = FALSE`) · `verdict_reason` verbatim · and the contamination flag
 (`superseded_in_window`, `n_later_changes`).
+
+**Who made the change.** The `source` chip is coloured when a person made the change: MANUAL
+(violet) was logged in OI on the DO page; OBSERVED (pink) was seen on Amazon but never logged by
+OI — usually a console edit. Rows OI built stay faint: COACH, and the weekly book's `BRAIN:*` /
+`CATALOG:*` / `PACING:*` rows, whose tooltip names the tier and what it decides. Any other value
+shows itself raw instead of being credited to the coach. The chip is a label only; the split is
+the view's `source`. OBSERVED rows do not reach the panel yet: the cube still holds them out
+(`WHERE source != 'OBSERVED'`, §Observed changes). Ori's 2026-10-02 ruling puts them in the panel,
+labelled as his — that is the open task 'Label observed hand changes in the scorecard panel', and
+lifting the filter also puts restores of hand changes in the REVERSED "restore" column.
 
 **REVERSED rows show the restore explicitly** — `remedy` + `remedy_value` (which is the
 pre-change `old_value`), rendered as "put it back → $X". Per the measurement note, REVERSED lands
@@ -493,6 +503,7 @@ so Weekly Run always renders.
 | 2026-10-01 | **Observed changes** (learning-system Task B): `SP_RECORD_OBSERVED_CHANGES` (Refresh Task 2.2a) writes every change the DIM SCD2 trail shows since 2026-08-20 into the log as `source='OBSERVED'`, `upload_status='OBSERVED_ON_AMAZON'`; `V_PPC_CHANGE_LOG_APPLIED` excludes them; `V_PPC_CHANGE_LOG_LANDED` feeds them to `V_CHANGE_SCORECARD`; the brief, tuner and board filter them out until Ori decides. See §Observed changes. |
 | 2026-10-01 | **Weekly Run panel holds hand changes out too** (Task B follow-up): Cube `ChangeScorecard` reads `V_CHANGE_SCORECARD` with `WHERE source != 'OBSERVED'`, the brief's decision, so the panel no longer lists hand changes under "restore". Not live until the cube is restarted / redeployed. File check `scripts/bigquery/tests/check_change_scorecard_cube.py`. |
 | 2026-10-02 | **Ori ruled: hand changes are evidence, labelled as his** — for the threshold tuner and the Weekly Run panel (the brief, the board and the engines' clocks were not part of the ruling and still leave them out). `V_THRESHOLD_TUNER` drops its `source != 'OBSERVED'` filter; every cell's `era_split` ends `hand H/N` and the proposal sentence names H. With them, era 2 has graded changes for the first time since 2026-08-24. `OBSERVED_CHANGES_acceptance` C09 now holds the tuner to the twin WITH the observed rows and checks the printed hand count; C09n turned round. The panel side is the separate task 'Label observed hand changes in the scorecard panel'. |
+| 2026-10-02 | **Scorecard panel names who made each change** (`ae6adc4`): the `source` chip no longer tells every non-MANUAL row "the coach suggested it". OBSERVED gets its own colour and tooltip, MANUAL says it was logged in OI, the book tiers name their tier, an unknown value shows itself raw. Display only. OBSERVED rows still do not reach the panel: the cube filter stands until the open task above lifts it. See §Cube + Dashboard. |
 | 2026-08-08 | **`upload_status` + `V_PPC_CHANGE_LOG_APPLIED`**: three whole 2026-08-06 batches (38 rows + 2 negates) silently never landed in Amazon; column added, rows marked `FAILED_UPLOAD` (migration `2026-08-08_upload_status_failed_batches.sql`), all analytical consumers switched to the filtered view. Audit artifacts in `.tmp/` (re-upload XLSX + 582-row classification). |
 
 
