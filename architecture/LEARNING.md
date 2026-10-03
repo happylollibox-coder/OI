@@ -10,9 +10,11 @@ LEARNING settings (§3; §10 "Task 2"). Task 3 (2026-10-03) deployed the freeze 
 (§1 "The freeze"; §10 "Task 3"), and its follow-up 2 the judgement each night was built on, which C13
 reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Task 4 (2026-10-03) deployed the ledger,
 `V_PREDICTION_LEDGER` v27.172, with the campaign-budget clause in its recommended form (§3; §10
-"Task 4"). Nothing else below is deployed yet: the grader and the report card are Task 5, the
-schedule and the health checks Task 6, the rest of the contract suite Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
-sentence here that its build proves wrong.
+"Task 4"). Task 5 (2026-10-03) deployed the grader `SP_GRADE_PREDICTIONS` v27.173, its grades
+`FACT_PREDICTION_GRADE` and its report card `T_PREDICTION_SCORECARD`, and ran it once: the six
+August nights are graded (§4, §5; §10 "Task 5"). Nothing else below is deployed yet: the schedule
+and the health checks are Task 6, the rest of the contract suite Task 7. Each task appends its own
+entry to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
 > nothing* and *if you upload the plan* — and once the days they forecast have settled, both are
@@ -318,7 +320,7 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
 
 | object | file | what it is |
 |---|---|---|
-| `SP_GRADE_PREDICTIONS` | `scripts/bigquery/procedures/SP_GRADE_PREDICTIONS.sql` (Task 5) | the grader; nightly, orchestrator "Task 20.8f", between `SP_APPEND_CATALOG_FORECAST` and `SP_REFRESH_CUBE_TABLES` (Task 6) |
+| `SP_GRADE_PREDICTIONS(regrade_from DATE, reason STRING)` | `scripts/bigquery/procedures/SP_GRADE_PREDICTIONS.sql` (Task 5) | the grader; nightly `CALL … (NULL, NULL)`, orchestrator "Task 20.8f", between `SP_APPEND_CATALOG_FORECAST` and `SP_REFRESH_CUBE_TABLES` (Task 6). Reads its settings from `DE_COACH_THRESHOLDS` (today's values, asserted present once each) |
 | `FACT_PREDICTION_GRADE` | `scripts/bigquery/tables/FACT_PREDICTION_GRADE.sql` (Task 5) | one row per graded ledger row; partitioned by `as_of`, clustered by `predictor, family`; **append-only** — never updated, never deleted from |
 
 1. **Gradable.** A ledger row is gradable when `DATE_ADD(horizon_to, INTERVAL SETTLE_HORIZON_DAYS
@@ -343,6 +345,9 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
    `effective_from` / `effective_to`). Counted, never dropped.
 4. **Which scenario applied**, from `V_PPC_CHANGE_LOG_LANDED` (every `landed_evidence` except
    `LOGGED_ONLY`), changes applied on Los Angeles dates `as_of … as_of + MATCH_WINDOW_DAYS`:
+   - the changes read: the keyword's own (`keyword_id`), and its campaign's state and budget changes
+     (`keyword_id` NULL, the same `campaign_id`, a `*BUDGET*` or `CAMPAIGN_*` action). Ad-group
+     changes are not read (§9);
    - the plan's **expected components**: a bid component when |`planned_bid` − `current_bid`| ≥
      `MATCH_BID_TOL`; a state component for PAUSE; a budget component when |planned − current
      budget| ≥ `MATCH_BUDGET_TOL`. `act_is_noop` = none of the three;
@@ -350,11 +355,17 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
      `planned_bid`; PAUSE ← `KEYWORD_PAUSE` / `STOP_TARGET`) or the same campaign (a `*BUDGET*`
      action within `MATCH_BUDGET_TOL` of `campaign_planned_budget`) — the recorder's own rules
      (`SP_RECORD_OBSERVED_CHANGES`);
-   - **`ACT`** when every expected component matched and nothing else changed on the keyword or its
-     campaign; **`DO_NOTHING`** when nothing changed on the keyword and no state or budget changed on
-     its campaign; **`OTHER_ACTION`** otherwise, a partial match included;
-   - `placement_changed` when `FACT_KEYWORD_STATE_HISTORY.m_effective` moved between `as_of` and
-     `horizon_to` (placement changes are not in the change log).
+   - **`ACT`** when the plan row has at least one component, every one matched, and nothing else
+     changed on the keyword or its campaign; **`DO_NOTHING`** when nothing changed on the keyword
+     and no state or budget changed on its campaign — so a row whose plan asks for nothing, with
+     nothing done, is `DO_NOTHING` (its two scenarios are equal by anchoring, §3); **`OTHER_ACTION`**
+     otherwise, a partial match included (a matched bid on a row whose budget component did not
+     land is `OTHER_ACTION`);
+   - `placement_changed`: the keyword's `FACT_KEYWORD_STATE_HISTORY.m_effective` on its latest
+     snapshot on or before `as_of` differs, beyond float noise (1e-6), from the one on or before
+     `horizon_to`; both readings are on the grade row (`placement_m_from`, `placement_m_to`), and the
+     flag is NULL when either is missing. Placement changes are not in the change log, and
+     `m_effective` moves with the click mix as well as with a setting (§9).
 
    An SB change is observed at the Fivetran sync, up to a day late; the 3-day window covers it.
 5. **The realised side.** GOOD when realised orders ≥ `min_orders` AND realised gross profit ÷ spend
@@ -380,17 +391,26 @@ under the previous value (the orchestrator snapshots at Refresh Task 10.1, befor
    label grades the side call, which both rows share, so it is the same on both.
 9. **Frozen.** Each grade row carries copies of the five predicted numbers and `built_at`. A
    prediction is graded once (`NOT EXISTS` on the grade key); a second run inserts nothing.
-   Outcomes keep restating for days, so a grade moves only under an explicit `regrade_from DATE`,
-   which re-grades exactly that band, appending rows with `regrade_seq + 1` and a `regrade_reason`.
-   The current grade of a prediction is its highest `regrade_seq`.
+   Outcomes keep restating for days, so a grade moves only under an explicit
+   `CALL SP_GRADE_PREDICTIONS(DATE 'yyyy-mm-dd', 'reason')`: the band is every prediction of the
+   nights `as_of >= regrade_from` that has a current grade and is still gradable; each gets a new
+   row with `regrade_seq` one higher and `regrade_reason` = the reason (a re-grade without a reason
+   is refused). The first grade is `regrade_seq` 0, and the current grade of a prediction is its
+   highest `regrade_seq`. Rows not yet graded are graded as on any night, `regrade_seq` 0.
 
-**The grade row** (columns): key `predictor, variant, as_of, campaign_id, keyword_id, scenario,
-regrade_seq`; `horizon_from`, `horizon_to`, `built_at`, `rule_version`, `response_model_version`;
-the five predicted numbers and `pred_side`; `applied_scenario`, `is_applied`, `act_is_noop`,
-`matched_change_ids` and `other_change_ids` (arrays); the five realised numbers, `real_side`,
-`side_correct`; `err_net`, `abs_err_net`, `click_bucket`, `min_clicks_at_grade`; `grade`,
-`ungradable_reason`, `placement_changed`; `graded_at`, `watermark`, `grader_version`,
-`regrade_reason`.
+**The grade row** (columns, `scripts/bigquery/tables/FACT_PREDICTION_GRADE.sql`): key `predictor,
+variant, as_of, campaign_id, keyword_id, scenario, regrade_seq`; the ledger's copy — `family`,
+`channel`, `calendar_state`, `window_days`, `is_live_plan`, `holdout`, `family_bar`, `min_orders`,
+`move`, `current_bid`, `planned_bid`, `campaign_current_budget`, `campaign_planned_budget`,
+`horizon_from`, `horizon_to`, `built_at`, `builder_version`, `rule_version`,
+`response_model_version`, `basis_clicks`, `basis_spend`, `alloc_spend`, `act_is_noop`, the five
+predicted numbers and `pred_side`; `applied_scenario`, `is_applied`, `matched_change_ids` and
+`other_change_ids` (arrays of `V_PPC_CHANGE_LOG_LANDED.change_id`), `placement_changed`,
+`placement_m_from`, `placement_m_to`; the five realised numbers, `real_side`, `side_correct`;
+`err_net`, `abs_err_net`, `click_bucket`, `min_clicks_at_grade`; `grade`, `ungradable_reason`
+(`KEYWORD_ARCHIVED` | `CAMPAIGN_ARCHIVED`); `graded_at`, `watermark`, `grader_version`,
+`regrade_reason`. Checked by `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql` (V1–V8, a
+negative control per check; §10 "Task 5").
 
 **Fixtures.** The contract suite (Task 7) writes three fabricated predictions under `predictor =
 'FIXTURE'` that must read `RIGHT`, `WRONG` and `INCONCLUSIVE`; every aggregate excludes them.
@@ -407,21 +427,30 @@ the judge looked back on, which is not a prediction, and stay in the function.
 ## 5. The report card — `T_PREDICTION_SCORECARD`
 
 Rebuilt (`CREATE OR REPLACE`) at the end of every grader run, from `FACT_PREDICTION_GRADE` (current
-grades, fixtures excluded) and, for NEXT_WEEK, the ledger. File:
-`scripts/bigquery/tables/T_PREDICTION_SCORECARD.sql` (Task 5).
+grades, fixtures excluded) and, for YOUNG and NEXT_WEEK, the ledger. File:
+`scripts/bigquery/tables/T_PREDICTION_SCORECARD.sql` (Task 5), which creates it empty so its readers
+compile before the first run; the procedure then replaces it with the same columns. An `UNGRADABLE`
+row enters HONESTY only.
 
-**Grain:** `predictor × variant × family × calendar_state × level × row_type`.
+**Grain:** `predictor × variant × family × calendar_state × level × row_type`, plus `scenario` on
+ACCURACY rows, `bucket` on CURVE rows and the week (`window_from`) on WINDOW rows. `family` and
+`calendar_state` = `'ALL'` is the predictor's rollup (ACCURACY, MONEY, HONESTY, YOUNG, NEXT_WEEK);
+CURVE and LINE are per family × calendar_state only, the grain the line is set on.
 **Levels:** `WINDOW` — the Sunday-start week of `as_of` (the house week, `WEEK(SUNDAY)`), pooling
-every graded night in it (D5); `TRAILING_3` — the three most recent graded windows; `SINCE_START`.
+every graded night in it (D5); `TRAILING_3` — the group's three most recent graded windows;
+`SINCE_START`; and `TONIGHT` for NEXT_WEEK. Every row carries `window_from` / `window_to`,
+`n_windows`, `n_nights`, the run's `watermark`, `grader_version` and `scored_at`. The columns, in
+order, are `scripts/bigquery/tables/T_PREDICTION_SCORECARD.sql`'s; the procedure builds the same
+list (§10 "Task 5" compares them).
 
 | row_type | what it says |
 |---|---|
-| `ACCURACY` | for the scenario that applied: `mae_net_usd` = Σ\|err_net\|; `mae_net_share` = Σ\|err_net\| ÷ Σ realised spend; `bias_share` = Σ(pred_net − real_net) ÷ Σ realised spend; `side_accuracy`, spend-weighted |
-| `MONEY` | `dn_net_per_dollar` over DO_NOTHING-applied rows; `act_net_per_pred_dollar` over ACT-applied rows; `counterfactual_net_per_alloc` = Σ alloc_spend × (real_net ÷ real_spend) ÷ Σ alloc_spend — `FN_PLAN_SCORECARD`'s GRADE metric, the only money metric that tells plan A from plan B until a plan is uploaded; `pred_lift` = Σ(ACT net − DO_NOTHING net); `realised_lift`; `lift_control` = `'DO_NOTHING_PREDICTION'` |
-| `CURVE` / `LINE` | per bucket: rows, spend, cumulative side accuracy; the line as `min_clicks`, and `min_dollars` = `min_clicks` × (Σ real_spend ÷ Σ real_clicks) of the family's graded rows. The whole curve, not only the line |
-| `HONESTY` | `UNGRADABLE`; `ACT_NO_MATCHING_ACTION` (a non-no-op ACT whose row applied as DO_NOTHING); `OTHER_ACTION`; `PLACEMENT_CHANGED`; `PREDICTED_BUT_ZERO_CLICKS` (bucket `0` with window clicks — "predicted but dark", D4) |
-| `YOUNG` | a sentence saying, in words, when nothing is old enough to grade and when the next row becomes gradable |
-| `NEXT_WEEK` | per family, tonight's live plan: Σ DO_NOTHING net and Σ ACT net, for the brief's line "do nothing $X; upload the plan $Y" |
+| `ACCURACY` | `scenario` `APPLIED` (the rows of the scenario that applied — the headline, and what `prediction_regression` reads), `DO_NOTHING` or `ACT` (every graded row of that scenario, applied or not: accuracy only): `n_rows`, `keywords`, the predicted and realised sums of the five numbers, `mae_net_usd` = Σ\|err_net\|; `mae_net_share` = Σ\|err_net\| ÷ Σ realised spend; `bias_share` = Σ(pred_net − real_net) ÷ Σ realised spend; `side_accuracy`, spend-weighted; `rule_versions`, `builder_versions` (the distinct values behind the row) |
+| `MONEY` | per plan row: `dn_net_per_dollar` over DO_NOTHING-applied rows; `act_net_per_pred_dollar` (realised net ÷ predicted spend) over ACT-applied rows; `counterfactual_net_per_alloc` = Σ alloc_spend × (real_net ÷ real_spend, 0 where nothing was spent) ÷ Σ alloc_spend — `FN_PLAN_SCORECARD`'s GRADE metric, the only money metric that tells plan A from plan B until a plan is uploaded — with `alloc_spend` and `alloc_unrealized`; `pred_lift` = Σ(ACT pred_net − DO_NOTHING pred_net) and `realised_lift` = Σ(real_net − DO_NOTHING pred_net) over ACT-applied plan rows (`lift_rows`; NULL when none), `pred_lift_all` over every graded plan row; `lift_control` = `'DO_NOTHING_PREDICTION'` with that control's own accuracy beside it (`control_mae_net_share`, `control_bias_share`); `detail` says when lift is ungraded |
+| `CURVE` / `LINE` | CURVE per bucket (`bucket`, `bucket_floor`): `bucket_rows`, `bucket_spend`, `bucket_accuracy`, and over the rows at or above the floor `cum_rows`, `cum_spend`, `cum_accuracy` (NULL on bucket `0`). LINE: the line as `min_clicks`, `settled_cpc` = Σ real_spend ÷ Σ real_clicks of the family's graded rows, `min_dollars` = `min_clicks` × `settled_cpc`, the two bars used (`bar_side_accuracy`, `bar_min_rows`) and a sentence naming the line or, with none, the best floor. The whole curve, not only the line; at `SINCE_START` the LINE is the line the labels were given |
+| `HONESTY` | per plan row: `n_rows`, `n_right`, `n_wrong`, `n_inconclusive`, `n_ungradable`; `n_act_no_matching_action` (a non-no-op ACT whose row applied as DO_NOTHING); `n_other_action`; `n_placement_changed`; `n_predicted_but_zero_clicks` (bucket `0` with window clicks — "predicted but dark", D4) |
+| `YOUNG` | per predictor × variant × family (`calendar_state` `'ALL'`): `ledger_rows`, `graded_rows`, `waiting_rows`, `next_due_watermark` (the house watermark at which the next waiting row becomes gradable) and a sentence saying, in words, whether anything is old enough to grade and when the next row will be |
+| `NEXT_WEEK` | per family, tonight's live plan (`level` `TONIGHT`, the latest night of the ledger): `dn_pred_net`, `act_pred_net`, `dn_pred_spend`, `act_pred_spend` and the sentence "do nothing $X; upload the plan $Y" |
 
 ---
 
@@ -473,7 +502,9 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
 3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`, then
    `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql` (L1–L4; `--nosync`, polled).
 4. **The grader** (Task 5): `tables/FACT_PREDICTION_GRADE.sql`, `tables/T_PREDICTION_SCORECARD.sql`,
-   then `procedures/SP_GRADE_PREDICTIONS.sql`, then its first CALL (the August nights grade).
+   then `procedures/SP_GRADE_PREDICTIONS.sql`, then its first `CALL … (NULL, NULL)` (`--nosync`,
+   polled; the August nights grade), then `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql`
+   (`--nosync`, polled).
 5. **The schedule and the board** (Task 6): the orchestrator's new step — after diffing the deployed
    body against the file, where the new step must be the only difference; the orchestrator is never
    run by hand — then `V_ENGINE_HEALTH.sql`, `V_DAILY_BRIEF.sql`.
@@ -495,8 +526,8 @@ ORDER BY family, calendar_state, predictor, variant, level, row_type;
 Read `YOUNG` first: it says whether anything is old enough to have a grade. Then, per family,
 `LINE` (is there a minimum investment, and how many clicks and dollars), `ACCURACY` at `TRAILING_3`
 (how far off the forecasts run), `MONEY` (`counterfactual_net_per_alloc`, plan A against plan B) and
-`NEXT_WEEK` (tonight's "do nothing / upload the plan"). Task 5 runs this query on the deployed table
-and confirms the column names in §5.
+`NEXT_WEEK` (tonight's "do nothing / upload the plan"). Task 5 ran this query on the deployed table
+and confirmed the column names in §5 (§10 "Task 5").
 
 ---
 
@@ -517,6 +548,17 @@ and confirms the column names in §5.
   or one channel stalled while the other loads, grades as zero clicks.
 - **"Do nothing" rests on the change record.** A keyword is DO_NOTHING-applied when no change was
   seen on it or its campaign. A stalled change feed would look the same as a quiet week.
+- **Ad-group changes are not read** when deciding which scenario applied (step 4): an ad group
+  paused or its default bid moved leaves the keyword's row `DO_NOTHING`.
+- **`placement_changed` is a reading of a multiplier, not a record of a setting.** `m_effective`
+  is `V_BID_CPC_TRANSFER`'s click-weighted placement multiplier over a rolling window, captured
+  with the adjustments current at each snapshot (that view's KNOWN DEFECT 1: no adjustment history
+  exists). It moves with the click mix whether or not a setting changed, so the flag can read TRUE
+  where no setting moved; the two readings are on the row so a ruling on how large a move counts
+  can be applied without a re-grade. §10 "Task 5" measures how often it reads TRUE.
+- **Gross profit restates after grading** (`FACT_AMAZON_ADS` re-prices COGS): the grade keeps the
+  numbers it was graded on, and `PREDICTION_GRADE_acceptance.sql` V2g reports how many rows have
+  drifted since.
 - **A night stands on its first pass's window** (§1, "The freeze"): one day older than a later pass
   of the same night would have judged, and blind to that pass's restatement of the window's days.
 - **Not day-over-day.** One window is noise; the regression check compares spans of
@@ -973,4 +1015,190 @@ SELECT as_of, scenario, COUNT(*) AS n, ANY_VALUE(rule_version) AS rule_version,
        MAX(horizon_to) AS horizon_to
 FROM `onyga-482313.OI.V_PREDICTION_LEDGER`
 GROUP BY as_of, scenario ORDER BY as_of, scenario;
+```
+
+### Task 5 — the grader, its grades and its report card (2026-10-03)
+
+**Deployed** (comment lines stripped): `scripts/bigquery/tables/FACT_PREDICTION_GRADE.sql` at
+20:41:45 UTC (job `t5_deploy_grade_1791060103`; 60 columns, partitioned by `as_of`, clustered by
+`predictor, family`; its description re-set from the file at 20:55:37 UTC after one wording fix, job `bqjob_r3f484614c664b2cb_000001a1038d0a49_1`, no
+row touched), `scripts/bigquery/tables/T_PREDICTION_SCORECARD.sql` at 20:41:47 UTC
+(`t5_deploy_sc_1791060103`; 74 columns), `scripts/bigquery/procedures/SP_GRADE_PREDICTIONS.sql`
+v27.173 at 20:41:50 UTC (`t5_deploy_sp_1791060103`; `INFORMATION_SCHEMA.ROUTINES` created and
+last_altered 20:41:50): the deployed `routine_definition` equals the file's `BEGIN … END`, 42,360
+characters. `config.yaml`: `FACT_PREDICTION_GRADE` and `T_PREDICTION_SCORECARD` (tables),
+`SP_GRADE_PREDICTIONS` (stored procedures, `schedule: "daily"`). Not on the schedule yet: Task 6
+adds the orchestrator step.
+
+**The first run** — `CALL SP_GRADE_PREDICTIONS(NULL, NULL)`, job `t5_call1_1791060200`, 20:42:19 to
+20:43:23 UTC, 170.5 slot-seconds, 116,692,386 bytes processed (660,602,880 billed: the run is ~40
+small statements). Log: watermark 2026-10-02 (`FN_ADS_ANCHOR_CAP` 2026-10-02), SETTLE_HORIZON_DAYS
+14; 8,944 ledger rows due — the six August nights, 4,472 plan rows, both scenarios — 8,944 inserted,
+all `regrade_seq` 0; labels RIGHT 0, WRONG 0, INCONCLUSIVE 8,944, UNGRADABLE 0; per plan, 2,073
+plan rows applied as DO_NOTHING (219 of them `act_is_noop`), 163 OTHER_ACTION, 0 ACT. Nothing after
+August: the report card's YOUNG row reads "2236 of 4397 predictions graded; 2161 wait, the next
+gradable when the ads watermark reaches 2026-10-17" for each plan (the 09-30 night, horizon end
+10-03, spec E1). `T_PREDICTION_SCORECARD`: 357 rows — ACCURACY 90, CURVE 168, HONESTY 30, LINE 24,
+MONEY 30, NEXT_WEEK 5, YOUNG 10; §8's query runs on it and §5's column names are its own.
+**The second run** (`t5_call2_1791060224`, 20:43:46 UTC, 157.4 slot-seconds): 0 due, 0 inserted;
+the table still holds 8,944 rows from one `graded_at`.
+
+**Checked.** `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql` (new), run as written
+20:51:49 UTC (`t5_acc_1791060707`, 139.8 slot-seconds, 159,024,712 bytes): 27 rows, every asserted
+row PASS; LIVE V1–V8 0, V2g (gross profit restated since grading) REPORT 0; every control FIRED —
+NC_EMPTY V1 8,944 and V2–V8 1 each, NC_V1_MISSING 1, NC_V2_REAL 1, NC_V3_FROZEN 1, NC_V4_LABEL 1,
+NC_V5_SIDE 1, NC_V6_APPLIED 1, NC_V7_FALSE_UNGRADABLE 1, NC_V7_MISSED_ARCHIVE 24, NC_V8_CURVE 1,
+NC_V8_ACC 1 (the file's RUN LOG). The card's columns against the DDL file's (S, below): the real
+card 0; controls NC_S_TYPE 1, NC_S_DROPPED 1, NC_EMPTY 75.
+
+**Proved on copies of the grader** (no real write beyond the two runs above). A copy is the file
+with its comment lines stripped and only the procedure, `FACT_PREDICTION_GRADE` and
+`T_PREDICTION_SCORECARD` names swapped (and, for the lowered bar, `DE_COACH_THRESHOLDS`). Scratch
+tables `OI._tmp_t5_grade`, `_tmp_t5_grade_nc`, `_tmp_t5_grade_rg`, `_tmp_t5_grade_pc`,
+`_tmp_t5_sc`, `_tmp_t5_sc_nc`, `_tmp_t5_sc_rg`, `_tmp_t5_sc_pc`, `_tmp_t5_thr`, `_tmp_t5_sc_ddl`
+expire 2026-10-10 (the other `_tmp_t5_*` tables in `OI` are another session's); the procedure copies
+were dropped after the runs.
+
+| case | what happened | job, slot-seconds |
+|---|---|---|
+| first run on an empty copy | 8,944 inserted, the same counts as the real run | `t5_copy_run2_1791059529`, 152.5 |
+| second run on it | 0 due, 0 inserted | `t5_copyA_1791059825`, 188.6 |
+| **NC, idempotence**: a copy with one grade row deleted | the next run inserted exactly that row (1), equal to the deleted one in every column but `graded_at` | `t5_ncB_1791059825`, 160.9 |
+| **re-grade** `(DATE '2026-08-26', 'Task 5 re-grade test on a copy')` | 4,476 rows appended — every current grade of the nights 08-26 … 08-28 — `regrade_seq` 1, the reason on each; band check R 0: every key of the band has one row at 0 and one at 1, none outside the band has one at 1, the reason on every 1 and on no 0. Controls: NC_R_OUTSIDE (a seq-1 row on 08-25) 1, NC_R_LOST (one seq-1 row removed) 1, NC_R_NOREASON 1, NC_EMPTY 1. A `(NULL, NULL)` run after it: 0 inserted | `t5_rgC_1791059825`, 166.6; `t5_rgF_1791059990`, 176.8 |
+| re-grade without a reason `(DATE '2026-08-26', NULL)` | refused by the first ASSERT, nothing written | `t5_copyE_1791059825`, 0.0 |
+| **the label path**, `MIN_INVEST_SIDE_ACCURACY` 0.30 on a settings copy | a line on 7 of 8 plan × family groups (each at 1 click; PLAN_A Fresh none); 1,428 RIGHT, 2,078 WRONG, 5,438 INCONCLUSIVE; no INCONCLUSIVE row at or above its line with a click. V1–V7 0, every control firing (`t5_verify_pc_1791059990`, 111.0). P: the line stored on every row = the card's SINCE_START LINE = an independent recompute, 0; controls NC_P_CARD 1, NC_P_ROW 1, NC_EMPTY 2 | `t5_pcD_1791059825`, 159.3 |
+
+**The August numbers beside the brief's preview** (plan Task 5 Step 8; job
+`t5_compare_1791060224`, the query below). Three readings of spec §14.3 Q5's test: OLD is Q5 as
+written run now (horizon `as_of …`), SHIFT the same on the ledger's horizon (`as_of + 1 …`, D2 —
+every August night was written after Los Angeles midnight of its `as_of`), GRADER the grade
+table's current DO_NOTHING rows. **GRADER equals SHIFT on every bucket and every total**, and OLD
+equals spec §14.2 E6's 16:10 UTC run on every bucket, so the differences from the brief are the
+horizon shift and the gross-profit restatement E6 records — nothing else.
+
+Spend-weighted side accuracy by realised-click bucket, plan B (brief / E6 at 16:10 UTC / OLD now /
+GRADER):
+
+| bucket | 1–5 | 6–10 | 11–20 | 21–40 | 41–80 | 81+ |
+|---|---|---|---|---|---|---|
+| brief | 0.549 | 0.325 | 0.407 | 0.479 | 0.357 | 0.317 |
+| E6, OLD now | 0.549 | 0.325 | 0.407 | 0.466 | 0.357 | 0.317 |
+| GRADER (rows) | 0.532 (319) | 0.288 (145) | 0.407 (191) | 0.447 (144) | 0.380 (104) | 0.259 (91) |
+
+Plan A's best bucket: brief 0.495, E6 0.481 (21–40), GRADER 0.499 (21–40). Bucket 0: 1,242 rows per
+plan (OLD 1,235), 92 of them with window clicks (OLD 92) — `n_predicted_but_zero_clicks`.
+**The absent line:** no family has one in either plan. The best floor with at least 20 rows
+(the card's LINE sentences): PLAN_A Bottle 0.741 at 6+ clicks (26 rows), Fresh 0.276 at 11+, LolliME
+0.345 at 11+, Lollibox 0.378 at 41+; PLAN_B Bottle 0.690 at 1+ (50 rows), Fresh 0.310 at 1+, LolliME
+0.301 at 1+, Lollibox 0.409 at 41+ (E6 on the old horizon: 0.658, Bottle plan A, 6+, 25 rows).
+**DO_NOTHING totals**, plan B, keys with a realised FACT row (the brief's `dn_totals.sql`):
+
+| | keys | clicks pred / real | spend pred / real | orders pred (corrected) / real | gross profit pred / real | net pred / real |
+|---|---|---|---|---|---|---|
+| brief | — | 31,641 / 29,694 | 20,118 / 19,144 | 1,150 / 1,002 | 17,434 / 14,727 | −2,684 / −4,417 |
+| OLD now | 1,001 | 31,641 / 29,694 | 20,118.23 / 19,144.00 | 1,150.3 / 1,002 | 17,434.27 / 14,501.83 | −2,683.96 / −4,642.17 |
+| GRADER | 994 | 31,248 / 29,490 | 19,956.90 / 19,063.22 | 1,148.8 / 963 | 17,410.81 / 14,137.39 | −2,546.09 / −4,925.83 |
+
+The brief's realised gross profit and net are the pre-16:08 UTC reading (E6). Over every plan row
+(the card's ACCURACY DO_NOTHING, ALL) the DO_NOTHING forecast's `mae_net_share` is 0.916 and its
+`bias_share` 0.106 in both plans; `counterfactual_net_per_alloc` (MONEY, ALL) PLAN_A −0.187, PLAN_B
+−0.168.
+**Which scenario applied.** The brief expected 1 ACT (a plan-B PARK), 91–92 rows with another change
+on the keyword and 98 with a campaign-level change. Measured: 92 (A) / 91 (B) and 98, and 0 ACT —
+the PARK row (2026-08-25, keyword 445052966395752, bid 0.41 → 0.20) matched its bid change but its
+campaign's budget component (62.50 → 60.04) did not land, so under the plan's rule (every component
+matched) it is OTHER_ACTION, with the matched change in `matched_change_ids`.
+
+**`placement_changed`, measured** (per plan, over the 2,236 August plan rows): 126 have no reading,
+2,048 moved beyond 1e-6, 311 by more than 1%, 17 by more than 5%. §9 says why the flag reads so
+high; whether a move of some size should count is open (a LEARNING setting would need a ruling).
+
+**Tonight's NEXT_WEEK** (the 10-03 night, plan B live): ALL "do nothing $191.01; upload the plan
+$346.77" over 10-04 … 10-06; Bottle −$41.27 / −$40.03, Fresh −$125.16 / $1.34, LolliME $153.33 /
+$181.82, Lollibox $204.11 / $203.64.
+
+```sql
+-- Step 8: OLD (Q5 as written), SHIFT (Q5 on as_of + 1 ..) and GRADER, per plan and bucket; then the
+-- DO_NOTHING totals of plan B over keys with a realised FACT row (submit --nosync, poll)
+CREATE TEMP TABLE p AS
+SELECT as_of, plan, family, channel, campaign_id, keyword_id, window_days, side, family_bar,
+       w_clk, w_ord, w_sp, w_gp_corrected, settle_factor_eff
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE as_of BETWEEN '2026-08-23' AND '2026-08-28';
+CREATE TEMP TABLE k AS
+WITH r AS (
+  SELECT p.as_of, p.plan, p.keyword_id, shift,
+         SUM(f.Ads_clicks) clk, SUM(f.Ads_cost) sp, SUM(f.Ads_orders) ord, SUM(f.GROSS_PROFIT) gp, COUNT(*) n_fact
+  FROM p CROSS JOIN UNNEST([0, 1]) AS shift
+  JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
+    ON f.campaign_id = p.campaign_id AND f.keyword_id = p.keyword_id
+   AND f.date BETWEEN DATE_ADD(p.as_of, INTERVAL shift DAY) AND DATE_ADD(p.as_of, INTERVAL p.window_days - 1 + shift DAY)
+  GROUP BY 1, 2, 3, 4
+)
+SELECT IF(sh = 0, 'OLD', 'SHIFT') AS form, p.*, COALESCE(r.clk, 0) clk, COALESCE(r.sp, 0) sp,
+       COALESCE(r.ord, 0) ord, COALESCE(r.gp, 0) gp, (r.n_fact IS NOT NULL) AS has_row
+FROM p CROSS JOIN UNNEST([0, 1]) AS sh
+LEFT JOIN r ON r.as_of = p.as_of AND r.plan = p.plan AND r.keyword_id = p.keyword_id AND r.shift = sh;
+CREATE TEMP TABLE kk AS
+SELECT form, plan, family, clk, sp, w_clk,
+       (side = 'GOOD') = (ord >= 2 AND SAFE_DIVIDE(gp, NULLIF(sp, 0)) >= family_bar) AS correct,
+       CASE WHEN clk = 0 THEN '0' WHEN clk <= 5 THEN '1-5' WHEN clk <= 10 THEN '6-10' WHEN clk <= 20 THEN '11-20'
+            WHEN clk <= 40 THEN '21-40' WHEN clk <= 80 THEN '41-80' ELSE '81+' END AS bkt
+FROM k
+UNION ALL
+SELECT 'GRADER', REGEXP_EXTRACT(predictor, r'PLAN_(.)'), family, real_clicks, real_spend, basis_clicks, side_correct, click_bucket
+FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
+WHERE scenario = 'DO_NOTHING' AND as_of BETWEEN '2026-08-23' AND '2026-08-28'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY predictor, as_of, campaign_id, keyword_id ORDER BY regrade_seq DESC) = 1;
+SELECT plan, bkt, form, COUNT(*) n, COUNTIF(w_clk > 0) had_window_clicks, ROUND(SUM(sp), 2) real_sp,
+       ROUND(SAFE_DIVIDE(SUM(IF(correct, sp, 0)), SUM(sp)), 3) side_acc_spend
+FROM kk GROUP BY 1, 2, 3 ORDER BY 1, 2, 3;
+SELECT form, COUNT(*) keys, ROUND(SUM(w_clk)) pred_clk, SUM(clk) real_clk, ROUND(SUM(w_sp), 2) pred_sp, ROUND(SUM(sp), 2) real_sp,
+       ROUND(SUM(w_ord / settle_factor_eff), 1) pred_ord_corr, SUM(ord) real_ord,
+       ROUND(SUM(w_gp_corrected), 2) pred_gp, ROUND(SUM(gp), 2) real_gp,
+       ROUND(SUM(w_gp_corrected - w_sp), 2) pred_net, ROUND(SUM(gp - sp), 2) real_net
+FROM k WHERE plan = 'B' AND has_row GROUP BY 1
+UNION ALL
+SELECT 'GRADER', COUNT(*), ROUND(SUM(g.pred_clicks)), SUM(g.real_clicks), ROUND(SUM(g.pred_spend), 2), ROUND(SUM(g.real_spend), 2),
+       ROUND(SUM(g.pred_orders), 1), SUM(g.real_orders), ROUND(SUM(g.pred_gp), 2), ROUND(SUM(g.real_gp), 2),
+       ROUND(SUM(g.pred_net), 2), ROUND(SUM(g.real_net), 2)
+FROM `onyga-482313.OI.FACT_PREDICTION_GRADE` g
+JOIN k ON k.form = 'SHIFT' AND k.plan = 'B' AND k.has_row AND k.as_of = g.as_of AND k.keyword_id = g.keyword_id
+WHERE g.predictor = 'PLAN_B' AND g.scenario = 'DO_NOTHING'
+ORDER BY 1;
+```
+
+```sql
+-- S: the card the procedure builds has its DDL file's columns, names, types and order. Create the DDL
+-- file's table under another name (e.g. OI._tmp_t5_sc_ddl), then compare; NC_S_TYPE / NC_S_DROPPED
+-- doctor the DDL side
+CREATE TEMP TABLE b AS SELECT column_name, data_type, ordinal_position
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = 'T_PREDICTION_SCORECARD';
+CREATE TEMP TABLE d AS SELECT column_name, data_type, ordinal_position
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.COLUMNS` WHERE table_name = '_tmp_t5_sc_ddl';
+CREATE TEMP TABLE dc AS
+SELECT 'LIVE' AS copy, * FROM d
+UNION ALL SELECT 'NC_S_TYPE', * REPLACE (IF(column_name = 'min_clicks', 'FLOAT64', data_type) AS data_type) FROM d
+UNION ALL SELECT 'NC_S_DROPPED', * FROM d WHERE column_name <> 'detail';
+WITH copies AS (SELECT x AS copy FROM UNNEST(['LIVE', 'NC_S_TYPE', 'NC_S_DROPPED', 'NC_EMPTY']) x),
+j AS (
+  SELECT x.copy, COUNTIF(dd.column_name IS NULL OR bb.column_name IS NULL
+                         OR dd.data_type <> bb.data_type OR dd.ordinal_position <> bb.ordinal_position) AS n,
+         COUNT(dd.column_name) AS n_ddl
+  FROM copies x CROSS JOIN b bb
+  FULL OUTER JOIN dc dd ON dd.copy = x.copy AND dd.column_name = bb.column_name
+  GROUP BY x.copy
+)
+SELECT x.copy, COALESCE(j.n, 0) + IF(COALESCE(j.n_ddl, 0) = 0, 1, 0) AS violations
+FROM copies x LEFT JOIN j ON j.copy = x.copy ORDER BY x.copy;
+```
+
+```sql
+-- placement_changed, measured
+SELECT predictor, COUNT(*) AS plan_rows, COUNTIF(placement_changed IS NULL) AS no_reading,
+       COUNTIF(placement_changed) AS moved,
+       COUNTIF(ABS(SAFE_DIVIDE(placement_m_to, placement_m_from) - 1) > 0.01) AS moved_gt_1pct,
+       COUNTIF(ABS(SAFE_DIVIDE(placement_m_to, placement_m_from) - 1) > 0.05) AS moved_gt_5pct
+FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
+WHERE scenario = 'DO_NOTHING'
+GROUP BY predictor ORDER BY predictor;
 ```
