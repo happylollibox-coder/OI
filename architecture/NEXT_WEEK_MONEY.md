@@ -1805,9 +1805,25 @@ GROUP BY 1 ORDER BY 1;
 - `plan_partition_fresh` keeps its clock (the later of yesterday and the Los Angeles day the plan step
   last ran): a New York `as_of` is never earlier than the Los Angeles day of its build, so every pass
   that saved its partition meets it. Only its comment changed.
-- `FN_PLAN_SCORECARD` needed no change: it dates a night by the `as_of` it reads and grades the
-  `window_days` ads days from it; the last pass of New York night D is the 12:40 New York pass of Los
-  Angeles day D, so the graded days still start on the day the plan's final partition was written.
+- `FN_PLAN_SCORECARD`: Task 6 recorded "needed no change"; the Task 10 proof found that wrong, and
+  follow-up F4 (2026-10-03) fixed it. `V_PLAN_SCORECARD` called the function on the Los Angeles date
+  while `as_of` is a New York date, so from the 01:35 New York pass until Los Angeles midnight the
+  scorecard left out the night that pass had just written (its decisions and its rule), and dated a
+  night's 14-day age on a clock the key is not on. The function now takes **both clocks**:
+  `grade_date`, the New York date nights are dated on (a graded night's 14-day age, and the nights
+  the rule in force and the written decisions are read up to), and `ads_date`, the Los Angeles date
+  ads days are on (`settle_due_on` = `window_to` + 7 / + 14, and the `FACT_AMAZON_ADS` fence). The view
+  passes `CURRENT_DATE('America/New_York')` and `CURRENT_DATE('America/Los_Angeles')`, the judge's own
+  two clocks, so a decision is graded when the judge would call its window `settled`
+  (`today_la >= settle_due_on`), not up to three hours earlier. The graded days still start on the
+  plan night. Measured 2026-10-03 at the clock of 22:40 Los Angeles 10-02 = 01:40 New York 10-03:
+  the pre-F4 form read 123 guard decisions written, the two-clock function 136 (the 13 of the 10-03
+  night), both 0 graded; the New York date alone would have graded 20 there. With one date passed
+  twice the function equals the pre-F4 one row for row (2026-10-02, 10-03, 11-02).
+  `PLAN_SCORECARD_acceptance.sql` holds both clocks at two boundaries built from the plan history
+  (F4a: the pre-F4 view misses a night 14 days old on the New York date; F4b: the New York date alone
+  grades before the settle date; F4c: the pre-F4 view misses the decisions of the night the 01:35
+  pass wrote) — 46 of 46 PASS on 2026-10-03, controls in its header.
 - The ramp step's upload count reads `applied_at` on the New York date, the clock `as_of` is on.
 - `SEAT_REQUEST_acceptance.sql` R09 (added after review, 2026-10-03): `SP_APPEND_SEAT_REQUEST` copies
   the plan's `as_of` into `requested_on`, so `requested_on` is a New York date too. R09 counted a
@@ -1832,7 +1848,8 @@ GROUP BY 1 ORDER BY 1;
   found, besides the two above: `FACT_PLAN_NEXT_WEEK_acceptance.sql` (the C01 fence, already on the
   build's Los Angeles date); `PLAN_SCORECARD_acceptance.sql` (C10 and the gradable-night twins bound
   `as_of` by the same Los Angeles date `FN_PLAN_SCORECARD` is called with, so a New York partition
-  dated tomorrow is left out of both); `V_PLAN_WINDOW_JUDGMENT_acceptance.sql` (C01's fence and C06's
+  dated tomorrow is left out of both — consistent with each other, and both wrong; since F4 they bound
+  `as_of` by the New York date and `settle_due_on` by the Los Angeles date, as the view does); `V_PLAN_WINDOW_JUDGMENT_acceptance.sql` (C01's fence and C06's
   settle date compare ads dates, Los Angeles by design); `V_FAMILY_SEAT_REGISTER_acceptance.sql` (a
   change's Los Angeles date against ads dates, no `as_of`); `check_judge_memory_controls.py` (doctored
   `hold_settles_on`, an ads date, and `grace_ends_on` set to Los Angeles yesterday, which is before the
@@ -2457,8 +2474,8 @@ judgement view (which re-anchors the moment the ads watermark moves):
 
 | object | file | what it is |
 |---|---|---|
-| `FN_PLAN_SCORECARD(grade_date DATE)` | `scripts/bigquery/functions/FN_PLAN_SCORECARD.sql` | the grade, as a table function so the acceptance can run the SAME arithmetic with the clock moved forward (the guard has nothing old enough to grade until 2026-10-03) |
-| `V_PLAN_SCORECARD` | `scripts/bigquery/views/V_PLAN_SCORECARD.sql` | the function at today's Los Angeles date — the one to read |
+| `FN_PLAN_SCORECARD(grade_date DATE, ads_date DATE)` | `scripts/bigquery/functions/FN_PLAN_SCORECARD.sql` | the grade, as a table function so the acceptance can run the SAME arithmetic with the clock moved forward (the guard has nothing old enough to grade until 2026-10-03). Two clocks since follow-up F4 (2026-10-03): `grade_date` is the New York date nights are dated on, `ads_date` the Los Angeles date settle dates and ads days are read on |
+| `V_PLAN_SCORECARD` | `scripts/bigquery/views/V_PLAN_SCORECARD.sql` | the function at today's New York date and today's Los Angeles date (the judge's two clocks; until F4 it passed the Los Angeles date as both) — the one to read |
 | acceptance | `scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql` | every row must read `PASS` |
 
 **Five row types.**

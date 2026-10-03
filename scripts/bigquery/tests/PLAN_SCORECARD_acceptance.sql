@@ -1,6 +1,7 @@
 -- =============================================================================================
 -- PLAN_SCORECARD acceptance — v27.154 (2026-10-01; follow-up the same day: C09 restated, C10
--- replaced, C11 and C12 added; second follow-up, 2026-10-01 LA / 10-02 UTC: C13 added, C12 restated, CM widened).
+-- replaced, C11 and C12 added; second follow-up, 2026-10-01 LA / 10-02 UTC: C13 added, C12 restated, CM widened;
+-- F1 2026-10-03: C08a's clock; F4 2026-10-03: two clocks, C08's count written, F4a-F4c added).
 -- V_PLAN_SCORECARD / FN_PLAN_SCORECARD (plan Task 5's grade) and the
 -- nine plan_* checks Task A put on V_ENGINE_HEALTH. EVERY ROW MUST READ PASS.
 --   bq query --project_id=onyga-482313 --use_legacy_sql=false --nouse_cache "$(grep -v '^--' FILE)"
@@ -26,9 +27,12 @@
 --     FAIL, never a quiet PASS.
 --
 -- THE CHECK EXPRESSIONS ARE WRITTEN ONCE, over sc_copies (one tagged copy per scenario), and each
--- copy is judged against the expectation of its own clock (LIVE = today in Los Angeles, MOVED =
--- today + 30, CASE = 2026-10-03, YOUNG = the day before the first guard decision settles, read from
--- the plan history — C08a's clock, follow-up F1). Twins of the function kept in this file, which must change with
+-- copy is judged against the expectation of its own clock. A clock is TWO dates since follow-up F4:
+-- d, the New York date nights are dated on, and a, the Los Angeles date settle dates are read on
+-- (FN_PLAN_SCORECARD's grade_date and ads_date). LIVE = (today in New York, today in Los Angeles), the
+-- view's own; MOVED = both + 30; CASE = 2026-10-03 twice; YOUNG = the day before the first guard
+-- decision settles, twice (C08a's clock, follow-up F1); NIGHT and SETTLE = the two boundaries F4a and
+-- F4b hold (below). Twins of the function kept in this file, which must change with
 -- it: the gradable-decision predicate (exp_g), the one-night-per-Sunday-week rule (exp_fw), the
 -- 20-decision hint threshold (C09), the 3-week recommendation threshold (C03), the hint's sentence
 -- openings (C11), the band (C13: band_cand / band_exp — a LAST_DAY_NOT_STRONG release with a last day
@@ -130,6 +134,46 @@
 --     reads 1 on C08).
 -- COST of the run: 1,076.3 slot-s, 299.1 MB, 71.8 s; the new clock's FN_PLAN_SCORECARD 224.9
 -- slot-s, d_young's DECLARE 0.2. The four control runs: 964.3 to 1,250.3 slot-s each.
+--
+-- F4 (2026-10-03, piece-1 follow-up; spec P-24). FN_PLAN_SCORECARD takes two clocks: grade_date, the
+-- New York date nights are dated on (as_of is keyed on it since v27.160), and ads_date, the Los
+-- Angeles date settle dates and ads days are read on; V_PLAN_SCORECARD passes today's of each. Here a
+-- clock is (d, a): d0 / a0 are the view's, MOVED is both + 30, CASE and YOUNG one date twice, and
+-- every twin reads a night against d and a settle date against a (exp_g, band_cand, C07's GUARD
+-- term). C08's youth term also holds the count written ("has written N guard decision(s):") to the
+-- decisions on nights up to d. Three standing controls, each at a boundary built from the history so
+-- it exists whatever today's date is:
+--   F4a NIGHT  = (latest night + 14, latest night + 13): the pre-F4 view (the Los Angeles date as both
+--       clocks) must fire C04, because the latest night is 14 days old only on the New York date;
+--   F4b SETTLE = (first settle date, the day before): the New York date as both clocks must fire C08,
+--       because it grades decisions the judge does not yet call settled (today_la >= settle_due_on);
+--   F4c the pre-F4 view at SETTLE, which is FN_PLAN_SCORECARD(d_young, d_young) (sc_young), must fire
+--       C08's count written, because it leaves out the night the 01:35 New York pass wrote.
+-- Each reads PASS only if the wrong clock fires, the two-clock copy at the same boundary reads 0 on
+-- C01-C04, C06-C09, C11 and C13, and the boundary is real (emptiness terms).
+-- RUN 2026-10-03 02:56 Los Angeles (job f4_acc_125608, after the deploy): 46 of 46 PASS. F4a: nights
+--   2026-10-17 / settle 2026-10-16, latest night 2026-10-03; the two-clock copy 0, the pre-F4 copy 8 on
+--   C04. F4b: nights 2026-10-03 / settle 2026-10-02, first settle 2026-10-03, 136 written, 0 gradable;
+--   the two-clock copy 0, the New York-only copy grades 20 and reads 2 on C08. F4c: 136 written to
+--   2026-10-03, 123 to 2026-10-02; the pre-F4 copy reads 1 on C08. LIVE C08: 20 of 136 graded.
+-- F4's controls, each this file run with one edit (scratchpad copies, not kept); every other row read
+-- PASS in each:
+--   exp_fw's night age read on a instead of d (job f4_ctl1_night_twin_on_la_125832): F4a FAIL 10 (the
+--     two-clock copy reads 8 on C04, the pre-F4 copy 0);
+--   exp_g's gradable read on d instead of a (f4_ctl2_settle_twin_on_ny_125834): F4b FAIL 4 (20
+--     gradable on the twin, first settle 2026-10-04);
+--   C08's count-written term removed (f4_ctl3_no_written_term_125836): F4c FAIL 1 (the pre-F4 copy
+--     reads 0 on C08);
+--   both boundaries collapsed to one date twice (d_night = a_night, d_settle = d_young;
+--     f4_ctl4_boundaries_collapsed_125838): F4a FAIL 2, F4b FAIL 2, F4c FAIL 2 (each wrong copy reads
+--     0, and each emptiness term fires).
+-- Measured beside the suite: FN_PLAN_SCORECARD(d, d) equals the pre-F4 FN_PLAN_SCORECARD(d) row for
+-- row at 2026-10-02, 2026-10-03 and 2026-11-02 (17, 21 and 37 rows, captured before the deploy), so
+-- the change is the clock split and nothing else. check_plan_scorecard_hint_branches.py declares
+-- ads_date: 10 of 10 PASS (exit 0); the same harness without that DECLARE exits 2 (Unrecognized name:
+-- ads_date).
+-- COST of the F4 run: 1,522.3 slot-s, 87.3 s; the four new FN_PLAN_SCORECARD reads 153.7 to 196.2
+-- slot-s each, the view (sc_live) 163.7. The four control runs: 1,693.7 to 1,864.2 slot-s each.
 -- WHAT THIS FILE DOES NOT PROVE. On the history to 2026-10-01 no clock reaches 16 graded holds or 16
 -- graded band rows (at most 9 and 2), so every real hint reads WAIT and LOWER / RAISE / KEEP /
 -- NO_CLEAN_SIGNAL have never come out of the function on real input. C09 and C11 judge the hint's
@@ -160,8 +204,12 @@
 -- check_plan_scorecard_hint_branches.py: 141.8 slot-s on the committed file, 131.9 to 139.0 on each
 -- doctored copy.
 -- =============================================================================================
-DECLARE d0  DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
-DECLARE d30 DATE DEFAULT DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 30 DAY);
+-- F4: the view's two clocks. d0 dates nights (New York, the date as_of is keyed on); a0 reads settle
+-- dates (Los Angeles, the ads clock). They differ from 21:00 to 24:00 Los Angeles.
+DECLARE d0  DATE DEFAULT CURRENT_DATE('America/New_York');
+DECLARE a0  DATE DEFAULT CURRENT_DATE('America/Los_Angeles');
+DECLARE d30 DATE DEFAULT DATE_ADD(CURRENT_DATE('America/New_York'), INTERVAL 30 DAY);
+DECLARE a30 DATE DEFAULT DATE_ADD(CURRENT_DATE('America/Los_Angeles'), INTERVAL 30 DAY);
 -- the real case review MUST_FIX 1 measured: at this clock 20 decisions are graded and 0 held; the
 -- band read 1 under the 46ae335 function, a release whose hold clock had run out, and reads 0 now
 DECLARE d_case DATE DEFAULT DATE '2026-10-03';
@@ -175,6 +223,16 @@ DECLARE d_young DATE DEFAULT (
   WHERE is_live_plan
     AND last_day_strong IS NOT NULL
     AND (verdict = 'HELD_UNSETTLED' OR guard_released_by IS NOT NULL));
+-- F4a's clock, the NIGHT boundary: the latest night written turns 14 days old on the New York date
+-- while it is 13 on the Los Angeles date (21:00-24:00 Los Angeles). NULL when no night is written:
+-- F4a then FAILs.
+DECLARE n_last  DATE DEFAULT (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`);
+DECLARE d_night DATE DEFAULT DATE_ADD(n_last, INTERVAL 14 DAY);
+DECLARE a_night DATE DEFAULT DATE_ADD(n_last, INTERVAL 13 DAY);
+-- F4b's clock, the SETTLE boundary: the first guard decision's settle date is the New York date and one
+-- day after the Los Angeles date (the hour after the 01:35 New York pass of that night).
+DECLARE d_settle DATE DEFAULT DATE_ADD(d_young, INTERVAL 1 DAY);
+DECLARE a_settle DATE DEFAULT d_young;
 -- TWIN, HISTORY not a setting: the last night written before FACT_PLAN_NEXT_WEEK carried the rule
 DECLARE legacy_through DATE DEFAULT DATE '2026-10-01';
 -- TWIN, HISTORY not a setting: the rule the nights to legacy_through were judged under
@@ -189,20 +247,44 @@ CREATE TEMP TABLE sc_live AS
 CREATE TEMP TABLE sc_moved AS
   SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
                                ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
-  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d30);
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d30, a30);
 CREATE TEMP TABLE sc_case AS
   SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
                                ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
-  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_case);
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_case, d_case);
 CREATE TEMP TABLE sc_young AS
   SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
                                ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
-  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_young);
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_young, d_young);
+-- F4: the function at the two boundaries, the right way (nights New York, settle dates Los Angeles)
+-- and the two wrong ways: the pre-F4 view (the Los Angeles date as both clocks) at the NIGHT
+-- boundary, and the New York date as both clocks at the SETTLE boundary
+CREATE TEMP TABLE sc_night AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_night, a_night);
+CREATE TEMP TABLE sc_night_la AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(a_night, a_night);
+CREATE TEMP TABLE sc_settle AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_settle, a_settle);
+CREATE TEMP TABLE sc_settle_ny AS
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY row_type
+                               ORDER BY family, calendar_state, plan, week_start, graded_night, outcome_class) AS rn
+  FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(d_settle, d_settle);
 
 -- ---- what the plan history makes gradable, per clock (TWINS of the function's rules) ----
+-- d dates nights (New York), a reads settle dates (Los Angeles): FN_PLAN_SCORECARD's two clocks (F4)
 CREATE TEMP TABLE clock_dates AS
-  SELECT 'LIVE' AS clock, d0 AS d UNION ALL SELECT 'MOVED', d30 UNION ALL SELECT 'CASE', d_case
-  UNION ALL SELECT 'YOUNG', d_young;
+            SELECT 'LIVE' AS clock, d0 AS d, a0 AS a
+  UNION ALL SELECT 'MOVED',  d30,      a30
+  UNION ALL SELECT 'CASE',   d_case,   d_case
+  UNION ALL SELECT 'YOUNG',  d_young,  d_young
+  UNION ALL SELECT 'NIGHT',  d_night,  a_night
+  UNION ALL SELECT 'SETTLE', d_settle, a_settle;
 -- one plan night per Sunday-start week: the latest that is at least 14 days old
 CREATE TEMP TABLE exp_fw AS
   WITH night AS (
@@ -221,7 +303,7 @@ CREATE TEMP TABLE exp_fw AS
 -- READS verdict and guard_released_by as published; never re-derives the guard.
 CREATE TEMP TABLE exp_g AS
   SELECT c.clock, DATE_TRUNC(p.as_of, WEEK(SUNDAY)) AS week_start, p.as_of, p.settle_due_on,
-         (p.settle_due_on <= c.d) AS gradable
+         (p.settle_due_on <= c.a) AS gradable
   FROM clock_dates c
   JOIN `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p ON p.as_of <= c.d
   WHERE p.is_live_plan
@@ -230,7 +312,7 @@ CREATE TEMP TABLE exp_g AS
 CREATE TEMP TABLE exp_gw AS
   SELECT clock, week_start, COUNT(*) AS n FROM exp_g WHERE gradable GROUP BY 1, 2;
 CREATE TEMP TABLE clocks AS
-  SELECT c.clock, c.d,
+  SELECT c.clock, c.d, c.a,
          COALESCE(fw.n_fw, 0)       AS n_fw,
          COALESCE(g.n_gradable, 0)  AS n_gradable,
          COALESCE(g.n_written, 0)   AS n_written,
@@ -252,7 +334,7 @@ CREATE TEMP TABLE band_cand AS
          COALESCE(p.strong_day_mult, IF(p.as_of <= legacy_through, legacy_mult, NULL))  AS eff_mult,
          COALESCE(p.strong_day_min_orders, IF(p.as_of <= legacy_through, legacy_min, NULL)) AS eff_min
   FROM clock_dates c
-  JOIN `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p ON p.as_of <= c.d AND p.settle_due_on <= c.d
+  JOIN `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p ON p.as_of <= c.d AND p.settle_due_on <= c.a
   WHERE p.is_live_plan
     AND p.last_day_strong IS NOT NULL
     AND p.guard_released_by = 'LAST_DAY_NOT_STRONG';
@@ -261,7 +343,9 @@ CREATE TEMP TABLE clock_rule AS
             SELECT 'LIVE'  AS clock, rule_value, rule_min_orders FROM sc_live  WHERE row_type = 'RULE_HINT'
   UNION ALL SELECT 'MOVED',          rule_value, rule_min_orders FROM sc_moved WHERE row_type = 'RULE_HINT'
   UNION ALL SELECT 'CASE',           rule_value, rule_min_orders FROM sc_case  WHERE row_type = 'RULE_HINT'
-  UNION ALL SELECT 'YOUNG',          rule_value, rule_min_orders FROM sc_young WHERE row_type = 'RULE_HINT';
+  UNION ALL SELECT 'YOUNG',          rule_value, rule_min_orders FROM sc_young WHERE row_type = 'RULE_HINT'
+  UNION ALL SELECT 'NIGHT',          rule_value, rule_min_orders FROM sc_night WHERE row_type = 'RULE_HINT'
+  UNION ALL SELECT 'SETTLE',         rule_value, rule_min_orders FROM sc_settle WHERE row_type = 'RULE_HINT';
 -- one row per clock, zeros included. n_band: the band. n_expired: releases that sit between 1.0x and
 -- their multiplier under the rule but whose hold clock had run out (the rows the 46ae335 band
 -- wrongly counted). n_short_day: the same, clock running, but fewer orders on the last day than the
@@ -286,6 +370,14 @@ CREATE TEMP TABLE sc_copies AS
   UNION ALL SELECT 'CASE',               'CASE',  * FROM sc_case
   -- C08a's undoctored base (F1): the scorecard at the day before the first guard decision settles
   UNION ALL SELECT 'YOUNG',              'YOUNG', * FROM sc_young
+  -- F4: the two boundaries, each judged against its own two-date clock; and the two wrong clocks
+  UNION ALL SELECT 'NIGHT',              'NIGHT',  * FROM sc_night
+  UNION ALL SELECT 'NC_F4N',             'NIGHT',  * FROM sc_night_la
+  UNION ALL SELECT 'SETTLE',             'SETTLE', * FROM sc_settle
+  UNION ALL SELECT 'NC_F4S',             'SETTLE', * FROM sc_settle_ny
+  -- the pre-F4 view at the SETTLE boundary: the Los Angeles date as both clocks, which is
+  -- FN_PLAN_SCORECARD(d_young, d_young), already read as sc_young
+  UNION ALL SELECT 'NC_F4W',             'SETTLE', * FROM sc_young
   -- C01: a GRADE row loses its calendar state; the hint row loses its sentence
   UNION ALL SELECT 'NC_C01',  'LIVE', * REPLACE (IF(row_type = 'GRADE' AND rn = 1, NULL, calendar_state) AS calendar_state) FROM sc_live
   UNION ALL SELECT 'NC_C01S', 'LIVE', * REPLACE (IF(row_type = 'RULE_HINT', NULL, sentence) AS sentence) FROM sc_live
@@ -353,7 +445,8 @@ CREATE TEMP TABLE copies AS
     ('NC_C07', 'LIVE'), ('NC_C07G', 'MOVED'), ('NC_C08', 'YOUNG'), ('YOUNG', 'YOUNG'), ('NC_C08G', 'LIVE'),
     ('NC_C09', 'LIVE'), ('NC_C09D', 'LIVE'), ('NC_C09B', 'MOVED'), ('NC_C09H', 'MOVED'),
     ('NC_C09G', 'MOVED'), ('NC_C11W', 'MOVED'), ('NC_C11K', 'MOVED'), ('CASE', 'CASE'),
-    ('NC_C13', 'CASE')]);
+    ('NC_C13', 'CASE'), ('NIGHT', 'NIGHT'), ('NC_F4N', 'NIGHT'), ('SETTLE', 'SETTLE'), ('NC_F4S', 'SETTLE'),
+    ('NC_F4W', 'SETTLE')]);
 
 -- ---- C05: the nine plan_* checks, read by NAME (prunes the board; see the header) ----
 CREATE TEMP TABLE board AS
@@ -504,17 +597,21 @@ UNION ALL
 -- C07 nothing graded before it is old enough; no FAMILY_WEEK while the history has a graded night
 SELECT k.copy, 'C07',
        COUNTIF(s.row_type = 'FAMILY_WEEK' AND (s.graded_night IS NULL OR DATE_DIFF(c.d, s.graded_night, DAY) < 14))
-     + COUNTIF(s.row_type = 'GUARD' AND (s.last_settle_due_on IS NULL OR s.last_settle_due_on > c.d))
+     + COUNTIF(s.row_type = 'GUARD' AND (s.last_settle_due_on IS NULL OR s.last_settle_due_on > c.a))
      + IF(COUNTIF(s.row_type = 'FAMILY_WEEK') = 0 AND MAX(c.n_fw) > 0, 1, 0)
 FROM copies k JOIN clocks c USING (clock) LEFT JOIN sc_copies s ON s.copy = k.copy GROUP BY k.copy
 UNION ALL
--- C08 the hint counts what is gradable, and while nothing is, says so with the settle date
+-- C08 the hint counts what is gradable, and while nothing is, says so with the settle date and the
+-- number of decisions written (F4: every night up to the clock's New York date, so the night the
+-- 01:35 New York pass has just written is counted)
 SELECT k.copy, 'C08',
        COUNTIF(s.row_type = 'RULE_HINT' AND COALESCE(s.graded_rows, -1) != c.n_gradable)
      + COUNTIF(s.row_type = 'RULE_HINT' AND c.n_gradable = 0 AND c.n_written > 0
                AND NOT (STARTS_WITH(COALESCE(s.sentence, ''), 'WAIT: no guard decision is old enough to grade yet')
                         AND STRPOS(COALESCE(s.sentence, ''),
-                                   CONCAT('the first one settles on ', CAST(c.next_due AS STRING))) > 0))
+                                   CONCAT('the first one settles on ', CAST(c.next_due AS STRING))) > 0
+                        AND STRPOS(COALESCE(s.sentence, ''),
+                                   FORMAT('the live plan has written %d guard decision(s):', c.n_written)) > 0))
      + COUNTIF(s.row_type = 'RULE_HINT' AND c.n_gradable = 0 AND c.n_written = 0
                AND NOT STARTS_WITH(COALESCE(s.sentence, ''), 'WAIT: the live plan has written no guard decision'))
      + IF(COUNTIF(s.row_type = 'RULE_HINT') = 0, 1, 0)
@@ -675,7 +772,7 @@ checks AS (
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C07')
   -- THE GUARD'S GRADE IS SILENT: an empty GUARD reads as "nothing to grade" when decisions are gradable,
   -- or the youth sentence names the wrong date and Ori waits for a grade that is not coming.
-  UNION ALL SELECT FORMAT('C08 REPORT guard decisions graded today: %d of %d written (first settles %s; 0 expected before then) — the RULE_HINT row counts exactly the gradable ones and, while none is, says so with the settle date',
+  UNION ALL SELECT FORMAT('C08 REPORT guard decisions graded today: %d of %d written (first settles %s; 0 expected before then) — the RULE_HINT row counts exactly the gradable ones and, while none is, says so with the settle date and the count written',
                           (SELECT n_gradable FROM live_counts), (SELECT n_written FROM live_counts),
                           COALESCE((SELECT next_due FROM live_counts), 'n/a')),
          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'LIVE' AND chk = 'C08')
@@ -766,6 +863,32 @@ checks AS (
   UNION ALL SELECT 'C11a NEGATIVE CONTROL C11 FIRES: a group WAIT that names neither short group (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C11W' AND chk = 'C11') >= 1, 0, 1)
   UNION ALL SELECT 'C11b NEGATIVE CONTROL C11 FIRES: a KEEP that opens with the total graded, the old sentence (moved clock)', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C11K' AND chk = 'C11') >= 1, 0, 1)
   UNION ALL SELECT 'C13a NEGATIVE CONTROL C13 FIRES: the 2026-10-03 band with its expired-clock release counted back in, as 46ae335 counted it', IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_C13' AND chk = 'C13') >= 1, 0, 1)
+  -- F4 (2026-10-03): the two clocks, each held at its own boundary. PASS needs all three: the wrong
+  -- clock fires; the right clocks at the same boundary read 0 on every check the function's output
+  -- carries (C01-C04, C06-C09, C11, C13); and the boundary is real (emptiness term).
+  UNION ALL SELECT FORMAT('F4a NEGATIVE CONTROL C04 FIRES: the Los Angeles date as the only clock (the pre-F4 view) at the NIGHT boundary, nights %t / settle dates %t, where the latest night written (%t) is 14 days old on the New York date and 13 on the Los Angeles one (the two-clock copy reads %d; the pre-F4 copy %d on C04)',
+                          d_night, a_night, n_last,
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NIGHT' AND chk IN ('C01', 'C02', 'C03', 'C04', 'C06', 'C07', 'C08', 'C09', 'C09T', 'C11', 'C13')),
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4N' AND chk = 'C04')),
+         IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4N' AND chk = 'C04') >= 1, 0, 1)
+       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NIGHT' AND chk IN ('C01', 'C02', 'C03', 'C04', 'C06', 'C07', 'C08', 'C09', 'C09T', 'C11', 'C13'))
+       + IF(COALESCE((SELECT COUNTIF(graded_night = n_last) > 0 FROM exp_fw WHERE clock = 'NIGHT'), FALSE), 0, 1)
+  UNION ALL SELECT FORMAT('F4b NEGATIVE CONTROL C08 FIRES: the New York date as the only clock at the SETTLE boundary, nights %t / settle dates %t, where the first settle date (%s) is the New York date: decisions graded before the judge calls their window settled (%d written, %d gradable on the Los Angeles date; the two-clock copy reads %d; the New York-only copy grades %s and reads %d on C08)',
+                          d_settle, a_settle, COALESCE((SELECT CAST(next_due AS STRING) FROM clocks WHERE clock = 'SETTLE'), 'none'),
+                          (SELECT n_written FROM clocks WHERE clock = 'SETTLE'), (SELECT n_gradable FROM clocks WHERE clock = 'SETTLE'),
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'SETTLE' AND chk IN ('C01', 'C02', 'C03', 'C04', 'C06', 'C07', 'C08', 'C09', 'C09T', 'C11', 'C13')),
+                          COALESCE((SELECT CAST(MAX(graded_rows) AS STRING) FROM sc_settle_ny WHERE row_type = 'RULE_HINT'), 'none'),
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4S' AND chk = 'C08')),
+         IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4S' AND chk = 'C08') >= 1, 0, 1)
+       + (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'SETTLE' AND chk IN ('C01', 'C02', 'C03', 'C04', 'C06', 'C07', 'C08', 'C09', 'C09T', 'C11', 'C13'))
+       + IF(COALESCE((SELECT n_gradable = 0 AND n_written > 0 AND next_due = d_settle FROM clocks WHERE clock = 'SETTLE'), FALSE), 0, 1)
+  UNION ALL SELECT FORMAT('F4c NEGATIVE CONTROL C08 FIRES: the Los Angeles date as the only clock (the pre-F4 view) at the SETTLE boundary, which leaves out the night the 01:35 New York pass wrote (%d decision(s) written to %t, %d to %t; the pre-F4 copy reads %d on C08)',
+                          (SELECT n_written FROM clocks WHERE clock = 'SETTLE'), d_settle,
+                          (SELECT n_written FROM clocks WHERE clock = 'YOUNG'), d_young,
+                          (SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4W' AND chk = 'C08')),
+         IF((SELECT COALESCE(SUM(n), 0) FROM v WHERE copy = 'NC_F4W' AND chk = 'C08') >= 1, 0, 1)
+       + IF(COALESCE((SELECT s.n_written > y.n_written FROM clocks s CROSS JOIN clocks y
+                      WHERE s.clock = 'SETTLE' AND y.clock = 'YOUNG'), FALSE), 0, 1)
 )
 SELECT check_name, violations, IF(violations = 0, 'PASS', 'FAIL') AS result
 FROM checks

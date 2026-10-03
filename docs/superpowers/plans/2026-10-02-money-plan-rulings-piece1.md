@@ -508,7 +508,7 @@ each with its own check and negative control.
 - [x] **F3 GRACE sentence.** State the anchored rule: "grace lasts N nightly judgments (the window length
   in force when it was granted, <date>) through <date>" — not "ONE quiet window (P-5)" while granting 7
   nights on a 3-day window.
-- [ ] **F4 the scorecard's clock.** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` date nights on the New York
+- [x] **F4 the scorecard's clock.** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` date nights on the New York
   date that keys `as_of` since Task 6; fix the view description that still says "below 10".
 - [ ] **F5 spec P-7.** Restate P-7's "ties by clicks" to point at P-20 (zero-score candidates by money
   burned, then clicks).

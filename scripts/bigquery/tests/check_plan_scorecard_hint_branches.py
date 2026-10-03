@@ -69,10 +69,13 @@ def function_body(path):
     return text[i + 4:].rstrip().rstrip(";")
 
 
+# the function's two parameters (F4, 2026-10-03): grade_date dates nights (New York), ads_date reads
+# settle dates and ads days (Los Angeles); one whole day here, so both carry it
 HEADER = """DECLARE grade_date DATE DEFAULT DATE '2026-10-31';
+DECLARE ads_date DATE DEFAULT DATE '2026-10-31';
 CREATE TEMP TABLE base AS
 SELECT p.* FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
-WHERE p.is_live_plan AND p.last_day_strong IS NOT NULL AND p.settle_due_on <= grade_date
+WHERE p.is_live_plan AND p.last_day_strong IS NOT NULL AND p.settle_due_on <= ads_date
   AND p.verdict IN ('GOOD', 'LOSING', 'NO_SALE', 'ONE_ORDER');
 CREATE TEMP TABLE outc AS
 SELECT b.as_of, b.campaign_id, b.keyword_id,
@@ -81,7 +84,7 @@ SELECT b.as_of, b.campaign_id, b.keyword_id,
 FROM base b
 LEFT JOIN `onyga-482313.OI.FACT_AMAZON_ADS` f
   ON f.campaign_id = b.campaign_id AND f.keyword_id = b.keyword_id
- AND f.date BETWEEN b.window_from AND b.window_to AND f.date < grade_date
+ AND f.date BETWEEN b.window_from AND b.window_to AND f.date < ads_date
 GROUP BY b.as_of, b.campaign_id, b.keyword_id, b.family_bar;
 CREATE TEMP TABLE pool AS
 SELECT b.*, o.good,

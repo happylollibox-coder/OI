@@ -1,17 +1,39 @@
 -- =============================================================================================
--- FN_PLAN_SCORECARD(grade_date DATE) — v27.154 (2026-10-01; follow-up the same day: the hint's
+-- FN_PLAN_SCORECARD(grade_date DATE, ads_date DATE) — v27.166 (2026-10-03, piece-1 follow-up F4:
+-- two clocks, see TWO CLOCKS below); v27.154 (2026-10-01; follow-up the same day: the hint's
 -- per-group minimum, and the rule read from each plan row — see THE RULE and THE HINT below; second
 -- follow-up, 2026-10-01 LA / 10-02 UTC, after commit 46ae335: the band leaves out releases whose hold clock had run out, and the reason
 -- given for MIN_GROUP_ROWS = 10 is restated to what was computed): the
 -- T+14 grade of the next-week money plan (plan Task 5, first half; spec §5, P-9, P-13, P-14b/c).
--- V_PLAN_SCORECARD is this function at CURRENT_DATE('America/Los_Angeles'); the acceptance calls
--- it with the clock moved forward so
+-- V_PLAN_SCORECARD is this function at (CURRENT_DATE('America/New_York'),
+-- CURRENT_DATE('America/Los_Angeles')); the acceptance calls it with the clock moved forward so
 -- the guard's arithmetic is exercised on real decisions before the first one settles. There is no
 -- second implementation to drift (the FN_TARGET_BID_SHADOW / V_TARGET_BID_SHADOW pattern).
 --
+-- TWO CLOCKS (piece-1 follow-up F4, 2026-10-03; spec P-24). FACT_PLAN_NEXT_WEEK.as_of is the New
+-- York date since SP_BUILD_NEXT_WEEK_PLAN v27.160; ads days, and so settle_due_on (window_to + 7 for
+-- SP, + 14 for SB), are Los Angeles days. The judge reads them the same way (today_plan on New York,
+-- today_la for `settled` and the hold's clock).
+--   grade_date  the New York date NIGHTS are dated on: a plan night is graded once it is
+--               settle_days_max days old on it, and the rule in force and the decisions written are
+--               read from nights up to it.
+--   ads_date    the Los Angeles date ADS DAYS are read on: a guard decision is graded once ads_date
+--               has reached its settle_due_on (the judge's `settled`), the next settle date is the
+--               first one after it, and no FACT_AMAZON_ADS day on or after it is read.
+-- Until F4 the view passed the Los Angeles date as the only clock, so from the 01:35 New York pass
+-- (about 22:35 Los Angeles) until Los Angeles midnight the scorecard read neither the night that pass
+-- had written nor its rule. The acceptance passes each of its clocks as two dates and holds both
+-- clocks with copies at the two boundaries (its header, F4). Measured 2026-10-03 at the clock of
+-- 22:40 Los Angeles 10-02 = 01:40 New York 10-03 (nights 10-03, ads 10-02): the pre-F4 form read 123
+-- guard decisions written (9 held), this function 136 (12 held: the 13 of the 10-03 night), both 0
+-- graded; the New York date alone would have graded 20 there, before the judge's `settled`. With the
+-- same date twice the output equals the pre-F4 function's at that date, row for row (2026-10-02,
+-- 10-03 and 11-02: 17, 21 and 37 rows). Cost inside the F4 acceptance run (uncached): 153.7 to
+-- 199.1 slot-s per call, the view 163.7.
+--
 -- It reads only what the plan WROTE (FACT_PLAN_NEXT_WEEK), the order floor that was in force
 -- (DE_PLAN_CONFIG) and the outcome (FACT_AMAZON_ADS, as read today, restricted to dates before
--- grade_date). Never V_PLAN_WINDOW_JUDGMENT, which re-anchors the moment the ads watermark moves,
+-- ads_date). Never V_PLAN_WINDOW_JUDGMENT, which re-anchors the moment the ads watermark moves,
 -- and never a ceiling view.
 --
 -- FIVE ROW TYPES (one column set; a column a row type does not use is NULL on it):
@@ -68,7 +90,7 @@
 -- either HELD (verdict = 'HELD_UNSETTLED') or LET THROUGH (guard_released_by IS NOT NULL:
 -- LAST_DAY_NOT_STRONG or HOLD_EXPIRED). The grade READS those two published columns; it never
 -- re-derives the guard (the builder's re-derivation vetoed every partition 2026-08-29 .. 09-28).
--- A decision is graded once grade_date has reached its own settle_due_on (window_to + 7 for SP,
+-- A decision is graded once ads_date has reached its own settle_due_on (window_to + 7 for SP,
 -- + 14 for SB). Its SETTLED verdict re-reads THE SAME WINDOW (window_from .. window_to) from
 -- FACT_AMAZON_ADS: good = Ads_orders >= the min_orders DE_PLAN_CONFIG had in force for the row's
 -- calendar_state when the row was built (the latest config row with updated_at <= built_at; the
@@ -90,7 +112,7 @@
 -- here; acceptance C10 goes red on it.
 --
 -- THE HINT (RULE_HINT) is about THE RULE IN FORCE: the multiplier and order minimum on the live
--- plan's latest P-14c night on or before grade_date (published as rule_value / rule_min_orders). It
+-- plan's latest P-14c night on or before grade_date, the New York date (published as rule_value / rule_min_orders). It
 -- reads only graded decisions made under that rule; the others stay in the GUARD rows and are
 -- counted as other_rule_rows. Below MIN_GUARD_ROWS graded decisions it says WAIT and why — with
 -- nothing old enough to grade, it counts the decisions written and names the date the first one
@@ -115,8 +137,9 @@
 -- neither => KEEP_STRONG_DAY_MULT, each sentence leading with the size of the group it argued from.
 -- Nothing here changes the threshold.
 --   MIN_GUARD_ROWS   20   the fewest graded decisions in all the hint will read (the Task C ruling).
---   MIN_GROUP_ROWS   10   the fewest graded rows in EACH group before LOWER / RAISE / KEEP /
---                         NO_CLEAN_SIGNAL. Ori rules on the number. What 10 buys: take a group
+--   MIN_GROUP_ROWS   16   the fewest graded rows in EACH group before LOWER / RAISE / KEEP /
+--                         NO_CLEAN_SIGNAL. Ori ruled 16 on 2026-10-02 (commit b42a6f5); it was 10
+--                         from 2026-10-01, and what follows is the computation he ruled on. What 10 buys: take a group
 --                         whose true wrong-rate is 30%; the chance that it reads "more than half
 --                         wrong" by luck (binomial, exact fractions, computed for the 2nd follow-up) is 5.8% at
 --                         8 rows, 9.9% at 9, 4.7% at 10. 10 is the smallest group size at which the
@@ -152,8 +175,8 @@
 -- Acceptance: scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql, and
 -- scripts/bigquery/tests/check_plan_scorecard_hint_branches.py (this body on doctored plan tables).
 -- =============================================================================================
-CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_PLAN_SCORECARD`(grade_date DATE)
-OPTIONS (description = "v27.154 second follow-up (2026-10-01 LA, after 46ae335): the band the hint compares (the keyword-nights a lower threshold would have held) leaves out releases whose hold clock had run out (hold_expired, as published by the judge, whose CASE names such a release LAST_DAY_NOT_STRONG when its last day was weak) and last days short of the row's own order minimum; at 2026-10-03 the band is 0, not 1. v27.154 follow-up (2026-10-01): RULE_HINT judges the rule in force (the strong_day_mult / strong_day_min_orders stored on the live plan's latest P-14c night) from the graded decisions made under it, and says WAIT, naming the group and its count, until BOTH groups it compares (held; let through by the last-day test with a last day between 1.0x and the row's own multiplier, at least its order minimum, and the hold clock still running) have at least 10 graded rows (Ori rules on the number: a group with a true 30% wrong-rate reads more than half wrong by chance 4.7% of the time at 10 rows but 7.8% at 11, 6.2% at 13 and 5.0% at 15; under 5% at every size from 16 up); each decision is graded against the multiplier stored on its row (frozen 1.5 / 1 for rows written before the columns existed), never a copy kept here. v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions in all or 10 in either group (saying why), else LOWER / RAISE / KEEP_STRONG_DAY_MULT or NO_CLEAN_SIGNAL. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
+CREATE OR REPLACE TABLE FUNCTION `onyga-482313.OI.FN_PLAN_SCORECARD`(grade_date DATE, ads_date DATE)
+OPTIONS (description = "v27.166 (2026-10-03, piece-1 follow-up F4, spec P-24): two clocks. grade_date is the New York date nights are dated on (FACT_PLAN_NEXT_WEEK.as_of is keyed on it since v27.160): a plan night is graded once it is 14 days old on it, and the rule in force and the guard decisions written are read from nights up to it. ads_date is the Los Angeles date ads days are on: a guard decision is graded once ads_date has reached its settle_due_on (the judge's settled), and FACT_AMAZON_ADS is read before it. V_PLAN_SCORECARD passes CURRENT_DATE('America/New_York') and CURRENT_DATE('America/Los_Angeles'); until F4 it passed the Los Angeles date alone, so from the 01:35 New York pass until Los Angeles midnight the night that pass wrote and its rule were not read. min_group_rows is 16 (Ori, 2026-10-02; 10 from 2026-10-01). v27.154 second follow-up (2026-10-01 LA, after 46ae335): the band the hint compares (the keyword-nights a lower threshold would have held) leaves out releases whose hold clock had run out (hold_expired, as published by the judge, whose CASE names such a release LAST_DAY_NOT_STRONG when its last day was weak) and last days short of the row's own order minimum; at 2026-10-03 the band is 0, not 1. v27.154 follow-up (2026-10-01): RULE_HINT judges the rule in force (the strong_day_mult / strong_day_min_orders stored on the live plan's latest P-14c night) from the graded decisions made under it, and says WAIT, naming the group and its count, until BOTH groups it compares (held; let through by the last-day test with a last day between 1.0x and the row's own multiplier, at least its order minimum, and the hold clock still running) have at least min_group_rows graded rows (16 since Ori's ruling of 2026-10-02, 10 before it: a group with a true 30% wrong-rate reads more than half wrong by chance 4.7% of the time at 10 rows but 7.8% at 11, 6.2% at 13 and 5.0% at 15; under 5% at every size from 16 up); each decision is graded against the multiplier stored on its row (frozen 1.5 / 1 for rows written before the columns existed), never a copy kept here. v27.154 (2026-10-01): the T+14 grade of the next-week money plan as of grade_date (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night: one plan night per Sunday-start week, at least 14 days old; allocation = planned_spend_per_day x window_days; net per allocated dollar = SUM(allocation x the keyword's realized net per ad dollar over the window_days days starting on the plan night) / SUM(allocation) — not the draft's SUM(net)/SUM(allocation), which is identical for A and B on the same keywords and so only compared allocation sizes. RECOMMENDATION per family x calendar_state: WAIT below 3 graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan. GUARD per week x outcome class grades every live-plan decision written under P-14c (HELD_UNSETTLED, or guard_released_by set) once its settle_due_on has passed, re-reading the same window: settled good = min_orders in force at built_at and gross profit per ad dollar >= family_bar; classes HELD_RIGHT/HELD_WRONG/RELEASED_RIGHT/RELEASED_WRONG with settled spend, net and last-day return quantiles. RULE_HINT: WAIT below 20 graded decisions in all or min_group_rows (16) in either group (saying why), else LOWER / RAISE / KEEP_STRONG_DAY_MULT or NO_CLEAN_SIGNAL. Reads what the plan wrote, never re-derives the guard. SOP: architecture/NEXT_WEEK_MONEY.md §6.")
 AS
 WITH k AS (
   SELECT 3    AS min_windows,
@@ -202,7 +225,7 @@ after_rec AS (
     ON f.campaign_id = a.campaign_id
    AND f.keyword_id  = a.keyword_id
    AND f.date BETWEEN a.as_of AND a.d_to
-   AND f.date < grade_date
+   AND f.date < ads_date
   GROUP BY 1, 2, 3
 ),
 joined AS (
@@ -328,7 +351,7 @@ guard_written AS (
     AND p.as_of <= grade_date
 ),
 guard_due AS (
-  SELECT * FROM guard_written WHERE settle_due_on <= grade_date
+  SELECT * FROM guard_written WHERE settle_due_on <= ads_date      -- an ads date: the Los Angeles clock
 ),
 cfg_active AS (
   SELECT calendar_state, min_orders
@@ -360,7 +383,7 @@ guard_rec AS (
     ON f.campaign_id = a.campaign_id
    AND f.keyword_id  = a.keyword_id
    AND f.date BETWEEN a.window_from AND a.window_to
-   AND f.date < grade_date
+   AND f.date < ads_date
   GROUP BY 1, 2, 3, 4
 ),
 guard_cls AS (
@@ -459,7 +482,7 @@ pending AS (
          COUNTIF(decision = 'HELD')                               AS held_w,
          COUNTIF(decision = 'RELEASED')                           AS released_w,
          MIN(as_of)                                               AS first_written,
-         MIN(IF(settle_due_on > grade_date, settle_due_on, NULL)) AS next_due
+         MIN(IF(settle_due_on > ads_date, settle_due_on, NULL))   AS next_due
   FROM guard_written
 ),
 hint AS (
