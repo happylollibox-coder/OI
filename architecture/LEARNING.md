@@ -5,10 +5,11 @@ rulings D1–D6 and the evidence behind them in §14)
 **Plan:** `docs/superpowers/plans/2026-10-03-learning-piece2-ledger-grader.md` (Tasks 1..8)
 **Doctrine:** `architecture/THREE_LAYERS.md` §6 (every layer gets better on its own; the Brain keeps
 the ledger)
-**Status:** Task 1 (2026-10-03) wrote this SOP before any code. Nothing below is deployed yet: the
-settings are Task 2, the freeze Task 3, the ledger Task 4, the grader and the report card Task 5, the
-schedule and the health checks Task 6, the contract suite Task 7. Each task appends its own entry
-to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
+**Status:** Task 1 (2026-10-03) wrote this SOP before any code. Task 2 (2026-10-03) seeded the
+LEARNING settings (§3; §10 "Task 2"). Nothing else below is deployed yet: the freeze is Task 3, the
+ledger Task 4, the grader and the report card Task 5, the schedule and the health checks Task 6, the
+contract suite Task 7. Each task appends its own entry to §10 "Deploy and verify" and corrects any
+sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
 > nothing* and *if you upload the plan* — and once the days they forecast have settled, both are
@@ -170,8 +171,10 @@ pred_gp     = pred_orders × GP per order
 
 **The settings.** All in `DE_COACH_THRESHOLDS` under `strategy_id = 'LEARNING'`, `coach_mode =
 'GUARDIAN'`, `product_family = NULL`, seeded by `scripts/bigquery/migrations/2026-10-03_learning_settings.sql`
-(Task 2) and recorded by `FACT_THRESHOLD_HISTORY`. Never a literal in a view. The seeds are declared
-constants (Ori's rulings of 2026-10-03); where one came from a measurement, the spec names the query.
+(Task 2) and recorded by `FACT_THRESHOLD_HISTORY`; `scripts/bigquery/tests/LEARNING_SETTINGS_acceptance.sql`
+checks the scope, the history and the seed values. Never a literal in a view. The seeds are declared
+constants (Ori's rulings of 2026-10-03); where one came from a measurement, the spec's §14 or §10
+"Task 2" below names the query, and each row's `description` names its source.
 
 | key | symbol | seed | read by | what it does |
 |---|---|---|---|---|
@@ -347,8 +350,8 @@ Each step needs the one before it. Big files go up with their comment lines stri
 Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wait JOB 60`.
 
 1. **Settings** (Task 2): `scripts/bigquery/migrations/2026-10-03_learning_settings.sql` (inserts only
-   missing keys; never deletes or updates), then `CALL SP_SNAPSHOT_THRESHOLDS()` once so the history
-   holds them.
+   missing keys; never deletes or updates; its last statement is `CALL SP_SNAPSHOT_THRESHOLDS()`, so
+   the history holds them), then `scripts/bigquery/tests/LEARNING_SETTINGS_acceptance.sql`.
 2. **The freeze** (Task 3): `scripts/bigquery/migrations/2026-10-03_plan_builder_version.sql` (the
    column), then `SP_BUILD_NEXT_WEEK_PLAN.sql` (the guard and `builder_version`).
 3. **The ledger** (Task 4): `scripts/bigquery/views/V_PREDICTION_LEDGER.sql`.
@@ -477,3 +480,77 @@ text at 16:54 UTC (998,673 bytes; the 10-03 partition as built at 16:34:13 UTC):
 value E8 already quoted is unchanged; `REAL` cap term 367 of 369, factor equal to the cap's 369, cap
 binds 3 and removes $6.17, the same as the recommended form; `NC` 367, 369, 4, $36.82; `NC2` 366, 368,
 the recommended form $35.39 against the cap's $36.82, the example $10.48 a day against $10.00.
+
+### Task 2 — the LEARNING settings seeded (2026-10-03)
+
+**Deployed.** `scripts/bigquery/migrations/2026-10-03_learning_settings.sql`, run 2026-10-03 at
+17:05 UTC with its comment lines stripped (`--nosync`, polled). Its INSERT wrote 12 rows to
+`DE_COACH_THRESHOLDS` — `strategy_id = 'LEARNING'`, `coach_mode = 'GUARDIAN'`, `product_family`
+NULL, `source = 'SEED'`, `updated_by = 'learning-piece2'`, `updated_at` 2026-10-03 17:05:12 UTC,
+the values of §3's table — and its closing `CALL SP_SNAPSHOT_THRESHOLDS()` appended 12 `ADDED`
+events to `FACT_THRESHOLD_HISTORY` at `snapshot_at` 2026-10-03 17:05:15 UTC and nothing else: no
+other rule row differed from its last event (the history held only the 2026-10-02 10:55:45 UTC seed). Run a second time at 17:05:48 UTC:
+both statements 0 rows. The settings exist from 17:05:15 UTC on 2026-10-03; the twelve stored
+nights were all built before it (the latest, 10-03, at 16:34:13 UTC), which is §3's open question
+for Task 4. `config.yaml`: the `DE_COACH_THRESHOLDS` entry names the LEARNING scope and its readers,
+lists the migration in `source_files`, and says the DDL file's re-seed (`DELETE WHERE TRUE`) does not
+carry these rows. The DDL file itself is unchanged, as it was for the INTENT migrations.
+
+**Checked.** `scripts/bigquery/tests/LEARNING_SETTINGS_acceptance.sql` (new): S1 every key once
+under exactly that scope and no LEARNING row elsewhere; S2 each key's latest history event exists,
+is not REMOVED and carries the live value; S3 a row still as the migration wrote it holds its seed
+value and a description naming its source. Before the migration (17:04 UTC) the three LIVE rows read
+12 violations each (FAIL): none passes on an empty seed. After it (17:06 UTC) all 14 rows PASS: S1,
+S2, S3 LIVE 0; the controls, each on a doctored TEMP copy, fired with NC_EMPTY 12 / 12 / 12,
+NC_S1_BLITZ (the plan's control: `MIN_INVEST_MIN_ROWS` under `coach_mode = 'BLITZ'`) 2,
+NC_S1_FAMILY 2, NC_S1_DUP 1, NC_S2_UNSNAPPED 1, NC_S2_REMOVED 1, NC_S2_STALE 1, NC_S3_VALUE 1,
+NC_S3_NODESC 1. 19.8 slot-seconds, 0.18 MB. `THRESHOLD_HISTORY_acceptance.sql` run as written
+after the seed (17:06–17:08 UTC): 17 rows PASS, C01 over 194 coach rows and 3 plan rows, C06 and C07 over
+the new rows; 446.3 slot-seconds, 104 s; its `TMP_THIST_*` tables dropped.
+
+**Two seeds re-measured at deploy** (the other ten are the spec's or the rulings' constants, and
+`BID_TO_CPC_RATIO_FALLBACK` is spec §14 E4's Q3):
+
+- `SETTLE_HORIZON_DAYS` 14 — the first age at which `V_PLAN_SETTLE_COMPLETION.sales_completion`
+  reads 1.0 on both channels. Read 17:00 UTC: SP first complete at 14 (13 reads 0.99), SB at 11.
+
+  ```sql
+  SELECT channel,
+         MIN(IF(sales_completion >= 1.0, age_days, NULL)) AS first_age_complete,
+         MAX(IF(sales_completion <  1.0, age_days, NULL)) AS last_age_incomplete,
+         ROUND(MAX(IF(age_days = 13, sales_completion, NULL)), 4) AS c13,
+         ROUND(MAX(IF(age_days = 14, sales_completion, NULL)), 4) AS c14
+  FROM `onyga-482313.OI.V_PLAN_SETTLE_COMPLETION`
+  GROUP BY channel ORDER BY channel;
+  ```
+
+- `OWN_CVR_MIN_CLICKS` 30 — per stored night, the plan's keywords whose latest
+  `FACT_KEYWORD_STATE_HISTORY` snapshot captured at or before `built_at` has `settled_clk90 >= 30`.
+  Read 17:00 UTC (19.2 slot-seconds): 180 of 361 on each night 09-28 … 10-02 (the brief's figure),
+  180 of 356 on 10-03, 182–183 of 373–376 on 08-24 … 08-28, and **0 of 365 on 08-23 — no snapshot
+  existed**: the history's first `captured_at` is 2026-08-24 21:22:53 UTC, after the 08-23 night's
+  `built_at` (2026-08-24 05:34:19 UTC); its `snapshot_date`s reach back to 08-17 because they were
+  backfilled. For Task 4: on the 08-23 night no keyword has an own rate "at `built_at`".
+
+  ```sql
+  WITH nights AS (
+    SELECT as_of, MIN(built_at) AS built_at
+    FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE plan = 'B' GROUP BY as_of
+  ),
+  keys AS (
+    SELECT DISTINCT p.as_of, n.built_at, p.campaign_id, p.keyword_id
+    FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p JOIN nights n USING (as_of)
+    WHERE p.plan = 'B'
+  ),
+  snap AS (
+    SELECT k.as_of, k.campaign_id, k.keyword_id,
+           ARRAY_AGG(h.settled_clk90 ORDER BY h.captured_at DESC LIMIT 1)[SAFE_OFFSET(0)] AS clk90
+    FROM keys k
+    LEFT JOIN `onyga-482313.OI.FACT_KEYWORD_STATE_HISTORY` h
+      ON h.campaign_id = k.campaign_id AND h.keyword_id = k.keyword_id AND h.captured_at <= k.built_at
+    GROUP BY 1, 2, 3
+  )
+  SELECT as_of, COUNT(*) AS keys, COUNTIF(clk90 >= 30) AS keys_ge_30,
+         COUNTIF(clk90 IS NULL) AS keys_no_snapshot
+  FROM snap GROUP BY as_of ORDER BY as_of;
+  ```
