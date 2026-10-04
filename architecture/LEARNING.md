@@ -2032,3 +2032,131 @@ CROSS JOIN UNNEST([GREATEST(p.as_of, DATE_ADD(DATE(p.built_at, 'America/Los_Ange
 and `FN_PLAN_SCORECARD` name the completed suite and the harness; it parses. SOP: this file's status
 line, §4 ("Fixtures", corrected: copies only; "The piece-0 scorecard keeps its own clock") and §7
 step 6; the spec's §11 check 5 notes where checks 3 and 5 run.
+
+### The first scheduled night — v27.171's 10-04 night, its frozen second pass, the grader on the schedule (2026-10-04)
+
+**Nothing deployed, nothing written to a real table**; read 13:45–14:15 UTC. No job of this check wrote
+to a table of `OI` (the harnesses' copies are script temp tables).
+
+**The night.** The 05:00 UTC pass (`scheduled_query_6ae57c7c-0000-22ee-9d31-14223bcad6e2`) ran
+`SP_BUILD_NEXT_WEEK_PLAN` 05:29:07–05:30:43 UTC, OK, 95 s: `FACT_PLAN_NEXT_WEEK` `DELETE` 0 then
+`INSERT` 712, `T_PLAN_BUILD_JUDGMENT` `DELETE` 0 then `INSERT` 356. The night: 712 rows, one `built_at`
+05:30:18.102798 UTC — 22:30 Los Angeles on 10-03, *before* Los Angeles midnight of its `as_of`, an
+on-time first write — `builder_version` v27.171 on every row. Its record (Task 3 follow-up 2's query):
+one row, `as_of` 10-04, `built_at` equal to the night's to the microsecond, v27.171, 356 saved rows,
+window 09-29 … 10-01 (`as_of` − 3). No write to either table since (`JOBS_BY_PROJECT`, read to 14:10 UTC).
+
+**The 07:35 UTC pass froze it.** `scheduled_query_6b138a5c-0000-2f31-addf-34c7e9085523` ran the builder
+08:09:42–08:09:43 UTC: OK, 1 s, two child jobs (both `SELECT`, 0.1 slot-seconds), no DML. Its line, the
+result of child job `script_job_218a5243842b97320c0bca822faac583_494` (`bq --location=US head -j JOB`):
+
+> FROZEN: partition 2026-10-04 was written at 2026-10-04 05:30:18 UTC; its first day has begun; not
+> rewritten (D2 (c): a night is final once Los Angeles midnight of its as_of has passed; the Los
+> Angeles date is 2026-10-04)
+
+**That line is recorded nowhere durable.** `LOG_PIPELINE_RUNS` has no message column (the row reads OK,
+`error_message` NULL, 1 s). Task 20.8c's `log_message` and the builder's are `SELECT` results of child
+jobs of the scheduled script, kept only in each child job's anonymous result table, which expires 24
+hours after the job (this one 2026-10-05 08:09:43 UTC). `JOBS_BY_PROJECT` keeps the child job for 180
+days, with the `FORMAT(…)` statement but not its values; the transfer run's log holds five lines, none
+of them the script's output (`Summary: succeeded 1 jobs, failed 0 jobs.`). After 24 hours a frozen pass
+is evidenced only indirectly: a child job whose query is the FROZEN `SELECT`, an OK in about a second,
+and no DML on the two tables. (Plan Task 8's "logs FROZEN, writes nothing" is thereby shown on a
+scheduled pass; the seat-request append after it was not checked.)
+
+```sql
+-- the child job that selected the FROZEN line; within 24 h of creation_time: bq --location=US head -j JOB_ID
+SELECT job_id, parent_job_id, creation_time
+FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE creation_time BETWEEN TIMESTAMP '2026-10-04 05:00:00+00' AND TIMESTAMP '2026-10-04 08:30:00+00'
+  AND STRPOS(query, 'FROZEN: partition') > 0 AND parent_job_id IS NOT NULL;
+```
+
+**The suite.** `FACT_PLAN_NEXT_WEEK_acceptance.sql`, comment lines stripped (SHA-256 prefix
+`d3f1bb677faf`), `--nosync`, job `p2v_acc_live_1791121623`, 13:47:05–13:47:17 UTC: 39 rows, every one
+PASS — C13 0, F1 0 and F2 0 for the first time on the real table. 2,026.5 slot-seconds, 195,289,897
+bytes processed (241,172,480 billed).
+
+**The three harnesses, defaults** (submitted together at 13:47 UTC; clock and seat `--submit`, polled,
+`--collect`):
+
+| harness | job | exit | LIVE | assertions | slot-seconds | ran (UTC) | bytes processed |
+|---|---|---|---|---|---|---|---|
+| clock | `bqjob_r730f81050fb2532c_000001a1072b424b_1` | **1** | 41 readings, all 0 | 33 ok, **1 BAD** | 11,217.8 | 13:47:18–13:52:59 | 1,221,331,845 |
+| seat | `bqjob_r48e54dd0f8e623ec_000001a1072b6451_1` | **1** | 52 readings, all 0 | 63 ok, **1 NOT EXERCISED** | 15,417.2 | 13:47:27–14:02:50 | 2,451,344,069 |
+| money | `bqjob_r1a8e9973d54a125a_000001a1072b86e0_1` | 0 | 39 readings, all 0 | 28 ok | 1,888,544.8 | 13:47:40–14:09:53 | 815,096,350 |
+
+- **Clock, on the real night** (pick: `f_as_of` 10-04, `f_built_at` 05:30:18.102798, `f_n` 712, its
+  `DELETE` and `INSERT` on record, `bj_n` 356). As expected: NC_EMPTY C13 2, F1 1, F2 1; all eight
+  NC_C13_* copies C13 1, no other check moved; NC_F1_WRITE_NOT_ON_RECORD F1 1;
+  HC_F1_REWRITE_BEFORE_MIDNIGHT F1 0, F2 0; NC_F1_REWRITE_AT_MIDNIGHT F1 1; NC_F2_NULL F2 2;
+  NC_F2_STALE_VERSION F2 1; the C01 and K copies as before.
+- **BAD: NC_F1_SECOND_WRITE_AFTER_MIDNIGHT, F1 0, expected 1** (the plan's F1 control). The copy records
+  the night's `DELETE` as removing its 712 rows and keeps the write's stamp. F1 counts a rewrite only
+  when `built_at >= TIMESTAMP(as_of, 'America/Los_Angeles')`; this night was written at 22:30 Los Angeles
+  on 10-03, so the doctored record is a rewrite *before* midnight, which D2 (c) allows, and F1 0 is the
+  right reading. The copy held on Task 3's simulated pass only because that write was stamped 10:44 Los
+  Angeles on its `as_of`. On every night the 05:00 UTC pass writes on time it tests nothing; the
+  after-midnight leg is still exercised by NC_F1_REWRITE_AT_MIDNIGHT (F1 1). **Not fixed here:** the copy
+  must also restamp the write after Los Angeles midnight of its `as_of` (or its expectation follow the
+  stamp), and until then the clock harness exits 1 on every night written on time.
+- **Seat:** every exercised copy as expected. NOT EXERCISED: NC_T2_RETURN_RENUMBERED (`ret_rn` NULL — no
+  seated keyword of the 10-04 night had no seat on 10-03 and holds its most recent earlier seat number
+  tonight). A data condition, not a check failure; the script exits 1 on it by design.
+- **Money: exit 0.** One copy is 95% of its cost: HC_C16_UPLOADS_LANDED 1,800,141.2 slot-seconds and 974
+  s (next, NC_M2_RAMPED_OFF 30,057.5). The same copy was 786,140.7 of the 2026-10-03 18:47 UTC run's
+  949,116.0 (and 50,072.9 in run `bqjob_r25bd2d6619db3273_000001a1019bf35c_1` earlier that day), so it is
+  the increase Task 3 follow-up 2 left unattributed. Why that copy costs so much was not measured.
+
+**The grader's first scheduled runs** (Task 6's two queries, and the one below). `SP_GRADE_PREDICTIONS`
+logged OK 05:31:23–05:32:33 UTC (70 s) and 08:10:27–08:15:24 UTC (296 s). Their lines (child jobs
+`script_job_e0e08b675a09318ae2d93fce30876753_610` and `script_job_99bdeaeaaf8e5465391e53b535343844_556`,
+readable for 24 hours): `SP_GRADE_PREDICTIONS v27.175 completed: watermark 2026-10-03 (FN_ADS_ANCHOR_CAP
+2026-10-03), SETTLE_HORIZON_DAYS 14; 0 ledger rows due, 0 inserted (0 first grades, 0 re-grades)`, every
+label and applied count 0, `T_PREDICTION_SCORECARD 357 rows; 68 seconds` (the second: `295 seconds`).
+**Rows inserted: 0 and 0.** `FACT_PREDICTION_GRADE` still holds 17,888 rows from two `graded_at` (the
+latest 2026-10-03 21:31:28 UTC), highest `regrade_seq` 1, no `FIXTURE` row; the card 357 rows,
+`scored_at` 08:10:27 UTC. **Cost:** 44 child jobs each; 280.8 and 414.7 slot-seconds; 577,765,376 bytes
+billed each. The board's snapshots (`FACT_ENGINE_HEALTH_HISTORY`, 05:43:42 and 08:35:25 UTC):
+`prediction_grades_fresh` GREEN 0 (`0 of 8944 ledger rows past due have no grade · watermark 2026-10-03 …
+10068 ledger rows not yet past due, the next when the watermark reaches 2026-10-18` — Task 6's 8,644
+plus the 10-04 night's 1,424 ledger rows, counted in `V_PREDICTION_LEDGER`); `prediction_regression` INFO 0 (YOUNG, 1 of 6 windows graded, both
+plans); `response_model_unverified` INFO 0 (Task 6's counts).
+
+**Why 296 s and not 70: one statement, not the work.** `CREATE TEMP TABLE _cur0` (each prediction's
+current grade, from `FACT_PREDICTION_GRADE`: 17,888 rows read, 8,944 written, 1,237,000 bytes both times)
+ran 1.1 s and 7.3 slot-seconds in the first run and 225.9 s and 142.3 slot-seconds in the second
+(`script_job_a8ffa775675cf289be0d13c89f2a13df_527`): its input, sort and coalesce stages finished within
+0.3 s, then its one-unit output stage waited 122.8 s for a slot (timeline: one unit pending, none
+active) and held it about 81 s for 44 ms of compute. The other 43 statements took 47.6 s and 47.4 s.
+Not the project's load: the project's other jobs averaged 64.5 slots during the first run and 0.1
+during the second. A stall on BigQuery's side in one stage; nothing to change unless it recurs.
+
+```sql
+-- each grader run's child jobs: parent = its pass's scheduled query, inside its LOG_PIPELINE_RUNS window;
+-- other_avg_slots = every other job of the project over the same window (script parents excluded)
+WITH runs AS (
+  SELECT 'pass1' AS run, 'scheduled_query_6ae57c7c-0000-22ee-9d31-14223bcad6e2' AS parent,
+         TIMESTAMP '2026-10-04 05:31:23.281892+00' AS s, TIMESTAMP '2026-10-04 05:32:33.544654+00' AS f
+  UNION ALL SELECT 'pass2', 'scheduled_query_6b138a5c-0000-2f31-addf-34c7e9085523',
+         TIMESTAMP '2026-10-04 08:10:26.984397+00', TIMESTAMP '2026-10-04 08:15:23.947180+00'),
+kids AS (
+  SELECT r.run, COUNT(*) AS child_jobs, ROUND(SUM(x.total_slot_ms) / 1000, 1) AS slot_s,
+         SUM(x.total_bytes_billed) AS bytes_billed,
+         ROUND(SUM(IF(STARTS_WITH(REGEXP_REPLACE(x.query, r'^\s+', ''), 'CREATE TEMP TABLE _cur0'),
+                      TIMESTAMP_DIFF(x.end_time, x.start_time, MILLISECOND), 0)) / 1000, 1) AS cur0_s,
+         ROUND(SUM(IF(STARTS_WITH(REGEXP_REPLACE(x.query, r'^\s+', ''), 'CREATE TEMP TABLE _cur0'),
+                      0, TIMESTAMP_DIFF(x.end_time, x.start_time, MILLISECOND))) / 1000, 1) AS other_statements_s
+  FROM runs r JOIN `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT x
+    ON x.parent_job_id = r.parent AND x.creation_time >= r.s AND x.creation_time < r.f
+  WHERE x.creation_time BETWEEN TIMESTAMP '2026-10-04 05:00:00+00' AND TIMESTAMP '2026-10-04 08:30:00+00'
+  GROUP BY 1),
+load AS (
+  SELECT r.run, ROUND(SUM(t.period_slot_ms) / 1000 / TIMESTAMP_DIFF(r.f, r.s, SECOND), 1) AS other_avg_slots
+  FROM runs r JOIN `region-us`.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT t
+    ON t.period_start BETWEEN r.s AND r.f AND IFNULL(t.parent_job_id, '') != r.parent
+  WHERE t.job_creation_time BETWEEN TIMESTAMP '2026-10-03 20:00:00+00' AND TIMESTAMP '2026-10-04 08:20:00+00'
+    AND IFNULL(t.statement_type, '') != 'SCRIPT'
+  GROUP BY r.run, r.s, r.f)
+SELECT * FROM kids JOIN load USING (run) ORDER BY run;
+```
