@@ -636,7 +636,7 @@ views:
       - V_SRC_AmazonAds_keyword
       - DIM_KEYWORD
       - DIM_BRAND_PHRASES
-      - DE_HOLDOUT_ASSIGNMENT
+      - V_HOLDOUT_ARM
       - V_BOOK_ASSIGNMENT
 
   - name: "V_SB_LAUNCH_CAMPAIGN"
@@ -1482,6 +1482,7 @@ views:
       - T_OOB_SEAT_ECONOMICS
       - T_LIFT_PROBES
       - FACT_ENGINE_PROPOSALS
+      - V_HOLDOUT_ARM
 
   - name: "V_PLAN_SCORECARD"
     description: "v27.166 (2026-10-03, piece-1 follow-up F4, spec P-24): FN_PLAN_SCORECARD(CURRENT_DATE('America/New_York'), CURRENT_DATE('America/Los_Angeles')) -- nights dated on the New York date FACT_PLAN_NEXT_WEEK.as_of is keyed on, settle dates and ads days on the Los Angeles date, the judge's two clocks; until F4 the Los Angeles date alone, so from the 01:35 New York pass until Los Angeles midnight the night that pass wrote and its rule were not read. min_group_rows = 16 (Ori ruled 2026-10-02; was 10). v27.154 second follow-up (2026-10-01 LA, after 46ae335): the band RULE_HINT compares leaves out releases whose hold clock had run out and last days below the order minimum, so it holds only the keyword-nights a lower strong_day_mult would have held (at 2026-10-03: 0 rows, not 1). v27.154 follow-up (2026-10-01): RULE_HINT judges the last-day rule in force (stored on the live plan's latest night) from the decisions made under it, and WAITs, naming the group and its count, until each group it compares (held; let through with a last day between 1.0x and the row's own multiplier) has 10 graded rows; new columns rule_min_orders, held_rows, held_rows_wrong, min_group_rows, other_rule_rows. v27.154 (2026-10-01) — the T+14 grade of the next-week money plan as of today: FN_PLAN_SCORECARD(CURRENT_DATE('America/Los_Angeles')), a thin wrapper (plan Task 5; spec §5, P-9, P-14b/c). GRADE per plan x family x calendar_state and FAMILY_WEEK per family x graded night (A and B side by side): one plan night per Sunday-start week, at least 14 days old; net per allocated dollar = each allocated dollar credited with what one ad dollar on that keyword netted in the window_days days that followed (not the draft's pooled net / allocation, which is the same for A and B on the same keywords and only compared allocation sizes). RECOMMENDATION per family x calendar_state: WAIT below three graded weeks, SWITCH_TO_<shadow> when the shadow beats the live plan by 10% of the live plan's magnitude, else KEEP_<live>; Ori flips DE_PLAN_CONFIG.live_plan, the code never switches. GUARD per week x outcome class grades every P-14c hold and release once its window has settled — held right / held wrong / released right / released wrong, with settled spend, net and last-day return quantiles — reading verdict and guard_released_by as written, never re-deriving the guard. RULE_HINT (one row): WAIT below 20 graded decisions, saying why and when the first settles, else what the grades say about the 1.5x last-day threshold. SOP: architecture/NEXT_WEEK_MONEY.md §6 Grading; acceptance scripts/bigquery/tests/PLAN_SCORECARD_acceptance.sql."
@@ -2846,6 +2847,7 @@ stored_procedures:
       - FACT_ENGINE_PROPOSALS
       - FACT_KEYWORD_GUARD
       - FACT_PANEL_OWNERSHIP
+      - V_HOLDOUT_ARM
 
   - name: "T_ENGINE_PREFLIGHT"
     description: "The judged day of engine instructions — one row per live instruction with own_rank / n_instr / owner_engine / verdict / verdict_reason, plus (v27.81) claim_deferred / claim_owner, the panel-ownership basis for the second exclusion source: claim_deferred is TRUE when FACT_PANEL_OWNERSHIP hands a higher panel a full claim on this campaign, and claim_owner names that owner. Both are published so an audit can tell a CLAIM-based EXCLUDE from a COLLISION-based one without re-deriving either. Rebuilt by SP_ENGINE_PREFLIGHT (orchestrator Task 20.7). Read via V_ENGINE_PREFLIGHT by the EnginePreflight cube and DoPage's export-time refusal check. Spec: architecture/ENGINE_PREFLIGHT.md."

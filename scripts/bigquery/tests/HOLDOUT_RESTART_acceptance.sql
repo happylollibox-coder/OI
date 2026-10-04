@@ -5,7 +5,7 @@
 --     "$(grep -v '^[[:space:]]*--' FILE)"
 -- Each statement returns one row (check_name, violations, detail); parse the multi-statement output
 -- by regex over the {"check_name"...} objects.
--- This file holds K1-K6 (plan Tasks 2-3). K7-K12 are added by plan Task 7.
+-- This file holds K1-K6 (plan Tasks 2-3) and K7 (plan Task 5). K8-K12 are added by plan Task 7.
 -- Objects: scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql, views/V_HOLDOUT_TRIAL.sql,
 --          views/V_HOLDOUT_ARM.sql, migrations/2026-10-05_holdout_t2_registry_rows.sql,
 --          migrations/2026-10-05_holdout_t2_founding.sql. SOP: architecture/HOLDOUT.md §4, §5, §9.
@@ -27,6 +27,18 @@
 --       Violations = (index 5 fails) + (indices 0-4 that pass). An empty cohort reads 1 (index 5 fails).
 --   K6  the gate is T2's arm: the symmetric difference between today's binding rows of V_HOLDOUT_ARM
 --       and T2's HOLDOUT rows, + 1 when T2 has no HOLDOUT row.
+--   K7  no gate reader bypasses the arm: references to the table DE_HOLDOUT_ASSIGNMENT (any quoting,
+--       with or without the project) in every deployed view and routine body of OI, comment text
+--       removed, per object against its expected count: V_HOLDOUT_ARM 1, V_HOLDOUT_READOUT 1,
+--       V_ENGINE_HEALTH 1 (c33 hu_asg), SP_ASSIGN_HOLDOUT 3 (the guard, assigned, INSERT INTO), every
+--       other object 0. An expected object that is not deployed counts 0, so it is off its count.
+--       Violations = objects off their count. TMP_HT2_ scratch objects are left out.
+--       K7b (shell, the three tools have no deployed body), each must print 0:
+--         for f in tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py \
+--                  tools/build_seat_moves_bulksheet.py; do grep -c 'DE_HOLDOUT_ASSIGNMENT' $f; done
+--       Run after Task 6 is deployed: until V_ENGINE_HEALTH reads V_HOLDOUT_ARM, K7 reads 1 (it
+--       holds 3 references, expected 1). Comment text is removed from '--' to the end of the line,
+--       so a reference on the same line after a '--' inside a string literal would not be counted.
 --
 -- MEASURED 2026-10-04 ~03:20-03:35 UTC (LA date 2026-10-03), rehearsal on TMP_HT2_ copies, all
 -- dropped afterwards. Copies: DE_HOLDOUT_TRIAL from its DDL; DE_HOLDOUT_ASSIGNMENT by COPY of the
@@ -71,6 +83,72 @@
 --   K2 NC = review fix 3's hazard: the deployed (trial-1) procedure body under this branch's
 --     V_HOLDOUT_ELIGIBLE appended the 5 Bunny campaigns to trial 1                 1 / 1 (74 rows)
 --     (the same body under the deployed view appended 0)
+--
+-- PLAN TASK 5 REHEARSAL, 2026-10-04 ~04:20-04:40 UTC (LA date 2026-10-03). SP_ENGINE_PREFLIGHT,
+-- V_PLAN_WINDOW_JUDGMENT and V_FAMILY_SEAT_REGISTER from this branch, comment lines stripped, names
+-- sed-pointed at TMP_HT2_ copies; all dropped afterwards (INFORMATION_SCHEMA: 0 TMP_HT2_ tables, 0
+-- routines). Copies: registry from its DDL and the rows file (3 rows); assignment by COPY of the
+-- live table plus the founding file (T1 69 rows / 14 HOLDOUT, T2 59 / 12); V_HOLDOUT_TRIAL and
+-- V_HOLDOUT_ARM with CURRENT_DATE('America/Los_Angeles') pinned to 2026-10-05 (12 rows, all T2,
+-- gate 2026-10-05 .. 2027-01-26). Before the edit the deployed bodies matched the repo files:
+-- the procedure body and description byte for byte (the file adds the ';' after END), the two views
+-- apart from their comment lines and the final ';'. Slot time is of one read of the view into a
+-- temp table (CREATE TEMP TABLE AS SELECT *).
+--   holdout campaigns returned (distinct campaign_id with holdout TRUE):
+--     V_PLAN_WINDOW_JUDGMENT live            8, all T1 (eligible_from 2026-09-01); 6 T1 controls have no row
+--       copy, arm pinned 10-05               holdout_member 10, all T2 (gate_from 2026-10-05); holdout 0,
+--                                            because the view's own date (LA 10-03) is before the gate
+--       copy, arm and d_la pinned 10-05      holdout 10 = holdout_member 10, all T2; T1-only 0
+--     V_FAMILY_SEAT_REGISTER live            9, all T1 (2026-09-01); 5 T1 controls have no row
+--       copy, arm pinned 10-05               9, all T2 (2026-10-05); T1-only 0
+--     In every copy: no T1 control flagged, no non-control flagged, and every T2 control that has a
+--     row is flagged. The T2 controls with no row (judgment 273898143987321, 27660342907703;
+--     register 271009556929636, 273898143987321, 527422818407259) have no row in the live views
+--     either: per-campaign row counts of all 26 controls are equal in the live and copied register.
+--   the swap alone changes nothing: copies over an arm holding trial 1 only (TMP assignment
+--     without the founding rows, registry date not pinned: 14 rows, gate 2026-09-01 .. 2026-10-04)
+--     V_FAMILY_SEAT_REGISTER   346 = 346 rows, 0 / 0 rows differ, fingerprint 455831110707240095 both
+--     V_PLAN_WINDOW_JUDGMENT   356 = 356 rows, 0 differing values in every column with FLOAT64
+--       compared to 1e-6 relative; compared exactly, 69 rows differ from the live view, and 58 rows
+--       differ between two reads of the live view itself (float last-bit noise)
+--   register copy (arm pinned 10-05) vs live: CATEGORY rows 160 -> 159; 6 CATEGORY rows of Fresh and
+--     Bottle (families of the released T1 controls 446868628489343, 227290137740434, 279837860088128)
+--     move on the projection horizons; every other row_type count is unchanged.
+--   slot time of one read (s):
+--     V_PLAN_WINDOW_JUDGMENT  live 832, 902, 838, 714 | copies 789 (arm pinned), 808 (d_la pinned),
+--                             726, 779 (trial-1 arm)
+--     V_FAMILY_SEAT_REGISTER  live 9,013, 19,177, 6,085 | copies 26,784, 9,202 (arm pinned),
+--                             15,793 (trial-1 arm). Reads of the same live view ranged 3x, so these
+--                             samples show no difference either way.
+--   SP_ENGINE_PREFLIGHT: TMP copy compiled (CREATE PROCEDURE validates the body) and CALLed; its
+--     writes went to TMP_HT2_T_ENGINE_PREFLIGHT_NEW and a TMP_HT2_ copy of the 2026-10-03
+--     FACT_ENGINE_PROPOSALS partition (413 rows); its CURRENT_DATE pinned to 2026-10-05. Nothing
+--     wrote T_ENGINE_PREFLIGHT or FACT_ENGINE_PROPOSALS.
+--     K8 (plan §5, against TMP assignment)  new body 0: 38 rows on 10 T2 controls, all EXCLUDE with
+--       is_holdout, holdout_trial_id T2 only; 66 rows on 8 T1-only controls, none is_holdout; no
+--       holdout row outside the controls. Slot 9.7 s (table) + 3.4 s (stamp).
+--     K8 NC, the deployed body on the same copies and date: 102 (36 T2 rows not EXCLUDE: their
+--       eligible_from is 2026-10-06, plan §2.3; 66 T1-only rows held). Live T_ENGINE_PREFLIGHT
+--       (2026-10-03, before the deploy): 102 likewise.
+--     the 309 rows on non-control campaigns: verdict and verdict_reason equal, new body vs deployed.
+--     hold CTE at the real date (LA 10-03): deployed CTE on the live table 14 rows, new CTE on an
+--       unpinned arm over T1+T2 copies 14 rows, 0 / 0 differences in (cid, trial_id); the arm held
+--       26 rows (T2's 12 bind from 10-05).
+--   K9 NC (latest FACT_PLAN_NEXT_WEEK, as_of 2026-10-03, 712 rows, before the deploy): 224
+--     (94 T2-control rows not holdout + 130 T1-only rows holdout).
+--   K7 on the deployed bodies today (= its NC, plan >= 6): 6 -- SP_ASSIGN_HOLDOUT 2 (expected 3);
+--     SP_ENGINE_PREFLIGHT 1 (0); V_ENGINE_HEALTH 3 (1); V_FAMILY_SEAT_REGISTER 1 (0); V_HOLDOUT_ARM
+--     0 (1, not deployed); V_PLAN_WINDOW_JUDGMENT 1 (0). V_HOLDOUT_READOUT 1 is on its count. Slot 3.1 s.
+--     K7b on the tools before the edit: 2, 1, 2 (four hold CTEs and one docstring); after: 0, 0, 0.
+--     The same count over this branch's bodies: V_HOLDOUT_ARM 1, SP_ASSIGN_HOLDOUT 3, the three
+--     readers 0, V_HOLDOUT_READOUT 1, V_ENGINE_HEALTH 3 (plan Task 6 pending).
+--   the tools' SQL with V_HOLDOUT_ARM pointed at the pinned copy: all four queries dry-run OK.
+--     build_reprice_bulksheet: 78 rows, holdout_eligible_from on 7 campaigns, all T2, all 2026-10-05;
+--     the 4 T1 controls with rows carry none. The pre-edit SQL on the live table: 78 rows, 4
+--     campaigns, all T1, 2026-09-01. build_seat_moves_bulksheet LEAK 2 rows / NEGATE 0 rows, no
+--     control among them. build_seasonal_unpause_bulksheet: dry run only (it needs keyword ids).
+--   python3 -m pytest tools/tests -q: 225 passed before and after (test_seat_moves +
+--     test_seasonal_unpause: 91).
 -- =============================================================================================
 
 -- K1 one live trial, and it is T2
@@ -153,4 +231,29 @@ SELECT 'K6_gate_is_t2_arm' AS check_name,
        COUNTIF(in_gate != in_t2) + IF(COUNTIF(in_t2) = 0, 1, 0) AS violations,
        FORMAT('binding today %d, T2 HOLDOUT %d, binding but not T2 %d, T2 not binding %d',
               COUNTIF(in_gate), COUNTIF(in_t2), COUNTIF(in_gate AND NOT in_t2), COUNTIF(in_t2 AND NOT in_gate)) AS detail
+FROM x;
+
+-- K7 no gate reader bypasses the arm (deployed bodies; comment text removed before counting)
+WITH bodies AS (
+  SELECT table_name AS object_name, view_definition AS body
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS`
+  UNION ALL
+  SELECT routine_name, routine_definition
+  FROM `onyga-482313.OI.INFORMATION_SCHEMA.ROUTINES`),
+n AS (
+  SELECT object_name,
+         ARRAY_LENGTH(REGEXP_EXTRACT_ALL(REGEXP_REPLACE(IFNULL(body, ''), r'--[^\n]*', ''),
+                      r'(?i)(?:`?onyga-482313`?\.)?`?\bOI`?\.`?DE_HOLDOUT_ASSIGNMENT\b')) AS n_refs
+  FROM bodies
+  WHERE NOT STARTS_WITH(object_name, 'TMP_HT2_')),
+expected AS (
+  SELECT * FROM UNNEST([STRUCT('V_HOLDOUT_ARM' AS object_name, 1 AS n_expected),
+                        ('V_HOLDOUT_READOUT', 1), ('V_ENGINE_HEALTH', 1), ('SP_ASSIGN_HOLDOUT', 3)])),
+x AS (
+  SELECT object_name, IFNULL(n.n_refs, 0) AS n_refs, IFNULL(e.n_expected, 0) AS n_expected
+  FROM n FULL OUTER JOIN expected e USING (object_name))
+SELECT 'K7_no_reader_bypasses_arm' AS check_name,
+       COUNTIF(n_refs != n_expected) AS violations,
+       IFNULL(STRING_AGG(IF(n_refs != n_expected, FORMAT('%s %d (expected %d)', object_name, n_refs, n_expected), NULL),
+                         '; ' ORDER BY object_name), 'every object on its count') AS detail
 FROM x;

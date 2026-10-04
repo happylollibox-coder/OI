@@ -480,11 +480,9 @@ restore AS (
   FROM `{p}.OI.V_SRC_AmazonAds_campaign_history`
   GROUP BY 1
 ),
-hold AS (
-  SELECT CAST(unit_id AS STRING) cid, MIN(eligible_from) eligible_from
-  FROM `{p}.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE arm = 'HOLDOUT' AND unit_type = 'CAMPAIGN'
-  GROUP BY 1
+hold AS (  -- the arm that binds today or later (V_HOLDOUT_ARM); eligible_from = the gate date
+  SELECT campaign_id cid, gate_from eligible_from
+  FROM `{p}.OI.V_HOLDOUT_ARM`
 ),
 -- which book actually switched it off, and from what bid: the most recent APPLIED pause row.
 -- upload_status IS NULL is the APPLIED state (V_PPC_CHANGE_LOG_APPLIED selects it).

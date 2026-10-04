@@ -409,11 +409,9 @@ camp AS (
   SELECT CAST(campaign_id AS STRING) cid, ANY_VALUE(campaign_type) campaign_type
   FROM `{p}.OI.V_DIM_CAMPAIGN_CURRENT` GROUP BY 1
 ),
-hold AS (
-  SELECT CAST(unit_id AS STRING) cid, MIN(eligible_from) eligible_from
-  FROM `{p}.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE arm = 'HOLDOUT' AND unit_type = 'CAMPAIGN'
-  GROUP BY 1
+hold AS (  -- the arm that binds today or later (V_HOLDOUT_ARM); eligible_from = the gate date
+  SELECT campaign_id cid, gate_from eligible_from
+  FROM `{p}.OI.V_HOLDOUT_ARM`
 ),
 bc AS (
   SELECT keyword_text, ANY_VALUE(gate_reason) gate_reason
@@ -580,10 +578,9 @@ restore AS (
   FROM `{p}.OI.V_SRC_AmazonAds_campaign_history`
   GROUP BY 1
 ),
-hold AS (
-  SELECT CAST(unit_id AS STRING) cid, MIN(eligible_from) eligible_from
-  FROM `{p}.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE arm = 'HOLDOUT' AND unit_type = 'CAMPAIGN' GROUP BY 1
+hold AS (  -- the arm that binds today or later (V_HOLDOUT_ARM); eligible_from = the gate date
+  SELECT campaign_id cid, gate_from eligible_from
+  FROM `{p}.OI.V_HOLDOUT_ARM`
 ),
 ks AS (
   SELECT CAST(campaign_id AS STRING) cid, CAST(keyword_id AS STRING) kid,
