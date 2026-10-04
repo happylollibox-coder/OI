@@ -1994,6 +1994,14 @@ tables:
       - FACT_PREDICTION_GRADE
       - V_PREDICTION_LEDGER
 
+  - name: "FACT_PREDICTION_LEDGER_INPUTS"
+    description: "v27.177 (2026-10-04, learning-contract piece 2 fix L1): the keyword-state inputs each plan night's predictions are priced on, frozen once per night so a stored night's forecast never moves. One row per (as_of, built_at, campaign_id, keyword_id) of the night's FACT_PLAN_NEXT_WEEK keywords (both plans): the snapshot pick (the latest FACT_KEYWORD_STATE_HISTORY snapshot_date before the Los Angeles date of built_at among copies captured at or before built_at, and that date's newest such copy, snapshot_captured_at), the keyword's settled_clk90 / settled_ord90 / settled_gp90 in it (NULL, in_snapshot FALSE, when absent), and the night's builder_version with rule_builder_tag = COALESCE(builder_version, 'pre-v27.170'). V_PREDICTION_LEDGER v27.177 reads each night's first freeze for zero-click OPEN_PROBE pricing (own rate, family x channel pool), rule_version and builder_version, instead of the history and the plan row at query time. Written by SP_FREEZE_LEDGER_INPUTS, CALLed by SP_BUILD_NEXT_WEEK_PLAN v27.177 right after it writes a night; the 13 nights stored before were frozen by one hand CALL on 2026-10-04 (frozen_by 'L1 migration 2026-10-04'). APPEND-ONLY, never updated or deleted from; partitioned by as_of. Acceptance L5 in scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql; controls scripts/bigquery/tests/check_ledger_freeze_controls.py. SOP architecture/LEARNING.md §1, §3, §10 'Fix L1'."
+    type: "fact"
+    source_files: ["scripts/bigquery/tables/FACT_PREDICTION_LEDGER_INPUTS.sql", "scripts/bigquery/procedures/SP_FREEZE_LEDGER_INPUTS.sql"]
+    dependencies:
+      - FACT_PLAN_NEXT_WEEK
+      - FACT_KEYWORD_STATE_HISTORY
+
   - name: "FACT_THRESHOLD_HISTORY"
     description: "v27.155 (2026-10-01), learning-contract piece 0 Task D — append-on-change history of the rule tables DE_COACH_THRESHOLDS and DE_PLAN_CONFIG. One row per source row per change, written by SP_SNAPSHOT_THRESHOLDS (orchestrator Refresh Task 10.1): SEEDED on the first snapshot of a source, ADDED (new key, or back after REMOVED), CHANGED (compared values differ from the key's last event), REMOVED (gone; values NULL, key copied). Compared: threshold_value, peak_multiplier, boost_peak_multiplier, suggested_value (coach key threshold_key x strategy_id x coach_mode x product_family); window_days, allowance_share, live_plan, ramp_steps, min_orders, strong_day_mult, strong_day_min_orders, is_active (plan key calendar_state x updated_by x updated_at, so a retire-then-insert is the old row CHANGED and the new row ADDED). Context carried, not compared: description, change_reason, suggestion_reason, source, source updated_at / updated_by. A pass with nothing changed writes nothing; the value in force on day D is the key's latest event with snapshot_at <= D; a value that lived between two passes is not recorded. Never updated or deleted. Acceptance THRESHOLD_HISTORY_acceptance.sql."
     type: "fact"
@@ -3179,6 +3187,11 @@ stored_procedures:
     description: "Weekly sales deviation alert generator. Compares actual YTD sales pace vs yearly plan. Creates SALES_DEVIATION alerts in DE_ALERTS when deviation > 20%."
     source_files: ["scripts/bigquery/procedures/SP_GENERATE_SALES_DEVIATION_ALERTS.sql"]
     schedule: "weekly (Monday via SP_ORCHESTRATE guard)"
+
+  - name: "SP_FREEZE_LEDGER_INPUTS"
+    description: "v27.177 (2026-10-04, learning-contract piece 2 fix L1): SP_FREEZE_LEDGER_INPUTS(caller STRING) appends to FACT_PREDICTION_LEDGER_INPUTS, in one INSERT, every FACT_PLAN_NEXT_WEEK night (as_of, built_at) not yet there: per keyword of the night's plan rows, the keyword-state snapshot copy final at built_at (the latest FACT_KEYWORD_STATE_HISTORY snapshot_date before the Los Angeles date of built_at among copies captured at or before built_at, that date's newest such copy) with the keyword's settled 90-day record, and the night's builder_version and rule tag; frozen_at = now, frozen_by = caller. Asserts one builder_version per night. Idempotent and append-only. CALLed by SP_BUILD_NEXT_WEEK_PLAN v27.177 right after it writes a night (orchestrator Task 20.8c), so a night is frozen at its build; the nights stored before v27.177 were frozen by one hand CALL on 2026-10-04. Read by V_PREDICTION_LEDGER through the table. SOP architecture/LEARNING.md §10 'Fix L1'."
+    source_files: ["scripts/bigquery/procedures/SP_FREEZE_LEDGER_INPUTS.sql"]
+    schedule: "nightly, CALLed by SP_BUILD_NEXT_WEEK_PLAN (orchestrator Task 20.8c)"
 
 # ═══════════════════════════════════════════════════════════════
 # FUNCTIONS

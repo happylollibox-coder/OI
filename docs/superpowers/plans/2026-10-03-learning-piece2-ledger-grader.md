@@ -197,10 +197,21 @@ pred_net    = pred_gp - pred_spend
   the family × channel pooled settled rate).
   Every other zero-basis ACT row predicts 0. Settings are read from `DE_COACH_THRESHOLDS`
   (`strategy_id = 'LEARNING'`), never as literals.
+  *Corrected 2026-10-04 (fix L1, found by the Task-8 proof): the view read the snapshot at query time
+  and its `ks` CTE kept the newest copy of the date with no `captured_at <= built_at` filter, while
+  `SP_APPEND_KEYWORD_STATE_HISTORY` keeps only the newest copy of a date, so a re-capture or backfill
+  of an older `snapshot_date` would have moved a stored night. The snapshot is now read once, by
+  `SP_FREEZE_LEDGER_INPUTS`, which `SP_BUILD_NEXT_WEEK_PLAN` v27.177 CALLs right after it writes the
+  night, into the append-only `FACT_PREDICTION_LEDGER_INPUTS`; `V_PREDICTION_LEDGER` v27.177 prices
+  from each night's first freeze and never reads the history (`architecture/LEARNING.md` §3, §10
+  "Fix L1").*
 - [ ] **Step 4: versions** — `rule_version` = the `history_id` of the `DE_PLAN_CONFIG` row for the row's
   `calendar_state` in force at `built_at` (brief §2 "rule_version"), `|| ':' || builder_version`
   (`'pre-v27.170'` where NULL); `response_model_version` = `'RUN_RATE'` for DO_NOTHING and `'RM1:'` + the
-  history ids of the LEARNING settings in force for ACT.
+  history ids of the LEARNING settings in force for ACT. *Corrected 2026-10-04 (fix L1): the
+  `builder_version` part is the night's frozen `rule_builder_tag` in `FACT_PREDICTION_LEDGER_INPUTS`,
+  not the plan row's column, so a backfill of the pre-v27.170 NULLs cannot rename a stored night's rule
+  (acceptance L5c counts such a backfill).*
 - [ ] **Step 5: Checks** (in `PREDICTION_CONTRACT_acceptance.sql`, started here): L1 two scenarios per plan
   row, five numbers non-NULL, `basis_clicks >= 0`, a `rule_version` (NC per term); L2 **anchoring**: on
   every row with `act_is_noop` and no budget cut, ACT equals DO_NOTHING to the cent (NC: one row's r
@@ -307,6 +318,12 @@ pred_net    = pred_gp - pred_spend
   upload the plan $Y".
 - [ ] Attack: any check that can pass vacuously, any number in a comment that was not measured, any
   ledger value that could change after grading.
+  *Fix L1 (2026-10-04, from this proof): a re-capture or backfill of an older keyword-state
+  `snapshot_date`, or a backfill of `builder_version`, would have moved stored nights' `ACT` or
+  `rule_version`. Fixed by freezing each night's inputs at the build (`FACT_PREDICTION_LEDGER_INPUTS`,
+  `SP_FREEZE_LEDGER_INPUTS`, builder and ledger v27.177); acceptance L5 and
+  `scripts/bigquery/tests/check_ledger_freeze_controls.py` check it (`architecture/LEARNING.md` §10
+  "Fix L1").*
 
 ## Self-review
 

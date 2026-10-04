@@ -34,6 +34,18 @@
 --   L4  the view is deterministic: two reads, keyed FULL OUTER JOIN on (as_of, predictor,
 --       campaign_id, keyword_id, scenario), every column equal (floats within 1e-6, house rule on
 --       float parity); a key on one side only counts; +1 when the first read is empty
+--   L5  (fix L1, v27.177, 2026-10-04) THE NIGHT'S FROZEN INPUTS, FACT_PREDICTION_LEDGER_INPUTS, which
+--       the ledger prices zero-click probes and names rule_version from (a night's first freeze):
+--       L5a every (as_of, built_at) of FACT_PLAN_NEXT_WEEK is frozen; L5b each night's first freeze
+--       holds exactly its plan keywords (family, channel as stored), once each; L5c the frozen
+--       builder_version and rule_builder_tag equal the plan rows' builder_version (COALESCE
+--       'pre-v27.170'), one per night — a backfill of the plan's builder_version fires it; L5d every
+--       frozen copy was final at built_at (snapshot_date before the Los Angeles date of built_at,
+--       captured at or before it; in_snapshot rows carry both), one copy per night; L5e every night
+--       written since the v27.177 builder's deploy (2026-10-04 14:41:51 UTC) was frozen by the
+--       builder ('SP_BUILD_NEXT_WEEK_PLAN ...') within 10 minutes after built_at. +1 on each when the
+--       frozen table is empty; L5e +1 when no night was written since the deploy (emptiness: it reads
+--       1 until the 2026-10-05 night).
 --   The C statement (c_out) reads labelled inputs only — cg (grade rows), cl (ledger rows), cf
 --   (FN_PLAN_SCORECARD rows), ch (board rows), cc (the card's row count, fixture rows, scored_at),
 --   each tagged with a variant v, and cm (copy -> the variant of each input) — plus wmx (the house
@@ -115,6 +127,14 @@
 --   NC_L3_SPEND_R1     example 1's ACT spend at r^1 (window spend x r)   -> L3
 --   NC_L3_SEAT         example 2's ACT spend at the seat ($0)            -> L3
 --   NC_L4_DRIFT        the second read: one row's pred_net + 0.01 and another row missing -> L4
+--   NC_EMPTY           no freeze row                                     -> L5a-L5e
+--   NC_L5_UNFROZEN     the latest frozen night's freeze removed          -> L5a
+--   NC_L5_KEY_MISSING  that night's first in-snapshot key's freeze row removed -> L5b
+--   NC_L5_BV_BACKFILL  the plan's NULL builder_version filled 'v27.169' (a backfill) -> L5c
+--   NC_L5_LATE_COPY    that night's copy stamped one second after its built_at -> L5d
+--   NC_L5_NOT_AT_BUILD that night re-keyed an hour after the cutover, frozen two hours later by a hand
+--                      call                                              -> L5e
+--   PC_L5_AT_BUILD     the same re-keyed night frozen by the builder 5 s after its write -> L5e 0
 --   NC_C2_UNGRADED     K1 (the first current grade) removed, every regrade_seq   -> C2
 --   NC_C2_TWO_CURRENT  K1's current row written twice                    -> C2
 --   NC_C2_EARLY        a grade on KE, the first ledger row not yet gradable -> C2
@@ -183,6 +203,16 @@
 --   00:33 UTC, job t7_acc1_1791073978: the same 64 readings, 778.3 slot-seconds.)
 --   The harness the same night (job bqjob_r68f8c321bb6f68ea_000001a104611486_1, 00:47-01:01 UTC):
 --   exit 0, every asserted reading held — architecture/LEARNING.md §10 "Task 7" lists them.
+-- RUN 2026-10-04 14:44 UTC (fix L1: V_PREDICTION_LEDGER and SP_BUILD_NEXT_WEEK_PLAN v27.177 deployed
+--   14:39:47 / 14:41:51 UTC, the 13 stored nights frozen 14:27:34 UTC), run as written, job
+--   l1_acc_1791125056: 80 rows, 78 PASS, P2n REPORT 0, LIVE L5e 1 (its emptiness term: no night
+--   written since the deploy). LIVE L1a-L4, L5a-L5d, C2, C3, C4a, C4b, C5z, C8a-C8c, F, P1, P2 0 over
+--   19,012 ledger rows.
+--   L5 controls: NC_EMPTY L5a 14, L5b 1, L5c 1, L5d 1, L5e 1; NC_L5_UNFROZEN L5a 1;
+--   NC_L5_KEY_MISSING L5b 1; NC_L5_BV_BACKFILL L5c 4,397; NC_L5_LATE_COPY L5d 356;
+--   NC_L5_NOT_AT_BUILD L5e 1; PC_L5_AT_BUILD L5e 0. 854.9 slot-seconds, 569,372,138 bytes, 90 s.
+--   The freeze's own proof on copies (a re-capture moves v27.172 and not v27.177):
+--   scripts/bigquery/tests/check_ledger_freeze_controls.py, architecture/LEARNING.md §10 "Fix L1".
 --
 -- L3's expected values. Example 1, keyword 305171316086021 (LolliME SP, REPRICE 0.75 -> 0.71):
 -- clicks, spend and orders are the brief's (DO_NOTHING 84 / 75.71 / 4.455; ACT 79.5 / 67.85 /
@@ -955,11 +985,166 @@ c_all AS (
 )
 SELECT copy, chk, n FROM c_all;
 
+-- =============================================================================================
+-- L5 — THE NIGHT'S FROZEN INPUTS (v27.177, fix L1): FACT_PREDICTION_LEDGER_INPUTS, written once per
+-- night by SP_FREEZE_LEDGER_INPUTS (CALLed by SP_BUILD_NEXT_WEEK_PLAN v27.177 after its write), is
+-- what V_PREDICTION_LEDGER prices zero-click probes and names rule_version from. Labelled copies of
+-- the plan's keys per night (l5_p) and of the freezes (l5_f); a night's FIRST freeze (MIN(frozen_at))
+-- is the one the view reads. The cutover, 2026-10-04 14:41:51 UTC, is the v27.177 builder's deploy (INFORMATION_SCHEMA.ROUTINES last_altered).
+-- =============================================================================================
+CREATE TEMP TABLE l5_pk AS
+SELECT DISTINCT as_of, built_at, family, channel, campaign_id, keyword_id, builder_version
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK`;
+
+CREATE TEMP TABLE l5_fz AS
+SELECT * FROM `onyga-482313.OI.FACT_PREDICTION_LEDGER_INPUTS`;
+
+CREATE TEMP TABLE l5_pick AS   -- the latest frozen night and its first in-snapshot key
+SELECT as_of, built_at, campaign_id, keyword_id
+FROM l5_fz
+WHERE in_snapshot
+QUALIFY ROW_NUMBER() OVER (ORDER BY as_of DESC, built_at DESC, campaign_id, keyword_id) = 1;
+
+CREATE TEMP TABLE l5_p AS
+SELECT c AS copy, k.*
+FROM l5_pk k, UNNEST(['LIVE', 'NC_EMPTY', 'NC_L5_UNFROZEN', 'NC_L5_KEY_MISSING', 'NC_L5_LATE_COPY']) AS c
+UNION ALL
+SELECT 'NC_L5_BV_BACKFILL', k.* REPLACE (IFNULL(k.builder_version, 'v27.169') AS builder_version) FROM l5_pk k
+UNION ALL
+SELECT c, k.* FROM l5_pk k, UNNEST(['PC_L5_AT_BUILD', 'NC_L5_NOT_AT_BUILD']) AS c
+UNION ALL   -- a night written after the cutover: the picked night re-keyed an hour after it
+SELECT c, k.* REPLACE (DATE_ADD(k.as_of, INTERVAL 30 DAY) AS as_of,
+                       TIMESTAMP_ADD(TIMESTAMP '2026-10-04 14:41:51+00', INTERVAL 1 HOUR) AS built_at,
+                       'v27.177' AS builder_version)
+FROM l5_pk k JOIN l5_pick x ON x.as_of = k.as_of AND x.built_at = k.built_at,
+     UNNEST(['PC_L5_AT_BUILD', 'NC_L5_NOT_AT_BUILD']) AS c;
+
+CREATE TEMP TABLE l5_f AS
+SELECT c AS copy, f.*
+FROM l5_fz f, UNNEST(['LIVE', 'NC_L5_BV_BACKFILL', 'PC_L5_AT_BUILD', 'NC_L5_NOT_AT_BUILD']) AS c
+UNION ALL
+SELECT 'NC_L5_UNFROZEN', f.* FROM l5_fz f
+WHERE NOT EXISTS (SELECT 1 FROM l5_pick x WHERE x.as_of = f.as_of AND x.built_at = f.built_at)
+UNION ALL
+SELECT 'NC_L5_KEY_MISSING', f.* FROM l5_fz f
+WHERE NOT EXISTS (SELECT 1 FROM l5_pick x WHERE x.as_of = f.as_of AND x.built_at = f.built_at
+                    AND x.campaign_id = f.campaign_id AND x.keyword_id = f.keyword_id)
+UNION ALL
+SELECT 'NC_L5_LATE_COPY', f.* REPLACE (
+         IF(EXISTS (SELECT 1 FROM l5_pick x WHERE x.as_of = f.as_of AND x.built_at = f.built_at),
+            TIMESTAMP_ADD(f.built_at, INTERVAL 1 SECOND), f.snapshot_captured_at) AS snapshot_captured_at)
+FROM l5_fz f
+UNION ALL   -- the re-keyed night's freeze: by the builder 5 s after its write, or by a late hand call
+SELECT c, f.* REPLACE (DATE_ADD(f.as_of, INTERVAL 30 DAY) AS as_of,
+                       TIMESTAMP_ADD(TIMESTAMP '2026-10-04 14:41:51+00', INTERVAL 1 HOUR) AS built_at,
+                       'v27.177' AS builder_version, 'v27.177' AS rule_builder_tag,
+                       TIMESTAMP_ADD(TIMESTAMP '2026-10-04 14:41:51+00', INTERVAL IF(c = 'PC_L5_AT_BUILD', 3605, 10800) SECOND) AS frozen_at,
+                       IF(c = 'PC_L5_AT_BUILD', 'SP_BUILD_NEXT_WEEK_PLAN v27.177', 'L1 migration 2026-10-04') AS frozen_by)
+FROM l5_fz f JOIN l5_pick x ON x.as_of = f.as_of AND x.built_at = f.built_at,
+     UNNEST(['PC_L5_AT_BUILD', 'NC_L5_NOT_AT_BUILD']) AS c;
+-- NC_EMPTY has no freeze row.
+
+CREATE OR REPLACE TEMP TABLE l5_out AS
+WITH
+copies AS (
+  SELECT copy FROM UNNEST(['LIVE', 'NC_EMPTY', 'NC_L5_UNFROZEN', 'NC_L5_KEY_MISSING', 'NC_L5_BV_BACKFILL',
+                           'NC_L5_LATE_COPY', 'PC_L5_AT_BUILD', 'NC_L5_NOT_AT_BUILD']) AS copy
+),
+first_f AS (
+  SELECT * FROM l5_f
+  QUALIFY frozen_at = MIN(frozen_at) OVER (PARTITION BY copy, as_of, built_at)
+),
+nights AS (SELECT DISTINCT copy, as_of, built_at FROM l5_p),
+fn AS (SELECT DISTINCT copy, as_of, built_at, frozen_at, frozen_by FROM first_f),
+nf AS (SELECT c.copy, COUNT(f.copy) AS n_f FROM copies c LEFT JOIN l5_f f ON f.copy = c.copy GROUP BY c.copy),
+a AS (
+  SELECT ni.copy, COUNTIF(f.copy IS NULL) AS n
+  FROM nights ni
+  LEFT JOIN (SELECT DISTINCT copy, as_of, built_at FROM first_f) f
+    ON f.copy = ni.copy AND f.as_of = ni.as_of AND f.built_at = ni.built_at
+  GROUP BY ni.copy
+),
+pk_fz AS (
+  SELECT p.* FROM l5_p p
+  WHERE EXISTS (SELECT 1 FROM first_f f WHERE f.copy = p.copy AND f.as_of = p.as_of AND f.built_at = p.built_at)
+),
+b AS (
+  SELECT COALESCE(p.copy, f.copy) AS copy,
+         COUNTIF(f.copy IS NULL) + COUNTIF(p.copy IS NULL)
+       + COUNTIF(p.copy IS NOT NULL AND f.copy IS NOT NULL
+                 AND (p.family IS DISTINCT FROM f.family OR p.channel IS DISTINCT FROM f.channel)) AS n
+  FROM pk_fz p
+  FULL OUTER JOIN first_f f
+    ON f.copy = p.copy AND f.as_of = p.as_of AND f.built_at = p.built_at
+   AND f.campaign_id = p.campaign_id AND f.keyword_id = p.keyword_id
+  GROUP BY 1
+),
+b_dup AS (
+  SELECT copy, COUNT(*) - COUNT(DISTINCT FORMAT('%t|%t|%s|%s', as_of, built_at, campaign_id, keyword_id)) AS n
+  FROM first_f GROUP BY copy
+),
+ftag AS (
+  SELECT copy, as_of, built_at,
+         COUNT(DISTINCT IFNULL(builder_version, '<NULL>')) AS n_bv, COUNT(DISTINCT rule_builder_tag) AS n_tag,
+         ANY_VALUE(builder_version) AS bv, ANY_VALUE(rule_builder_tag) AS tag
+  FROM first_f GROUP BY copy, as_of, built_at
+),
+c AS (
+  SELECT p.copy,
+         COUNTIF(p.builder_version IS DISTINCT FROM t.bv
+                 OR t.tag IS DISTINCT FROM COALESCE(t.bv, 'pre-v27.170')
+                 OR t.n_bv != 1 OR t.n_tag != 1) AS n
+  FROM l5_p p
+  JOIN ftag t ON t.copy = p.copy AND t.as_of = p.as_of AND t.built_at = p.built_at
+  GROUP BY p.copy
+),
+d AS (
+  SELECT copy,
+         COUNTIF(in_snapshot AND (snapshot_date IS NULL OR snapshot_captured_at IS NULL))
+       + COUNTIF(snapshot_date IS NOT NULL
+                 AND NOT (snapshot_date < DATE(built_at, 'America/Los_Angeles')
+                          AND snapshot_captured_at <= built_at)) AS n
+  FROM first_f GROUP BY copy
+),
+d_multi AS (
+  SELECT copy, COUNTIF(n_copies > 1) AS n
+  FROM (SELECT copy, as_of, built_at,
+               COUNT(DISTINCT FORMAT('%t|%t', snapshot_date, snapshot_captured_at)) AS n_copies
+        FROM first_f GROUP BY copy, as_of, built_at)
+  GROUP BY copy
+),
+e AS (
+  SELECT ni.copy, COUNT(*) AS n_pop,
+         COUNTIF(f.copy IS NULL OR NOT STARTS_WITH(f.frozen_by, 'SP_BUILD_NEXT_WEEK_PLAN ')
+                 OR f.frozen_at < ni.built_at
+                 OR f.frozen_at > TIMESTAMP_ADD(ni.built_at, INTERVAL 10 MINUTE)) AS n_bad
+  FROM nights ni
+  LEFT JOIN fn f ON f.copy = ni.copy AND f.as_of = ni.as_of AND f.built_at = ni.built_at
+  WHERE ni.built_at >= TIMESTAMP '2026-10-04 14:41:51+00'
+  GROUP BY ni.copy
+)
+SELECT k.copy, 'L5a' AS chk, COALESCE(a.n, 0) + IF(nf.n_f = 0, 1, 0) AS n
+FROM copies k JOIN nf USING (copy) LEFT JOIN a USING (copy)
+UNION ALL
+SELECT k.copy, 'L5b', COALESCE(b.n, 0) + COALESCE(b_dup.n, 0) + IF(nf.n_f = 0, 1, 0)
+FROM copies k JOIN nf USING (copy) LEFT JOIN b USING (copy) LEFT JOIN b_dup USING (copy)
+UNION ALL
+SELECT k.copy, 'L5c', COALESCE(c.n, 0) + IF(nf.n_f = 0, 1, 0)
+FROM copies k JOIN nf USING (copy) LEFT JOIN c USING (copy)
+UNION ALL
+SELECT k.copy, 'L5d', COALESCE(d.n, 0) + COALESCE(d_multi.n, 0) + IF(nf.n_f = 0, 1, 0)
+FROM copies k JOIN nf USING (copy) LEFT JOIN d USING (copy) LEFT JOIN d_multi USING (copy)
+UNION ALL
+SELECT k.copy, 'L5e', COALESCE(e.n_bad, 0) + IF(COALESCE(e.n_pop, 0) = 0, 1, 0)
+FROM copies k LEFT JOIN e USING (copy);
+
 WITH
 res AS (
   SELECT copy, chk, n FROM l_out
   UNION ALL
   SELECT copy, chk, n FROM c_out
+  UNION ALL
+  SELECT copy, chk, n FROM l5_out
 ),
 expect AS (   -- mode ZERO: must read 0; FIRE: must read >= 1 (a control); REPORT: printed, not asserted
   SELECT * FROM UNNEST([
@@ -990,6 +1175,24 @@ expect AS (   -- mode ZERO: must read 0; FIRE: must read >= 1 (a control); REPOR
     ('L3c NEGATIVE CONTROL L3 FIRES: example 2 ACT spend at the seat', 'L3', 'NC_L3_SEAT', 'FIRE'),
     ('L4a NEGATIVE CONTROL L4 FIRES: both reads empty', 'L4', 'NC_EMPTY', 'FIRE'),
     ('L4b NEGATIVE CONTROL L4 FIRES: the second read drifted and lost a row', 'L4', 'NC_L4_DRIFT', 'FIRE'),
+    -- A NIGHT NOT FROZEN PRICES ITS PROBES FROM WHATEVER THE HISTORY HOLDS WHEN IT IS READ: ITS FORECAST CAN MOVE AFTER IT IS MADE.
+    ('L5a every plan night is frozen in FACT_PREDICTION_LEDGER_INPUTS', 'L5a', 'LIVE', 'ZERO'),
+    ('L5b each night\'s first freeze holds exactly its plan keywords (family and channel as stored), once each', 'L5b', 'LIVE', 'ZERO'),
+    -- A BACKFILLED builder_version WOULD RENAME A STORED NIGHT\'S RULE: THE FROZEN TAG MUST STILL BE WHAT THE NIGHT WAS WRITTEN WITH.
+    ('L5c the frozen builder_version and rule tag equal the plan rows\' builder_version, one per night', 'L5c', 'LIVE', 'ZERO'),
+    ('L5d every frozen snapshot copy was final at built_at (an earlier Los Angeles date, captured by built_at), one per night', 'L5d', 'LIVE', 'ZERO'),
+    ('L5e every night written since the v27.177 builder was frozen by the builder within 10 minutes of built_at', 'L5e', 'LIVE', 'ZERO'),
+    ('L5a1 NEGATIVE CONTROL L5a FIRES: no freeze row', 'L5a', 'NC_EMPTY', 'FIRE'),
+    ('L5a2 NEGATIVE CONTROL L5a FIRES: the latest frozen night unfrozen', 'L5a', 'NC_L5_UNFROZEN', 'FIRE'),
+    ('L5b1 NEGATIVE CONTROL L5b FIRES: no freeze row', 'L5b', 'NC_EMPTY', 'FIRE'),
+    ('L5b2 NEGATIVE CONTROL L5b FIRES: one frozen keyword missing', 'L5b', 'NC_L5_KEY_MISSING', 'FIRE'),
+    ('L5c1 NEGATIVE CONTROL L5c FIRES: no freeze row', 'L5c', 'NC_EMPTY', 'FIRE'),
+    ('L5c2 NEGATIVE CONTROL L5c FIRES: builder_version backfilled on the plan rows written before v27.170', 'L5c', 'NC_L5_BV_BACKFILL', 'FIRE'),
+    ('L5d1 NEGATIVE CONTROL L5d FIRES: no freeze row', 'L5d', 'NC_EMPTY', 'FIRE'),
+    ('L5d2 NEGATIVE CONTROL L5d FIRES: the latest night frozen from a copy captured after its built_at', 'L5d', 'NC_L5_LATE_COPY', 'FIRE'),
+    ('L5e1 NEGATIVE CONTROL L5e FIRES: no freeze row', 'L5e', 'NC_EMPTY', 'FIRE'),
+    ('L5e2 NEGATIVE CONTROL L5e FIRES: a night after the cutover frozen two hours late by a hand call', 'L5e', 'NC_L5_NOT_AT_BUILD', 'FIRE'),
+    ('L5e3 POSITIVE CONTROL L5e READS 0: a night after the cutover frozen by the builder 5 s after its write', 'L5e', 'PC_L5_AT_BUILD', 'ZERO'),
     -- A PREDICTION WITH NO GRADE, OR TWO, IS A HOLE OR A DOUBLE COUNT IN EVERY REPORT-CARD SUM; A GRADE MADE
     -- BEFORE ITS HORIZON SETTLED IS FROZEN ON NUMBERS STILL MOVING.
     ('C2 every ledger row gradable on the house watermark has exactly one current grade, and no graded prediction lacks one', 'C2', 'LIVE', 'ZERO'),

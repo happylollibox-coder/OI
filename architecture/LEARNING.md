@@ -18,7 +18,10 @@ schedule (orchestrator Refresh Task 20.8f, v27.176), the three health checks on 
 6"). Task 7 (2026-10-04) completed the contract suite (spec §11 checks 1–5 and 8, the frozen check
 and the parity with `FN_PLAN_SCORECARD`) and its controls harness, which runs the grader's own text
 on copies (§4 "Fixtures", "The piece-0 scorecard keeps its own clock"; §10 "Task 7"); it deployed
-nothing. Each task appends
+nothing. Fix L1 (2026-10-04) froze each night's prediction inputs: `FACT_PREDICTION_LEDGER_INPUTS`,
+written once per night by `SP_FREEZE_LEDGER_INPUTS` from the builder (v27.177), which the ledger
+(v27.177) reads instead of `FACT_KEYWORD_STATE_HISTORY` and the plan row's `builder_version` (§1 "Why
+a ledger row never changes", §3; §10 "Fix L1"). Each task appends
 its own entry to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
@@ -38,6 +41,7 @@ spec's §14.3) and the reader runs it.
 |---|---|---|
 | `V_PREDICTION_LEDGER` | `scripts/bigquery/views/V_PREDICTION_LEDGER.sql` (Task 4) | the plan's stored rows mapped into the learning contract's prediction shape, two scenarios each |
 | `FACT_PLAN_NEXT_WEEK` | `scripts/bigquery/tables/FACT_PLAN_NEXT_WEEK.sql` | the source: one row per (`as_of`, `plan`, `campaign_id`, `keyword_id`), written by `SP_BUILD_NEXT_WEEK_PLAN` |
+| `FACT_PREDICTION_LEDGER_INPUTS` | `scripts/bigquery/tables/FACT_PREDICTION_LEDGER_INPUTS.sql` (fix L1) | the night's frozen inputs: one row per keyword of the night's plan rows, with the keyword-state snapshot copy final at `built_at` and the night's `builder_version`; append-only, written once per night by `SP_FREEZE_LEDGER_INPUTS` (`scripts/bigquery/procedures/SP_FREEZE_LEDGER_INPUTS.sql`), which the builder CALLs right after it writes the night |
 
 **What a prediction is.** One row of `FACT_PLAN_NEXT_WEEK`: on night `as_of`, plan `A` or `B` judged
 a keyword and wrote a side (GOOD / NOT_GOOD), a move and, for a seat, a price. Every stored night is
@@ -52,7 +56,7 @@ night, so `PLAN_A` against `PLAN_B` is a paired comparison (the query that check
 | column | value |
 |---|---|
 | `predictor`, `variant` | `'PLAN_' ‖ plan`, `plan` |
-| `as_of`, `built_at`, `builder_version` | as the builder stored them (`builder_version` from Task 3 on; NULL before) |
+| `as_of`, `built_at`, `builder_version` | as the builder stored them (`builder_version` from Task 3 on; NULL before), `builder_version` as frozen with the night (fix L1) |
 | `horizon_from` | `GREATEST(as_of, DATE(built_at, 'America/Los_Angeles') + 1)` — the first full Los Angeles day after the night was final (D2) |
 | `horizon_to` | `horizon_from + window_days − 1` (`window_days` is carried too) |
 | `family`, `campaign_id`, `keyword_id`, `channel`, `calendar_state`, `is_live_plan`, `holdout`, `family_bar` | as stored |
@@ -64,7 +68,7 @@ night, so `PLAN_A` against `PLAN_B` is a paired comparison (the query that check
 | `pred_side` | `IF(side = 'GOOD', 1, 0)`, the same on both scenarios |
 | `basis_clicks`, `basis_spend` | `w_clk`, `w_sp`: the window the prediction stood on; `settle_factor_eff` beside them |
 | `pred_clicks`, `pred_spend`, `pred_orders`, `pred_gp`, `pred_net` | the five predicted numbers over the horizon (§2, §3) |
-| `rule_version` | the `history_id` of the `DE_PLAN_CONFIG` row for the row's `calendar_state` in force at `built_at`, `‖ ':' ‖ builder_version` (`'pre-v27.170'` where the row has none). In force: each config row's latest history event at `built_at` is active and not `REMOVED`, and of those rows for the state the latest; an event counts from its `snapshot_at`, a `SEEDED` one from its `source_updated_at` (the history began 2026-10-02; the seed rows took force on their `updated_at`, 2026-08-23) |
+| `rule_version` | the `history_id` of the `DE_PLAN_CONFIG` row for the row's `calendar_state` in force at `built_at`, `‖ ':' ‖` the night's frozen `rule_builder_tag` (`FACT_PREDICTION_LEDGER_INPUTS`: the `builder_version` the plan rows carried when the night was frozen, `'pre-v27.170'` where they had none; fix L1 — until v27.172 the plan row's `builder_version`, read at query time). In force: each config row's latest history event at `built_at` is active and not `REMOVED`, and of those rows for the state the latest; an event counts from its `snapshot_at`, a `SEEDED` one from its `source_updated_at` (the history began 2026-10-02; the seed rows took force on their `updated_at`, 2026-08-23) |
 | `response_model_version` | `'RUN_RATE'` on `DO_NOTHING`; on `ACT`, `'RM1:'` + the history ids, comma-separated in key order, of the four settings that price it (`BID_TO_CPC_RATIO_FALLBACK`, `CLICK_BID_ELASTICITY`, `CPC_BID_EXPONENT`, `OWN_CVR_MIN_CLICKS`), as §3 picks them |
 | `act_bid_ratio`, `act_budget_factor`, `act_basis` | `ACT` rows only (NULL on `DO_NOTHING`): r, the campaign-budget factor (§3), and how the row was priced — `ANCHORED`, `PAUSE`, `ZERO_BASIS`, `SEAT_PROBE_OWN`, `SEAT_PROBE_POOLED` |
 
@@ -146,10 +150,16 @@ deployed by Task 3).**
 **Why a ledger row never changes after its night is final.** The view reads only stored columns of
 a night that is no longer rewritten, the settings history (append-only, `FACT_THRESHOLD_HISTORY`:
 a new event is stamped with the pass that saw it, after every night already final, so it never
-reaches one — §3) and the keyword-state history (`FACT_KEYWORD_STATE_HISTORY`, the latest
-`snapshot_date` *before* the Los Angeles date of `built_at` — §3: a `snapshot_date` is re-captured,
-and its earlier copy pruned, by every pass on that Los Angeles date, so only an earlier date is
-final when the night is written). It reads no catalog table (D3, D6) and no `FACT_AMAZON_ADS`. The DO_NOTHING orders and
+reaches one — §3) and the night's frozen inputs (`FACT_PREDICTION_LEDGER_INPUTS`, fix L1 — §3): the
+keyword-state snapshot copy final at `built_at` and the night's `builder_version`, written once, by
+the build that wrote the night, seconds after `built_at`. Each night's first freeze is read
+(`MIN(frozen_at)`), so even a second freeze appended later cannot move it. *Corrected 2026-10-04
+(fix L1): until v27.172 the view read `FACT_KEYWORD_STATE_HISTORY` at query time and took the
+newest copy of the night's `snapshot_date`, while the history's writer keeps only the newest copy of
+a date, so a re-capture or backfill of an older `snapshot_date` would have moved a stored night's
+`ACT` (proved on copies, §10 "Fix L1"); and `rule_version` appended the plan row's `builder_version`,
+which a backfill of the pre-v27.170 NULLs would have rewritten.* It reads no catalog table (D3, D6),
+no `FACT_KEYWORD_STATE_HISTORY` and no `FACT_AMAZON_ADS`. The DO_NOTHING orders and
 gross profit are settle-corrected by the factor the builder stored with the night
 (`settle_factor_eff`, `w_gp_corrected`), not by re-reading `V_PLAN_SETTLE_COMPLETION`. The grader
 still copies the five predicted numbers and `built_at` into each grade row, and the contract suite
@@ -260,14 +270,21 @@ pred_clicks = pred_spend / (planned_bid × BID_TO_CPC_RATIO_FALLBACK)
 pred_orders = pred_clicks × CVR
 pred_gp     = pred_orders × GP per order
   CVR, GP per order = the keyword's own settled 90-day record (settled_ord90 / settled_clk90,
-                      settled_gp90 / settled_ord90) in FACT_KEYWORD_STATE_HISTORY, the latest
-                      snapshot with captured_at <= built_at, when settled_clk90 >= OWN_CVR_MIN_CLICKS;
+                      settled_gp90 / settled_ord90) in the night's frozen snapshot copy
+                      (FACT_PREDICTION_LEDGER_INPUTS, below), when settled_clk90 >= OWN_CVR_MIN_CLICKS;
                       otherwise the family × channel pooled settled rate
 ```
 
-**Which snapshot, and the pool (fixed by Task 4).** One snapshot per night: the latest
+**Which snapshot, and the pool (fixed by Task 4; frozen by fix L1).** One snapshot per night: the latest
 `snapshot_date` of `FACT_KEYWORD_STATE_HISTORY` *before* the Los Angeles date of `built_at`, among
-copies captured at or before `built_at`. Not the latest copy captured before `built_at`, which the
+copies captured at or before `built_at`, and of that date the newest copy captured at or before
+`built_at`. `SP_FREEZE_LEDGER_INPUTS` reads it once, right after the builder writes the night, and
+appends the night's plan keywords with their settled record in that copy to
+`FACT_PREDICTION_LEDGER_INPUTS`; the ledger prices from that record and never reads the history.
+*Corrected 2026-10-04 (fix L1): v27.172 applied this rule at query time and its `ks` CTE took the
+newest copy of the date with no `captured_at <= built_at` filter; the history keeps one copy per
+date (`SP_APPEND_KEYWORD_STATE_HISTORY` prunes every older copy), so a re-capture would have been
+read before the prune and the night's own copy lost after it (§10 "Fix L1").* Not the latest copy captured before `built_at`, which the
 brief named: a `snapshot_date` is the Los Angeles date of the pass that captures it, every later
 pass on that date re-captures it and prunes the earlier copy, so a night written at 16:34 UTC on
 2026-10-03 would read the 10-03 copy until the 05:00 UTC pass of 10-04 replaced it, and then fall
@@ -618,6 +635,15 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    60` one call at a time, then `--collect JOB` (checks 3 and 5 and the parity on FN's clock, on
    copies of the grader; it first checks that the deployed grader body is the file's).
 
+7. **The ledger freeze** (fix L1, 2026-10-04): `tables/FACT_PREDICTION_LEDGER_INPUTS.sql`,
+   `procedures/SP_FREEZE_LEDGER_INPUTS.sql`, then one `CALL … ('<reason>')` that freezes every stored
+   night (prove first, on copies, that the frozen record reprices nothing:
+   `check_ledger_freeze_controls.py`), then `views/V_PREDICTION_LEDGER.sql` (key-by-key against a copy
+   of the view's output saved before), then `procedures/SP_BUILD_NEXT_WEEK_PLAN.sql` (the CALL after
+   its write; diff the deployed body against the file first), then
+   `PREDICTION_CONTRACT_acceptance.sql` (L5e reads 1, emptiness, until the first night written after
+   the builder's deploy) and `check_ledger_freeze_controls.py --submit` / `--collect JOB`.
+
 Every new object is registered in `config.yaml` by the task that creates it.
 
 ---
@@ -668,6 +694,15 @@ and confirmed the column names in §5 (§10 "Task 5").
   drifted since.
 - **A night stands on its first pass's window** (§1, "The freeze"): one day older than a later pass
   of the same night would have judged, and blind to that pass's restatement of the window's days.
+- **What the freeze does not cover** (fix L1). The frozen record is append-only by house rule, not
+  by construction: an `UPDATE` of `FACT_PREDICTION_LEDGER_INPUTS` itself would move a night, and so
+  would an `UPDATE` of a stored `FACT_PLAN_NEXT_WEEK` column other than `builder_version` (the window
+  numbers, the bids, the move), which the ledger still reads at query time; the builder's freeze guard
+  never rewrites a final night, and contract check F catches either once a night is graded. A
+  `builder_version` backfill on the plan table moves nothing in the ledger and is counted by L5c. A
+  night whose freeze failed (the builder's CALL errored) has NULL probe rates and a NULL
+  `rule_version` until the next build's CALL freezes it from the history as it then stands; L1b,
+  L1d and L5a count it.
 - **Not day-over-day.** One window is noise; the regression check compares spans of
   `MIN_GRADED_WINDOWS` windows.
 - **No minimum-investment line may exist for a long time.** At the 0.80 bar every plan row can read
@@ -2168,3 +2203,124 @@ the first was written. Defaults on the real 10-04 night: job `bqjob_r7679d928f87
 exit 0, 12,702.4 slot-seconds; that copy F1 1 (it read 0 in `bqjob_r730f81050fb2532c_000001a1072b424b_1`),
 unasserted C01 712, H23M 712, H23S 1, C13 1 (the restamp moves the build's Los Angeles date and its
 saved-judgement key). HC_F1_REWRITE_BEFORE_MIDNIGHT and NC_F1_REWRITE_AT_MIDNIGHT unchanged (F1 0 / 1).
+
+### Fix L1 — a stored night's forecast never moves: the night's inputs frozen with it (2026-10-04)
+
+**The gap (Task-8 proof).** `V_PREDICTION_LEDGER` v27.172 priced zero-click `OPEN_PROBE` rows and the
+family × channel pool from `FACT_KEYWORD_STATE_HISTORY` at query time. Its `snap_night` CTE picked the
+night's `snapshot_date` among copies captured at or before `built_at`, but its `ks` CTE then joined
+every copy of that date and kept the newest, with no `captured_at <= built_at` filter. And
+`rule_version` appended the plan row's `builder_version`, NULL on every night written before v27.170.
+
+**What writes and prunes the history** (read 2026-10-04). Only `SP_APPEND_KEYWORD_STATE_HISTORY`
+(orchestrator Task 20.8a, before the plan step 20.8c in the same pass) and the hand migration
+`2026-08-24_keyword_state_history_backfill.sql` (the 2026-08-25 migration only alters the table). The
+procedure prunes, before and after its append, every copy of a `snapshot_date`
+older than its newest `captured_at`; it refuses to re-capture a date older than today's Los Angeles
+date that the history already holds. Measured ~14:10 UTC: 49 `snapshot_date`s (2026-08-17 … 10-04), one
+copy each — the August 17–23 copies from the time-travel backfill (captured 2026-08-24 21:22–21:23
+UTC), every later one from the orchestrator. So nothing had moved; a hand re-capture or backfill of
+an older date was the threat: before the next prune the view would read the new copy, after it the
+night's own copy would be gone and `snap_night` would fall back to an earlier date.
+
+**The choice: freeze the night's inputs.** `FACT_PREDICTION_LEDGER_INPUTS` (new, append-only), one
+row per keyword of the night's plan rows: the snapshot pick (the rule above, plus "of that date, the
+newest copy captured at or before `built_at`"), the keyword's `settled_clk90`, `settled_ord90`,
+`settled_gp90` in that copy (`in_snapshot` FALSE and NULLs when the copy has no row, or the night has
+no snapshot — the 08-23 night), and the night's `builder_version` with `rule_builder_tag` =
+`COALESCE(builder_version, 'pre-v27.170')`. `SP_FREEZE_LEDGER_INPUTS(caller)` appends every night of
+`FACT_PLAN_NEXT_WEEK` not yet there, in one INSERT, asserting one `builder_version` per night;
+`SP_BUILD_NEXT_WEEK_PLAN` v27.177 CALLs it right after `T_PLAN_BUILD_JUDGMENT`'s INSERT. The ledger
+v27.177 reads each night's first freeze (`MIN(frozen_at)`) for the probe rates, `rule_version`'s tag
+and `builder_version`, and no longer reads the history.
+*Rejected: reading "the copy captured at or before `built_at`" in the view.* The prune removes that
+copy as soon as a later copy of the same date exists (it keeps `MAX(captured_at)` on every call), so
+the view would read it only until the next pass. Keeping it would mean changing the history's own
+contract — one copy per `snapshot_date`, checked by `KEYWORD_STATE_HISTORY_acceptance.sql` C03 — for
+every reader of the history.
+*Rejected: freezing from the grader or from a new orchestrator step.* Both run after the plan step,
+so a re-capture between the night's write and the freeze would still reach it; the builder is the one
+writer that runs at `built_at`. The CALL is the builder's only change.
+*`rule_version`:* reads the frozen tag, which carries no NULL to fill; a backfill of
+`FACT_PLAN_NEXT_WEEK.builder_version` cannot reach it and is counted by L5c (guarded, not made
+impossible: the frozen table is append-only by house rule).
+
+**Deployed** (comment lines stripped; no pipeline run in the 90 minutes before each deploy, the next
+pass at 16:00 UTC):
+- `tables/FACT_PREDICTION_LEDGER_INPUTS.sql` 14:19:48 UTC (job `l1_tbl_1791123586`),
+  `procedures/SP_FREEZE_LEDGER_INPUTS.sql` 14:19:50 (`l1_sp_1791123586`);
+- `CALL SP_FREEZE_LEDGER_INPUTS('L1 migration 2026-10-04')` 14:27:34 (`l1_freeze_call_1791124052`):
+  4,753 rows, the 13 stored nights' plan keywords, 4,377 `in_snapshot`, one `frozen_at`. A second call
+  (`l1_idem_1791124885`, 14:41:27) inserted 0 rows;
+- `views/V_PREDICTION_LEDGER.sql` v27.177 14:39:47 (`l1_view_deploy_1791124785`);
+- `procedures/SP_BUILD_NEXT_WEEK_PLAN.sql` v27.177 14:41:51 (`l1_builder_deploy_1791124908`), after
+  the deployed v27.171 body (last altered 2026-10-03 18:37:21 UTC) was found equal to HEAD's file;
+  the deployed body equals the file, its description opens with v27.177 (F2's reading).
+
+**Proved: every stored night reads the same.** Before any write, the deployed v27.172 view's output
+was saved to `OI._tmp_l1_ledger_pre` (job `l1_pre_1791123362`, 14:16:05 UTC: 19,012 rows, 13 nights,
+10 `SEAT_PROBE_POOLED` rows; expires 2026-10-14). Key by key on (`predictor`, `as_of`, `campaign_id`,
+`keyword_id`, `scenario`), every column (FLOAT64 within 1e-9 relative, the rest IS DISTINCT FROM),
+a key on one side only counting: the view file's body over the real frozen table, before the view was
+deployed, 0 of 19,012 differ (`l1_direct_1791124746`, 117.7 slot-seconds); the deployed view 0 of
+19,012, both sides 19,012 rows on 13 nights, and the same comparison against the saved copy with one
+`pred_net` + 0.01 reads 1 (`l1_depcmp_1791124845`).
+
+**Proved on copies: a re-capture moves the old design and not the new**
+(`scripts/bigquery/tests/check_ledger_freeze_controls.py`, job
+`bqjob_r1f242bc196f191f3_000001a107618e9a_1`, 14:46–14:54 UTC, 1,639.5 slot-seconds, 351,606,756
+bytes; exit 0). OLD = the v27.172 body at 53326a5 over a copy of the history; NEW = the v27.177 body
+over a copy of the frozen table; FREEZE = the procedure's body. The re-captured date is the snapshot
+the latest night with a zero-click probe was priced on (2026-10-02, read by the 10-03 and 10-04
+nights), re-captured an hour after the history's newest copy with `settled_ord90` + 1 and
+`settled_gp90` + 10 on every row:
+
+| copy | reading |
+|---|---|
+| BASE | FREEZE on copies inserts 4,753; NEW over it vs OLD over the history 0 differing keys of 19,012; NEW vs the saved pre-edit output 0, OLD vs it 0, NEW over the real frozen table vs it 0; the copy's freeze vs the real one 0 rows differ |
+| RECAP (re-captured, not pruned) | OLD moves 6 rows (2 nights, all 6 the `ACT` rows priced from a seat); FREEZE inserts 0; NEW 0 |
+| PRUNED (the older copy pruned, as the prune does) | OLD 6 rows (2 nights, 6 seat-priced `ACT`); FREEZE 0; NEW 0 |
+| BV (`builder_version` 'v27.169' on every plan row without one) | OLD 17,588 rows on 12 nights; NEW 0 |
+| FUTURE (the 10-04 night re-keyed as a night built after the history's newest copy, frozen, then its snapshot date — 2026-10-03 — re-captured and pruned) | the first FREEZE inserts 356; the second 0; NEW before vs after 0; OLD 3 rows (1 night, 3 seat-priced `ACT`) |
+| FIRST (a second freeze of the 10-04 night an hour later, `settled_ord90` + 1) | NEW 0: the first freeze is read |
+| NC_FROZEN (the 10-04 night's frozen `settled_ord90` + 1) | NEW 3 rows (1 night, 3 seat-priced `ACT`): the comparison sees a frozen input move |
+
+The two zero-seat probes (388620934464557 on 10-03 and 10-04, seat $0) price 0 at any rate, which is
+why 6 of the 8 probe `ACT` rows of those nights move. The harness's earlier runs that day read the same
+values (`bqjob_r21b692dd9d03bf94_000001a1074ceb71_1` before the real freeze, its pre-edit comparisons
+not yet wired; `bqjob_r4822b74011a860d8_000001a1075d891b_1` after the deploys).
+
+**Checked: L5** in `PREDICTION_CONTRACT_acceptance.sql` (new) — L5a every plan night is frozen; L5b
+each night's first freeze holds exactly its plan keywords, family and channel as stored, once each;
+L5c the frozen `builder_version` and tag equal the plan rows' (the backfill guard), one per night;
+L5d every frozen copy was final at `built_at` (an earlier Los Angeles date, captured by `built_at`),
+one per night; L5e every night written since the builder's deploy (2026-10-04 14:41:51 UTC) was
+frozen by the builder within 10 minutes of its `built_at`. Each has an emptiness term. Run as
+written, job `l1_acc_1791125056` (14:44 UTC, 854.9 slot-seconds, 569,372,138 bytes, 90 s): 80 rows,
+78 PASS, P2n REPORT 0, and LIVE L5e 1 — its emptiness term: no night has been written since the
+deploy; it reads 0 from the 2026-10-05 night (the 05:00 UTC pass) if the builder freezes it. LIVE
+L1a–L4, L5a–L5d, C2, C3, C4a, C4b, C5z, C8a–C8c, F, P1, P2 0. Controls: NC_EMPTY L5a 14, L5b 1,
+L5c 1, L5d 1, L5e 1; NC_L5_UNFROZEN (the 10-04 night's freeze removed) L5a 1; NC_L5_KEY_MISSING L5b
+1; NC_L5_BV_BACKFILL (the plan's NULL `builder_version` filled 'v27.169') L5c 4,397; NC_L5_LATE_COPY
+(the 10-04 night's copy stamped a second after its `built_at`) L5d 356; NC_L5_NOT_AT_BUILD (a night
+after the cutover frozen two hours late by a hand call) L5e 1; PC_L5_AT_BUILD (the same night frozen
+by the builder 5 s after its write) L5e 0. (The first submission, `l1_acc_1791124924`, failed to
+compile: a table alias named like an output column; fixed before this run.)
+
+**Not yet seen: the builder's own CALL.** No night has been written by v27.177 at the time of this
+entry; the 2026-10-05 night is the first. Read it with L5e, and with:
+
+```sql
+-- the nights and how each was frozen
+SELECT p.as_of, p.built_at, ANY_VALUE(p.builder_version) AS builder_version,
+       MIN(f.frozen_at) AS frozen_at, ANY_VALUE(f.frozen_by) AS frozen_by,
+       TIMESTAMP_DIFF(MIN(f.frozen_at), p.built_at, SECOND) AS frozen_after_s,
+       COUNT(DISTINCT f.keyword_id) AS keys_frozen, ANY_VALUE(f.snapshot_date) AS snapshot_date
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
+LEFT JOIN `onyga-482313.OI.FACT_PREDICTION_LEDGER_INPUTS` f USING (as_of, built_at)
+GROUP BY p.as_of, p.built_at ORDER BY p.as_of;
+```
+
+`config.yaml`: `FACT_PREDICTION_LEDGER_INPUTS` (tables) and `SP_FREEZE_LEDGER_INPUTS` (stored
+procedures), added; the `V_PREDICTION_LEDGER` entry still names `FACT_KEYWORD_STATE_HISTORY` as its
+dependency and v27.172 (the workflow's rule allowed adding entries only).
