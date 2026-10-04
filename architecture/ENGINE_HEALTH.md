@@ -114,10 +114,21 @@ above are unchanged, and two terms are added:
      `sb_campaign_history` for SB bid optimization;
   4. a placement or shopper-cohort adjustment, or an SB product target's bid or state, that differs
      from the value stored at the assignment in `DE_HOLDOUT_BASELINE`.
+     - **A setting is present only when its row was re-stamped by its table's latest sync**
+       (`_fivetran_synced` within one hour of that table's `MAX(_fivetran_synced)`) and is not
+       `_fivetran_deleted`. The baseline insert, this comparison and restart check K12 use this one
+       rule.
+     - The reason: a sync re-stamps only the rows Amazon still returns. A removed adjustment keeps its
+       old row with its old stamp, and the three adjustment tables have no `_fivetran_deleted` column.
+       Measured 2026-10-04: 14 of the 195 SP placement rows were stale (last stamped 2026-03-17 ..
+       08-14). Two of them were control ME-COMPETE's removed adjustments.
+     - By the rule, 7 of the 12 controls carry placement rows, 6 of them non-zero: 15 settings on 8
+       controls.
 
   Kinds 2–4 are "seen by the alarm, not censored by R9 — Ori to rule". A kind-4 difference has no date,
   so it reads RED while it stands. Ori's ruling on it is appended as a baseline row, and the setting
-  then reads AMBER.
+  then reads AMBER. A NULL value on that row means absent: it records a ruling that the setting is
+  gone.
 - **Feed liveness.** RED when any of the following is more than 36 hours old or missing, and the detail
   prints every age:
   - the last OK run of `SP_RECORD_OBSERVED_CHANGES`, `SP_LOAD_DIM_KEYWORD`, `SP_LOAD_DIM_CAMPAIGN` or
@@ -127,8 +138,9 @@ above are unchanged, and two terms are added:
     product targets.
 
   Measured 2026-10-04: the procedures' largest gap between OK runs over 30 days is 13 hours, and each
-  table's largest gap between syncs is at most 21 hours. The frozen negative and ad tables are left
-  out, because they would hold the check RED for good.
+  table's largest gap between syncs is at most 21 hours. Each sync re-stamps every row Amazon still
+  returns, though not every row in the table, so each table's newest stamp is its last sync. The
+  frozen negative and ad tables are left out, because they would hold the check RED for good.
 - **The standing tail.** On every read the detail ends with what no source can see: hand negatives,
   ads and creatives, and a change undone before the next sync.
 

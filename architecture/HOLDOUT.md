@@ -112,7 +112,7 @@ between its keywords instead of being fooled by it.
 | `DE_HOLDOUT_TRIAL` | (trial 2) **Which trial is live.** It is append-only, with one row per event, `OPENED` or `ARCHIVED`. A trial is archived by appending a row, never by editing its assignment rows. Trial 1 has a back-filled `OPENED` row (its v27.83 constants) and an `ARCHIVED` row effective 2026-10-05 that states its contamination. Trial 2's `OPENED` row carries its seed, dates, `t_mult`, MDE and Ori's words. |
 | `V_HOLDOUT_TRIAL` | (trial 2) One row per trial: `gate_from`, `gate_to` = `LEAST(win_end, archived_from − 1)`, `win_start`, `win_end`, `interim_look`, `first_readout`, `is_live`, `status_today`. Exactly one trial is live. The readout, the board and `SP_ASSIGN_HOLDOUT` read that row. |
 | `V_HOLDOUT_ARM` | (trial 2) **The gate: the arm that binds today, any trial.** One row per control campaign whose arm binds today or later: `campaign_id`, `gate_from`, `gate_to`, `trial_id`. Every reader that keeps the engine off a control reads it. A hold ends on its trial's last day, and a trial-1 control that trial 2 drew as TREATED is released on 2026-10-05. **A trial with no `OPENED` row is invisible to it**, so an empty registry empties the gate, and the board then reads RED ("no HOLDOUT unit"). |
-| `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script. A later row carries Ori's ruling on a difference. Read by `holdout_unit_changed`. |
+| `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script, which records only **present** settings: a row counts only when its source table's latest sync re-stamped it and it is not flagged deleted (§6, kind 4). A later row carries Ori's ruling on a difference. Its value is NULL when he rules that a setting is gone. Read by `holdout_unit_changed`. |
 | `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. From 2026-10-05 it writes into **the live trial only, and late arrivals only**. A founding cohort is written once from the approved list, never by this procedure, and it writes nothing into a trial that has no founding rows. |
 | `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. Reads `V_HOLDOUT_ARM` (the arm that binds today, any trial), between `gate_from` and `gate_to`. |
 | the other gate readers | `V_PLAN_WINDOW_JUDGMENT`, `V_FAMILY_SEAT_REGISTER` and the three bulksheet generators (`build_reprice_bulksheet.py`, `build_seasonal_unpause_bulksheet.py`, `build_seat_moves_bulksheet.py`) read `V_HOLDOUT_ARM` (the arm that binds today, any trial). Their `eligible_from` is the arm's `gate_from`. Their snapshots `T_FAMILY_SEAT_REGISTER` and `FACT_PLAN_NEXT_WEEK` follow on the next rebuild. |
@@ -469,10 +469,27 @@ then AMBER for as long as any control was ever touched, and it names each one:
    - SB: the `bid_optimization` settings in Fivetran's `sb_campaign_history`.
 4. **A placement or shopper-cohort bid adjustment, or an SB product target's bid or state, that differs
    from its value at the assignment.**
-   - These sources keep today's value only, with no history and no date, so a change is visible only
-     against `DE_HOLDOUT_BASELINE`.
+   - These sources have no history and no date, so a change is visible only against
+     `DE_HOLDOUT_BASELINE`.
+   - **A row in these tables is not necessarily a live setting.** A Fivetran sync re-stamps only the
+     rows Amazon still returns. A removed adjustment keeps its old row and its old stamp, and the
+     three adjustment tables have no `_fivetran_deleted` flag to mark it. The SP table holds no 0%
+     row, so an SP adjustment set to 0% most likely disappears the same way.
+   - Measured 2026-10-04: 14 of the 195 SP placement rows were last stamped between 2026-03-17 and
+     08-14, on 13 campaigns that have no re-stamped row. Two of them are control ME-COMPETE
+     `365568042533669`'s top-of-search 30% and product-page 15%, stamped 2026-06-23. These are almost
+     certainly adjustments removed months ago.
+   - **So a setting counts only when its row was re-stamped by its table's latest sync** (within one
+     hour of that table's newest stamp) and is not flagged deleted. The baseline, the board and the
+     restart check K12 all use this one rule. A removed adjustment then shows as a difference. A stale
+     row that Fivetran later drops changes nothing, because it was already absent.
+   - By that rule, 7 of the 12 controls carry placement rows, 6 of them with a non-zero adjustment.
+     1 carries a shopper-cohort row and 1 an SB product target: 15 settings on 8 controls. ME-COMPETE
+     carries none.
    - Such a difference is RED while it stands, because there is no date to age it.
-   - Ori's ruling on it is recorded as a new baseline row, after which it reads AMBER.
+   - Ori's ruling on it is recorded as a new baseline row, after which it reads AMBER. When he rules
+     that a setting is gone, that row's value is NULL, meaning absent. If the setting comes back
+     later, it reads RED again.
    - **This matters for BOX-VIDEO/PT (Competitors, Purple, A1) `27660342907703`**, the largest control.
      Its one target is an SB product target, which no ledger row, and so no R9 censoring, can ever see.
 
@@ -500,9 +517,9 @@ any of the following is more than 36 hours old:
 - the last sync of any one of the eleven Fivetran tables that the ledger and the alarm read.
 
 Measured 2026-10-04: the procedures' largest gap between OK runs over 30 days is 13 hours, and each
-table's largest gap between syncs is at most 21 hours. Fivetran re-stamps every row it re-writes, so a
-table's newest stamp moves with each sync and not only on a change. The queries are in the plan,
-Appendix C.
+table's largest gap between syncs is at most 21 hours. Each sync re-stamps every row Amazon still
+returns (not every row in the table), so a table's newest stamp moves with each sync and not only on a
+change. The queries are in the plan, Appendix C.
 
 ---
 

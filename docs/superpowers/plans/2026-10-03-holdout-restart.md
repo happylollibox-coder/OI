@@ -26,8 +26,15 @@
 >    times cited in §2.3 are corrected from the log;
 > 6. wording: §1, §2.9, Appendix A.
 >
-> Every number this amendment adds was measured on 2026-10-04 between about 01:45 and 02:30 UTC. The
+> Every number this amendment adds was measured on 2026-10-04 between about 01:45 and 02:55 UTC. The
 > queries are in Appendix C.
+>
+> **Follow-up (2026-10-04, re-review of the amendment).** The kind-4 design assumed that a row in a
+> current-state table is a live setting. It is not: a removed adjustment keeps its old, un-re-stamped
+> row. A setting is now present only when the table's latest sync re-stamped its row (the **presence
+> rule**, §2.7 kind 4), in the founding baseline (Task 3), c33's `BASELINE_DIFF` (Task 6) and K12 (§5).
+> A NULL `value` on a later baseline row means absent (Task 2, Step 3b). The "8 of the 12 controls"
+> figure is corrected to 7 (Appendix C11, C12).
 
 **Goal:** restart the randomized holdout so that a clean control group exists from 2026-10-06, keep the
 contaminated first trial on record untouched, and make the health board turn RED the night a control
@@ -331,28 +338,77 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
          by `last_update_date`: 253 campaigns and 1,942 rows, with 0 such changes since 08-20.
     4. **A setting that differs from its value at the assignment:**
        - placement bid adjustments: `campaign_placement_bidding` (SP) and
-         `sb_campaign_bid_adjustments_by_placement` (SB). 8 of the 12 controls carry rows;
-       - SB shopper-cohort adjustments: `sb_campaign_bid_adjustments_shopper_cohort`. 1 control
-         carries a row;
+         `sb_campaign_bid_adjustments_by_placement` (SB);
+       - SB shopper-cohort adjustments: `sb_campaign_bid_adjustments_shopper_cohort`;
        - an SB product target's bid and state: `sb_product_target`.
 
-       **No source can date a change to these.** Each table keeps today's value only, with no history,
-       no creation date and no change date, and Fivetran re-stamps its rows on every sync.
-       `sb_product_target` is also outside `V_SRC_AmazonAds_keyword`, so `DIM_KEYWORD`, the ledger and
-       R9 never see an SB product target at all. **BOX-VIDEO/PT (Competitors, Purple, A1)
-       `27660342907703`, the largest control at $49.47 a day, has no keyword in `DIM_KEYWORD`.** Its
-       one target is an SB product target, so its only bid lever is invisible to the ledger.
+       **No source can date a change to these.** None of the four tables has a history, a creation
+       date or a change date. `sb_product_target` is also outside `V_SRC_AmazonAds_keyword`, so
+       `DIM_KEYWORD`, the ledger and R9 never see an SB product target at all. **BOX-VIDEO/PT
+       (Competitors, Purple, A1) `27660342907703`, the largest control at $49.47 a day, has no keyword
+       in `DIM_KEYWORD`.** Its one target is an SB product target, so its only bid lever is invisible
+       to the ledger.
+
+       **A row in one of these tables is not necessarily a live setting** (corrected 2026-10-04 on
+       re-review; the first version said each table "keeps today's value only" and that Fivetran
+       "re-stamps its rows on every sync"):
+       - A sync re-stamps only the rows Amazon still returns. A row Amazon stops returning keeps its
+         old `_fivetran_synced` and stays in the table. The three adjustment tables have no
+         `_fivetran_deleted` column, so such a row is never marked deleted either. Only
+         `sb_product_target` carries the flag.
+       - Measured at the 2026-10-04 02:14 UTC sync (Appendix C11): `campaign_placement_bidding`
+         re-stamped 181 of its 195 rows. The other 14 rows, on 13 campaigns, were last stamped
+         between 2026-03-17 and 08-14, and none of those 13 campaigns has a re-stamped row.
+       - Two of the 14 rows belong to control `365568042533669` ME-COMPETE (ENABLED):
+         `PLACEMENT_TOP` 30 and `PLACEMENT_PRODUCT_PAGE` 15, stamped 2026-06-23. These are almost
+         certainly adjustments removed months ago.
+       - The SP table holds no 0% row (0 of 195), so an SP adjustment set to 0% most likely stops
+         being returned, as a removal does. The presence rule below reads either case as a
+         difference: a row that stops being re-stamped turns absent, and a re-stamped 0% differs from
+         the baseline value.
+       - `sb_product_target` keeps 62 rows that have not been re-stamped since 2026-01-02. All 62 carry
+         `_fivetran_deleted`. The SB placement and shopper-cohort tables were re-stamped whole (390 of
+         390 and 36 of 36).
+
+       **The presence rule.** A setting is present only when its row was re-stamped by its table's
+       latest sync, that is `_fivetran_synced >= MAX(_fivetran_synced)` of that table minus 1 hour,
+       and the row is not `_fivetran_deleted`. Every other row is absent. This one rule is used in
+       three places: the founding baseline insert (Task 3), c33's `BASELINE_DIFF` (Task 6) and K12's
+       re-read (§5).
+       - **Why one hour (measured, Appendix C11).** Time travel was read at 30 points, 1 to 166 hours
+         back. At every point and on all four tables, every row of the latest sync carried one stamp
+         (spread 0.0 minutes). The nearest older stamp was at least 1,046 hours older on the SP table
+         and 6,429 hours older on `sb_product_target`. The set of present settings never changed on
+         the three adjustment tables. On `sb_product_target` it changed once, between 150 and 144
+         hours back, which was a bid or state change.
+       - If two syncs ever landed within one hour, a row the second one stopped re-stamping would
+         read as present until the next sync.
+       - **Measured with the rule** (02:14 UTC sync): 7 of the 12 controls carry placement rows, 5 SP
+         and 2 SB. 6 of the 7 carry a non-zero adjustment. `537046793426450`'s four SB rows are all 0%,
+         and that control also carries the one shopper-cohort row (0%). `27660342907703` carries the
+         one SB product target. In all, **15 settings on 8 controls**. Four controls carry none,
+         ME-COMPETE among them. The first version said "8 of the 12 controls carry rows": it counted
+         ME-COMPETE's two stale rows, and `537046793426450`'s rows, which are all 0%.
+
        BigQuery time travel cannot compare a table with its own past inside one query (measured: "is
        referenced with and without 'FOR SYSTEM_TIME AS OF'"), so a stored value is the only reference.
        The design:
-       - the founding script (Task 3) writes each control's values once, into a new append-only table
-         `DE_HOLDOUT_BASELINE` (Task 2);
-       - c33 compares today's values with the latest baseline row per setting. A changed value, or a
-         setting present on one side only, is an **undated touch**;
+       - the founding script (Task 3) writes each control's **present** settings once, by the presence
+         rule, into a new append-only table `DE_HOLDOUT_BASELINE` (Task 2);
+       - c33 compares today's present settings, by the same rule, with the latest baseline row per
+         setting. A changed value, or a setting present on one side only, is an **undated touch**;
+       - so a removal is seen. On SP, a removed adjustment's row stops being re-stamped, turns absent
+         and differs from its baseline. A stale row that Fivetran drops later, for example on a
+         re-sync, changes nothing, because it was already absent. Without the rule, the baseline
+         would have recorded ME-COMPETE's two removed adjustments as live, a removal would have left
+         no difference, and a dropped stale row would have read as an undated touch with no touch
+         behind it. All three were tested on copies (Appendix C12);
        - an undated touch reads **RED while it stands**, because no date exists to age it. The detail
          says "date unknown: the source keeps no history";
-       - Ori's ruling on it is recorded by appending a baseline row that carries his words. A setting
-         re-baselined that way reads AMBER from then on, as an aged touch does;
+       - Ori's ruling on it is recorded by appending a baseline row that carries his words. **A NULL
+         `value` on a later baseline row means absent**, so a removal can be re-baselined like a
+         changed value. A setting re-baselined that way reads AMBER from then on, as an aged touch
+         does. If it comes back later, it differs from the NULL and reads RED again;
        - a late-arrival control has no baseline row, and the detail names it as unwatched on these
          settings.
   - **Kinds 2–4 are seen by the alarm and not censored by R9.** R9 stays as Ori ruled it on 10-02, and
@@ -395,9 +451,26 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
 
     The deployed `V_SRC_AmazonAds_keyword` unions the first three tables. Its MAX would stay fresh on
     `sb_keyword` alone.
-  - **Why each table's MAX ticks daily (measured).** Fivetran re-writes these tables on every sync and
-    stamps every row it re-writes. A table's `MAX(_fivetran_synced)` is therefore its last sync, not its
-    last change. The evidence:
+  - **Why each table's MAX ticks daily (measured).** Each sync re-stamps every row Amazon still
+    returns. It does not re-stamp every row in the table (corrected 2026-10-04). The 02:14 UTC sync of
+    10-04 re-stamped these rows (Appendix C11):
+
+    | table | re-stamped | rows |
+    |---|---|---|
+    | `keyword_history` | 19,786 | 38,697 |
+    | `targeting_clause_history` | 5,836 | 11,218 |
+    | `campaign_history` | 861 | 4,495 |
+    | `ad_group_history` | 991 | 1,837 |
+    | `sb_ad_group_history` | 273 | 333 |
+    | `sb_campaign_history` | 253 | 1,942 |
+    | `sb_product_target` | 88 | 150 |
+    | `campaign_placement_bidding` | 181 | 195 |
+    | `sb_keyword` | 8,415 | 8,415 |
+    | SB placement | 390 | 390 |
+    | shopper cohort | 36 | 36 |
+
+    So a table's `MAX(_fivetran_synced)` is its last sync, not its last change, for as long as Amazon
+    returns at least one of its rows. The evidence:
     - BigQuery's job history for the Fivetran project shows a write that touched rows on each of the
       eleven tables at gaps of at most 21 hours over the 30 days to 10-04 (16 hours for
       `campaign_history` and `campaign_placement_bidding`, 12 hours for `ad_group_history`);
@@ -770,7 +843,8 @@ VALUES
     c33 reads the latest row per key by `recorded_at`.
   - **Columns:**
     - `trial_id`, `campaign_id`, `setting`, `recorded_at`: NOT NULL;
-    - `value`: STRING, the value as read;
+    - `value`: STRING, the value as read. **NULL means absent.** Only a later re-baseline row may
+      carry it, when Ori rules that a setting is gone;
     - `source`: the Fivetran table it was read from;
     - `source_synced_at`: that table's `MAX(_fivetran_synced)` at the read;
     - `ruling`: NULL on the founding rows. On a later row it carries Ori's words when he rules on an
@@ -780,12 +854,19 @@ VALUES
     - `SB_PLACEMENT|<placement>` = `percentage` from `sb_campaign_bid_adjustments_by_placement`;
     - `SB_SHOPPER_COHORT|<audience_id>|<shopper_cohort_type>` = `percentage` from
       `sb_campaign_bid_adjustments_shopper_cohort`;
-    - `SB_TARGET|<id>|bid` and `SB_TARGET|<id>|state` from `sb_product_target`. Rows with
-      `_fivetran_deleted` count as absent.
-  - **No row is written for an absent setting.** Absence is read as absence, so a setting that appears
-    later is a touch.
+    - `SB_TARGET|<id>|bid` and `SB_TARGET|<id>|state` from `sb_product_target`.
+  - **What is present: the presence rule of §2.7 kind 4, on all four sources.** A row counts only when
+    `_fivetran_synced >= MAX(_fivetran_synced)` of its own table minus 1 hour, and it is not
+    `_fivetran_deleted` (only `sb_product_target` has that column). Every other row is absent. The
+    founding insert (Task 3), c33's `BASELINE_DIFF` (Task 6) and K12 (§5) apply the same rule. Write it
+    once, the same way, in all three.
+  - **The founding rows record no absent setting.** A setting absent at the founding that is present
+    later is a touch. A later row whose `value` is NULL records that the setting is absent from then
+    on, and c33 compares it like any other value. An absent setting matches a NULL baseline, and a
+    present one differs from it.
   - **Who writes it:** the founding script (Task 3) writes the first rows, and only for the trial's
-    HOLDOUT units. Nothing else writes it except an appended re-baseline row carrying Ori's ruling.
+    HOLDOUT units. Nothing else writes it except an appended re-baseline row carrying Ori's ruling,
+    whose `value` is NULL when he accepts a removal.
   - **The house rules apply.** Register it in `config.yaml`. Its description says append-only, read by
     `V_ENGINE_HEALTH` c33, spec HOLDOUT.md §6.
   - **If it cannot be built and checked inside the deploy window,** deploy without it. Kind 4 then
@@ -894,12 +975,18 @@ FROM v;
   campaign name contains a backslash (`FRESH - SB\BROAD (Hunter, FRESH)`), and the literal escapes it.
 
 - [ ] **The baseline (amendment 2026-10-04).** The same script then appends the `DE_HOLDOUT_BASELINE`
-  rows (Task 2, Step 3b) for the 12 HOLDOUT units. They are read from the four sources in the same
-  script, and the script asserts that their number equals a re-read of those sources for the 12
-  campaigns. Measured 2026-10-04: 8 of the 12 controls carry placement rows, 1 carries a shopper-cohort
-  row, and 1 (`27660342907703`) carries an SB product target. Some controls carry none of these
-  settings, which is fine: absence is recorded as absence. If this insert fails, the founding rows
-  stand, because they are the record. Run the baseline insert again on its own, before Task 4.
+  rows (Task 2, Step 3b) for the 12 HOLDOUT units. The same script reads them from the four sources
+  **by the presence rule of §2.7 kind 4**. It then asserts that their number equals a re-read of those
+  sources for the 12 campaigns, by the same rule.
+  - Measured 2026-10-04 at the 02:14 UTC sync (Appendix C11): 15 settings on 8 controls. 7 controls
+    carry placement rows (6 of them non-zero), 1 carries a shopper-cohort row and 1 (`27660342907703`)
+    carries an SB product target.
+  - Four controls carry none. Absence is recorded as absence. ME-COMPETE `365568042533669` is one of
+    the four: its two rows have not been re-stamped since 2026-06-23, so they are absent under the rule.
+    Read without the rule, the same insert would write 17 rows on 9 controls, ME-COMPETE's two removed
+    adjustments among them (Appendix C12).
+  - If this insert fails, the founding rows stand, because they are the record. Run the baseline
+    insert again on its own, before Task 4.
 - [ ] Checks K2, K3, K4, K5 and K12 with their NCs.
 
 ### Task 4: The assignment procedure and the population view follow the live trial
@@ -1068,10 +1155,11 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
        `bidding_strategy` differs, plus `fivetran-hl.amazon_ads.sb_campaign_history` version pairs
        where `bid_optimization` or `bid_optimization_strategy` differs. Both use LA day ≥ the
        assignment day, ordered as `V_AMAZON_OBSERVED_CHANGES` orders versions.
-    4. `BASELINE_DIFF`: today's values from the four current-state sources, full-outer-joined to the
-       latest `DE_HOLDOUT_BASELINE` row per (`trial_id`, `campaign_id`, `setting`) for the live trial,
-       where the two sides differ. `IS DISTINCT FROM` treats a setting on one side only as a
-       difference.
+    4. `BASELINE_DIFF`: today's **present** settings from the four current-state sources, by the
+       presence rule of §2.7 kind 4, full-outer-joined to the latest `DE_HOLDOUT_BASELINE` row per
+       (`trial_id`, `campaign_id`, `setting`) for the live trial, where the two sides differ.
+       `IS DISTINCT FROM` treats a setting on one side only as a difference. A baseline whose latest
+       `value` is NULL means absent, so an absent setting matches it and a present one differs from it.
   - **`hu_live` reads fifteen ages:** the four procedures' last OK runs, and `MAX(_fivetran_synced)` of
     each of the eleven Fivetran tables listed in §2.7, each read by name. Read them from the Fivetran
     tables themselves, as the `V_SRC_` views do: no OI view tells the three keyword tables apart.
@@ -1119,6 +1207,13 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
     - an `sb_campaign_history` copy with a `bid_optimization` flip today reads RED;
     - a `DE_HOLDOUT_BASELINE` copy with one placement value altered reads RED while it stands. With a
       later re-baseline row carrying a `ruling`, it reads AMBER;
+    - **the presence rule (follow-up 2026-10-04).** These inputs use the copies of Appendix C12, and
+      that appendix gives the `BASELINE_DIFF` counts each must reproduce:
+      - a `campaign_placement_bidding` copy in which one control's row is not re-stamped (its stamp
+        moved one sync back) reads RED, as a removal;
+      - the same copy with a re-baseline row whose `value` is NULL reads AMBER;
+      - a copy with the stale rows deleted reads not-RED on this term, because a re-sync that drops
+        stale rows is not a touch;
     - every one of these RED details carries "not censored by R9".
   - **H5 widened.** For each of the four procedures, a log copy with no OK run in 36 hours reads RED.
     For each of the eleven Fivetran tables, a one-column copy holding only a `_fivetran_synced` 37
@@ -1242,7 +1337,7 @@ input doctored, and must read the stated count. `T1` = `'HOLDOUT-2026Q4-CAMPAIGN
 | K9 | the plan agrees (latest `FACT_PLAN_NEXT_WEEK` live partition): `COUNTIF(T2 control AND NOT holdout) + COUNTIF(T1-only control AND holdout)` | the 10-03 partition reads > 0 (T1 controls carried `holdout = TRUE`) |
 | K10 | the readout serves T2: exactly one `NOT_YET` row, whose verdict names `2027-02-09`; no `CENSORED` or `PRE_WINDOW_CHANGE` row names a unit outside T2; no number on any row before `first_readout` (H3) | the readout's text with `k` pinned to T1 reads ≥ 1 (the verdict names 2027-01-05, and the CENSORED rows name T1 units) |
 | K11 | the touch alarm and the feed term: HOLDOUT_INTEGRITY H4 and H5 | as stated in Task 7 |
-| K12 | the baseline is whole (amendment 2026-10-04): for T2's HOLDOUT units, the symmetric difference between the founding `DE_HOLDOUT_BASELINE` rows (`ruling IS NULL`) and a re-read of the four sources' settings at the read, compared as (`campaign_id`, `setting`, `value`). Add 1 when the re-read finds no setting for any T2 HOLDOUT unit, because an empty input would pass (measured 2026-10-04: 8 controls carry placement rows). Run it straight after Task 3; afterwards it reads as kind-4 touches | a copy minus one row reads 1. A copy with one value altered reads 2 |
+| K12 | the baseline is whole (amendment 2026-10-04): for T2's HOLDOUT units, the symmetric difference between the founding `DE_HOLDOUT_BASELINE` rows (`ruling IS NULL`) and a re-read of the four sources' **present** settings at the read, by the presence rule of §2.7 kind 4 (re-stamped by the table's latest sync, within 1 hour of its `MAX(_fivetran_synced)`, and not `_fivetran_deleted`), compared as (`campaign_id`, `setting`, `value`). Add 1 when the re-read finds no setting for any T2 HOLDOUT unit, because an empty input would pass. Measured 2026-10-04 by the rule: 15 settings on 8 controls, of which 7 carry placement rows. Run it straight after Task 3; afterwards it reads as kind-4 touches | a copy minus one row reads 1. A copy with one value altered reads 2. A re-read emptied for the 12 controls reads 16. All three were measured on `TMP_HT2_` copies on 2026-10-04 (Appendix C12) |
 
 ---
 
@@ -1373,7 +1468,9 @@ FROM `fivetran-hl.amazon_ads.keyword_history` FOR SYSTEM_TIME AS OF TIMESTAMP_SU
 
 -- C5 the 12 controls across the sources: DIM_KEYWORD current rows, sb_product_target rows, placement
 -- rows (SP and SB), DIM_CAMPAIGN portfolio / bidding_strategy, sb_campaign_history bid_optimization.
--- 27660342907703: no DIM_KEYWORD row, 1 enabled sb_product_target. 8 controls carry placement rows.
+-- 27660342907703: no DIM_KEYWORD row, 1 enabled sb_product_target. (Corrected 2026-10-04: the first
+-- version said "8 controls carry placement rows". It counted rows not re-stamped by the latest sync. By
+-- the presence rule (C11): 7 controls carry placement rows, 6 of them non-zero.)
 
 -- C6 untracked campaign attributes and new entities since the ledger began (2026-08-20)
 -- DIM_CAMPAIGN version pairs: portfolio_id differs 1 (08-21), bidding_strategy differs 1 (08-26);
@@ -1414,3 +1511,79 @@ SELECT ROUND(SUM(IF(date >= '2026-09-19', GROSS_PROFIT - Ads_cost, 0)), 2) net_1
 FROM `onyga-482313.OI.FACT_AMAZON_ADS`
 WHERE date BETWEEN '2026-09-05' AND '2026-10-02' AND campaign_id IN (/* the 59 ids of §3.4 */);
 ```
+
+### C11 and C12: the presence rule (follow-up 2026-10-04, about 02:30–02:55 UTC)
+
+C11 measures which rows the latest sync re-stamped. C12 tests the rule on `TMP_HT2_` copies.
+
+```sql
+-- C11a per kind-4 table: rows, rows the latest sync re-stamped (within 1 h of the table's MAX), deleted
+-- rows, stale rows that are not deleted, and stale campaigns with no re-stamped row
+WITH s AS (
+  SELECT 'SP_PLACEMENT' t, campaign_id cid, _fivetran_synced ts, FALSE del FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`
+  UNION ALL SELECT 'SB_PLACEMENT', campaign_id, _fivetran_synced, FALSE FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`
+  UNION ALL SELECT 'SB_COHORT', campaign_id, _fivetran_synced, FALSE FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`
+  UNION ALL SELECT 'SB_TARGET', campaign_id, _fivetran_synced, COALESCE(_fivetran_deleted, FALSE) FROM `fivetran-hl.amazon_ads.sb_product_target`),
+x AS (SELECT s.*, ts >= TIMESTAMP_SUB(MAX(ts) OVER (PARTITION BY t), INTERVAL 1 HOUR) fresh FROM s)
+SELECT t, COUNT(*) n, COUNTIF(fresh AND NOT del) present, COUNTIF(del) deleted, COUNTIF(NOT fresh AND NOT del) stale,
+       MIN(IF(NOT fresh AND NOT del, ts, NULL)) stale_min, MAX(IF(NOT fresh, ts, NULL)) stale_max,
+       COUNT(DISTINCT IF(NOT fresh AND NOT del AND cid NOT IN (SELECT cid FROM x x2 WHERE x2.t = x.t AND x2.fresh), cid, NULL)) stale_cids_no_fresh_row
+FROM x GROUP BY 1 ORDER BY 1;
+-- 02:14 UTC sync (re-run 02:55 as written here, same result):
+--   SP_PLACEMENT 195 rows, 181 present, 0 deleted, 14 stale (2026-03-17 .. 08-14) on 13 campaigns, none of
+--   them with a fresh row (DIM_CAMPAIGN: 4 PAUSED, 9 ENABLED, ME-COMPETE among the 9);
+--   SB_PLACEMENT 390 / 390 present; SB_COHORT 36 / 36 present;
+--   SB_TARGET 150 rows, 88 present, 62 deleted (all last stamped by 2026-01-02), 0 stale and not deleted.
+-- The SP table holds 0 rows at 0%; the SB placement table holds 356 rows at 0%. Of the eleven tables of §2.7,
+-- only sb_product_target and sb_keyword have a _fivetran_deleted column. Rows re-stamped by the same sync on
+-- all eleven tables: the table in §2.7 "Why each table's MAX ticks daily".
+
+-- C11b the 12 controls by the rule (the same CTEs, joined to the 12 ids of §3.1, values listed)
+-- present: SP 130115986205897 TOP 100; 222497123677300 PRODUCT_PAGE 200; 230219410635024 PRODUCT_PAGE 200;
+-- 527422818407259 SITE_AMAZON_BUSINESS 50; 53343800376430 TOP 25. SB 71317833591283 DETAIL_PAGE / HOME / OTHER 500;
+-- 537046793426450 DETAIL_PAGE / HOME / OTHER / TOP_OF_SEARCH 0, and its shopper cohort 0. 27660342907703: SB
+-- target bid 0.6, enabled. 15 settings on 8 controls; 7 controls with placement rows, 6 of them non-zero.
+-- absent (stale): 365568042533669 ME-COMPETE PLACEMENT_TOP 30 and PLACEMENT_PRODUCT_PAGE 15, stamped 2026-06-23.
+-- no setting at all: 273898143987321, 271009556929636, 365568042533669, 51727823265377.
+
+-- C11c is one hour wide enough? The same per-table read through time travel, one query per point,
+-- every table at the same AS OF expression, 30 points from 1 to 166 hours back in steps of 6 hours:
+--   FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`
+--     FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 6 HOUR)  (likewise for the other three)
+-- reading the spread of the latest sync's stamps, the gap to the next older stamp, and
+-- FARM_FINGERPRINT(STRING_AGG(present key and value ORDER BY key)).
+-- Every point, every table: spread 0.0 min. Nearest older stamp ≥ 1,046 h (SP), ≥ 6,429 h (SB targets).
+-- Present counts constant: SP 181, SB placement 390, cohort 36, SB targets 88. The fingerprint was constant on the
+-- three adjustment tables. On sb_product_target it changed once, between 150 h and 144 h back. Latest sync age at
+-- the 30 points: 0.0 to 15.6 h.
+```
+
+**C12, the rule tested on copies.** Scratch objects were created on 2026-10-04 and all dropped
+afterwards: `OI.TMP_HT2_SP_PLACEMENT`, `_SB_PLACEMENT`, `_SB_COHORT` and `_SB_TARGET` (copies of the
+four sources), `TMP_HT2_BASELINE` (founding rows by the rule) and `TMP_HT2_BASELINE_OLD` (founding
+rows read without the rule).
+
+The test query is the c33 `BASELINE_DIFF` sketch of Task 6: the latest baseline row per key,
+full-outer-joined to the present settings of the 12 controls, counting `IS DISTINCT FROM`. It also
+computes K12 as in §5 and the count of re-baselined keys (AMBER).
+
+| case (doctored input) | rule | `BASELINE_DIFF` | K12 | re-baselined |
+|---|---|---|---|---|
+| founding insert | with the rule | 15 rows on 8 controls, 0 for ME-COMPETE | | |
+| founding insert | without the rule | 17 rows on 9 controls, 2 for ME-COMPETE | | |
+| no doctoring | with / without | 0 / 0 | 0 / 0 | 0 |
+| a removal on SP: `130115986205897` TOP's stamp moved 6 h back, so it is not re-stamped | with | **1** (100 → absent) | 1 | 0 |
+| the same | without | **0**: missed | 0 | |
+| the same, plus a re-baseline row with `value` NULL and a `ruling` | with | 0 | 1 | **1** (AMBER) |
+| then the row is re-stamped again (the setting comes back) | with | 1 (absent → 100) | 0 | 1 |
+| Fivetran drops the 14 stale SP rows (a re-sync) | with | **0** | 0 | 0 |
+| the same | without | **2**: ME-COMPETE's removed rows read as an undated touch | 2 | |
+| a value altered: `130115986205897` TOP 100 → 120 | with | 1 | 2 | 0 |
+| a setting appears: a re-stamped ME-COMPETE TOP 30 row is added | with | 1 (absent → 30) | 1 | 0 |
+| the same | without | **0**: missed, because it matches the stale row | 0 | |
+| the SB target on `27660342907703` flagged `_fivetran_deleted` | with | 2 (its bid and its state) | 2 | 0 |
+| K12 NC: a baseline copy without one row (`53343800376430` TOP) | with | 1 | **1** | |
+| K12 NC: a baseline copy with that value altered (25 → 30) | with | 1 | **2** | |
+| K12 emptiness: the four copies with the 12 controls' rows deleted | with | 15 | **16** (15 + 1) | |
+
+After the last case, `INFORMATION_SCHEMA.TABLES` and `ROUTINES` listed no `TMP_HT2_%` object.
