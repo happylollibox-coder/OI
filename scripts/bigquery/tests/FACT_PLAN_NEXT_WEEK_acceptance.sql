@@ -323,6 +323,10 @@
 --   NC_EMPTY: F1 1, F2 1 (with K1 K2 K3 H23S 1).
 --   NC_F1_SECOND_WRITE_AFTER_MIDNIGHT (the plan's control: the night's DELETE recorded as removing its
 --     712 rows): F1 1.  NC_F1_WRITE_NOT_ON_RECORD (its INSERT removed from the record): F1 1.
+--     2026-10-04: this copy read F1 0 on the real 10-04 night (written 05:30:18 UTC = 22:30 Los Angeles
+--     the evening before, so a rewrite before midnight); since commit 563a10a it is also restamped
+--     00:35 Los Angeles on its own as_of, and reads F1 1 on that night (job
+--     bqjob_r7679d928f877cc68_000001a10745edc6_1).
 --   HC_F1_REWRITE_BEFORE_MIDNIGHT (that rewrite re-keyed to 10-04 and stamped 22:35 Los Angeles on
 --     10-03, its jobs moved with it): F1 0, F2 0.  NC_F1_REWRITE_AT_MIDNIGHT (stamped 00:00 Los Angeles
 --     on 10-04): F1 1.
