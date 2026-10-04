@@ -60,6 +60,17 @@
 --     2027-01-26   12     12     12   0
 --     2027-01-27    0      0      0   0
 --   slot time of one full read on the copies: V_HOLDOUT_ARM 5.46 s, V_HOLDOUT_TRIAL 4.88 s.
+--
+-- PLAN TASK 4 REHEARSAL, 2026-10-04 ~03:50-04:10 UTC (SP_ASSIGN_HOLDOUT and V_HOLDOUT_ELIGIBLE from
+-- this branch, names sed-pointed at TMP_HT2_ copies, V_HOLDOUT_TRIAL / V_HOLDOUT_ARM and this file
+-- pinned to 2026-10-05; all dropped afterwards). The deployed bodies matched the repo files before
+-- the edit (procedure byte for byte; view apart from its comment lines).
+--   after the founding file, then one extra eligible campaign (SB|UNC|GRD) and two CALLs:
+--     K1 0 | K2 0 | K3 0 | K4 0 (T2 rows 60: one LATE ARRIVAL, seq 4, HOLDOUT) | K5 0 | K6 0 (13 bind)
+--   K4 NC: that LATE ARRIVAL's seq moved 4 -> 5 (not continuing)               >=1 / 2
+--   K2 NC = review fix 3's hazard: the deployed (trial-1) procedure body under this branch's
+--     V_HOLDOUT_ELIGIBLE appended the 5 Bunny campaigns to trial 1                 1 / 1 (74 rows)
+--     (the same body under the deployed view appended 0)
 -- =============================================================================================
 
 -- K1 one live trial, and it is T2

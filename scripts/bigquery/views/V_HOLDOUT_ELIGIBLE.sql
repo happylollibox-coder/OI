@@ -3,7 +3,14 @@
 -- the randomization blocks on. Spec: architecture/HOLDOUT.md.
 --
 -- GRAIN: one row per ENABLED campaign that clears every eligibility rule below. 69 rows on the
--- assignment date 2026-08-19 — the exact population the design was powered on.
+-- assignment date 2026-08-19 — the exact population the design was powered on. Trial 2 (holdout
+-- restart, plan docs/superpowers/plans/2026-10-03-holdout-restart.md §2.4): 59 rows on its design
+-- date 2026-10-03 (FACT anchor 2026-10-02) under the re-graded stock literal of exclusion 4.
+--
+-- DEPLOY ORDER (plan Task 4, review fix 3): this view's trial-2 literal deploys AFTER
+-- SP_ASSIGN_HOLDOUT's live-trial body, never before. Under trial 1's procedure the literal makes the
+-- 5 Bunny campaigns eligible, and its next run appends them to trial 1 for good. See the header of
+-- procedures/SP_ASSIGN_HOLDOUT.sql.
 --
 -- WHY A TRIAL AT ALL (measured 2026-08-18, all numbers real). We tried to answer Ori's question
 -- ("the main goal of ads is to make more total dollars than we would without the changes") with
@@ -37,7 +44,8 @@
 --  3. BRAND DEFENSE (7 campaigns, $764/28d). Doctrine already forbids the engine moving defense
 --     bids (V_CAMPAIGN_CAP_STATE: "ownership never moves a defense campaign's bids"). They are
 --     therefore untreated in BOTH arms — pure noise, no signal.
---  4. CRITICAL-STOCK FAMILIES Bunny and LolliBall (14 campaigns, $5,496/28d). Holding these out
+--  4. CRITICAL-STOCK FAMILIES, graded on each trial's design date: trial 1 (2026-08-18) Bunny and
+--     LolliBall (14 campaigns, $5,496/28d); trial 2 (2026-10-03) LolliBall only. Holding these out
 --     costs INVENTORY, not dollars: a holdout campaign cannot be throttled when the family runs
 --     dry, so the trial would spend down stock it cannot replace. The list is a FROZEN LITERAL,
 --     deliberately — see the note on the exclusion below.
@@ -65,9 +73,9 @@
 -- SP_ASSIGN_HOLDOUT.
 --
 -- PLANNER DOCTRINE: this view reads V_CAMPAIGN_CAP_STATE and V_LAUNCH_POPULATION, which are not
--- cheap. It is read by EXACTLY ONE consumer, SP_ASSIGN_HOLDOUT, once a day. Every hot consumer —
--- the engines, the preflight gate, the readout — reads the TABLE DE_HOLDOUT_ASSIGNMENT, never
--- this view. Same doctrine as FACT_PANEL_OWNERSHIP / FACT_KEYWORD_GUARD.
+-- cheap. It is read by EXACTLY ONE consumer, SP_ASSIGN_HOLDOUT, once per pass. Every hot consumer —
+-- the engines, the preflight gate, the readout — reads the TABLE DE_HOLDOUT_ASSIGNMENT (or
+-- V_HOLDOUT_ARM over it), never this view. Same doctrine as FACT_PANEL_OWNERSHIP / FACT_KEYWORD_GUARD.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_HOLDOUT_ELIGIBLE` AS
 WITH
@@ -136,13 +144,17 @@ LEFT JOIN lau  l  ON l.campaign_id  = c.campaign_id
 WHERE
   -- exclusion 2: dormant. No spend in 28 days is no outcome to measure.
   COALESCE(s.spend, 0) > 0
-  -- exclusion 4: CRITICAL-stock families, as graded on the design date 2026-08-18 (Bunny 21.7
-  -- days of cover, LolliBall 33.7). THIS LIST IS A FROZEN LITERAL ON PURPOSE. Reading a live
+  -- exclusion 4: CRITICAL-stock families, as graded on the design date. Trial 1, 2026-08-18: Bunny
+  -- (21.7 days of cover) and LolliBall (33.7), so ('Bunny', 'LolliBall'). Trial 2, re-graded on its
+  -- design date 2026-10-03 (V_LOW_STOCK_ADS, family row): Bunny OK (159.4 days binding cover, 6,000
+  -- units arriving 10-07) and LolliBall CRITICAL (21.6 days), so ('LolliBall'). The same rule gives
+  -- a new answer; it is not re-graded between design dates. THIS LIST IS A FROZEN LITERAL ON
+  -- PURPOSE. Reading a live
   -- risk_state here would (a) drag V_LOW_STOCK_ADS — a view at BigQuery's planning ceiling —
   -- into this plan, which the planner doctrine forbids, and (b) let the trial's POPULATION drift
   -- with performance: a family that grades CRITICAL because it is selling well would silently
   -- leave the eligible set, which is a selection artifact of exactly the kind this whole design
   -- exists to kill. Families that grade CRITICAL *during* the trial are handled by the pre-
   -- committed censoring rule (symmetric, both arms), never by editing this list.
-  AND COALESCE(f.parent_name, 'Unknown') NOT IN ('Bunny', 'LolliBall')
+  AND COALESCE(f.parent_name, 'Unknown') NOT IN ('LolliBall')
 ;
