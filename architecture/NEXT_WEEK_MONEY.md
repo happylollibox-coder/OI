@@ -1140,7 +1140,11 @@ FROM `onyga-482313.OI.V_PLAN_WINDOW_JUDGMENT`;
   both questions in one line. **Ruled 2026-10-02 (R6, spec P-20):** that shortfall, floored at 0,
   is `rank_money_burned`, and it orders every candidate with no positive score — built in the judge
   v27.157; `SP_BUILD_NEXT_WEEK_PLAN`'s walk orders the same way from v27.159 (piece-1 Task 5).
-- **The holdout is named in words, not only in a column** (v27.134). `holdout` is TRUE only from the
+- **The holdout is named in words, not only in a column** (v27.134). From 2026-10-05 the judge's
+  `holdout` CTE reads `V_HOLDOUT_ARM` (the arm that binds today, any trial); before, it read
+  `DE_HOLDOUT_ASSIGNMENT`, every trial's HOLDOUT rows, with no end. Its `eligible_from` is the arm's
+  `gate_from`, and a campaign whose trial no longer binds (trial 1's controls that trial 2 drew as
+  TREATED, from 2026-10-05) is not holdout and not `holdout_member`. `holdout` is TRUE only from the
   campaign's `eligible_from`, so a holdout campaign judged *before* that date is a candidate today
   and silent tomorrow. The sentence used to promise those rows a seat with no mention of the
   holdout, and `C13` ("the holdout is never a candidate") passed only because no campaign had

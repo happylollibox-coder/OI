@@ -15,7 +15,8 @@ red>0).
 **The family seat register's checks (v27.127, 2026-08-23; `seat_*`, spec
 `FAMILY_SEAT_REGISTER.md` "Health").** They read the register's once-per-pass IMAGE
 (`T_FAMILY_SEAT_REGISTER` — the table the brief, the Weekly Run and the cube read), the seat
-ledger, the keyword-state snapshot, the change log, the holdout table and `LOG_PIPELINE_RUNS`;
+ledger, the keyword-state snapshot, the change log, the holdout arm (from 2026-10-05 `V_HOLDOUT_ARM`,
+the arm that binds today, any trial) and `LOG_PIPELINE_RUNS`;
 never the live register view and never a ceiling view. seat_reconciliation_gap (categories = the
 family's spend on every horizon, seats + leaks + gaps = the bad side today, within $0.01 — the
 acceptance suite's own tolerance; red>0) · seat_ledger_idempotence (the invariants a second
@@ -23,8 +24,10 @@ admission or a re-insert on one snapshot would break; the proof proper is two ru
 fingerprint — red>0) · seat_every_occupant_numbered (red for an unnumbered or twice-held number
 on the image; amber when the image and the ledger disagree, which is the transient between
 orchestrator step 20.8b and cube step 0c of one pass) · seat_no_launch_seat (red>0) ·
-seat_holdout_row_on_sheet (a seat book row naming a HOLDOUT-arm campaign built on or after its
-`eligible_from`, at any upload status; red>0) · seat_raise_at_or_below_live_bid (ruling R-f;
+seat_holdout_row_on_sheet (a seat book row naming a HOLDOUT-arm campaign built while its arm binds —
+from 2026-10-05 it reads `V_HOLDOUT_ARM` (the arm that binds today, any trial), between `gate_from` and
+`gate_to`, and its detail prints the arm's `MIN(gate_from)`; before, `DE_HOLDOUT_ASSIGNMENT` from
+`eligible_from` with no end — at any upload status; red>0) · seat_raise_at_or_below_live_bid (ruling R-f;
 red>0) · seat_past_due_in_future_tense (ruling R-i; red>0) · seat_overdue_vs_snapshot (INFO —
 reports the appointments the ladder owes, measured on the snapshot's own date; the cause is the
 park-era `settle_due`, diagnosed and not applied, a ruling for Ori) · seat_step_days_since_pass
@@ -86,6 +89,59 @@ from that day, AMBER while any such change stands, and the detail names them. Me
 deploy: AMBER, measured 0; the board filtered to this check 99.5 / 143.6 slot-s (two runs, no
 `FACT_AMAZON_ADS`). `V_DAILY_BRIEF`'s SYSTEM line counts RED rows only, so this AMBER shows on the
 board and not in the brief. Acceptance: 31 rows PASS (`HOLDOUT_INTEGRITY_acceptance.sql` header).
+
+**Trial 2: the touch alarm and feed liveness (from 2026-10-05, as designed; plan
+`docs/superpowers/plans/2026-10-03-holdout-restart.md` §2.7 and Task 6; spec `HOLDOUT.md` §6 "What the
+alarm sees").**
+
+*Why.* Ori restarted the trial (2026-10-03) relying on this check to turn the brief RED the night a
+control is touched. As built (v27.162) it does not. On 2026-10-03 it read **AMBER, measured 0**, while
+its own detail listed 8 of 14 controls changed inside the window. It turns RED only when the readout
+*fails* to censor, and the readout censors from the same ledger on the same read.
+
+*What changes.* holdout_unit_changed reads **the live trial**: the `is_live` row of `V_HOLDOUT_TRIAL`
+and that trial's rows of `DE_HOLDOUT_ASSIGNMENT`. It no longer reads a literal trial id. R9's terms
+above are unchanged, and two terms are added:
+
+- **Touch alarm.** RED while any touch on a control of the live trial, from its assignment day, is 7 or
+  fewer Los Angeles days old. After that it is AMBER for as long as any control was ever touched. The
+  detail leads with one `TOUCHED:` clause per touch, giving its kind, the campaign, the day and what
+  changed. A touch is any of four kinds:
+  1. a ledger row: an applied change-log row, or an observed change;
+  2. a keyword, product target or ad group created on a control (its first `DIM_KEYWORD` /
+     `DIM_AD_GROUP` version);
+  3. a portfolio or bidding-strategy change: `DIM_CAMPAIGN` versions, and Fivetran's
+     `sb_campaign_history` for SB bid optimization;
+  4. a placement or shopper-cohort adjustment, or an SB product target's bid or state, that differs
+     from the value stored at the assignment in `DE_HOLDOUT_BASELINE`.
+
+  Kinds 2–4 are "seen by the alarm, not censored by R9 — Ori to rule". A kind-4 difference has no date,
+  so it reads RED while it stands. Ori's ruling on it is appended as a baseline row, and the setting
+  then reads AMBER.
+- **Feed liveness.** RED when any of the following is more than 36 hours old or missing, and the detail
+  prints every age:
+  - the last OK run of `SP_RECORD_OBSERVED_CHANGES`, `SP_LOAD_DIM_KEYWORD`, `SP_LOAD_DIM_CAMPAIGN` or
+    `SP_LOAD_DIM_AD_GROUP`, each on its own;
+  - `MAX(_fivetran_synced)` of each of eleven Fivetran tables, each on its own: the SP and SB keyword,
+    SP target, campaign and ad-group tables, the two placement tables, the shopper-cohort table and SB
+    product targets.
+
+  Measured 2026-10-04: the procedures' largest gap between OK runs over 30 days is 13 hours, and each
+  table's largest gap between syncs is at most 21 hours. The frozen negative and ad tables are left
+  out, because they would hold the check RED for good.
+- **The standing tail.** On every read the detail ends with what no source can see: hand negatives,
+  ads and creatives, and a change undone before the next sync.
+
+*Status order*:
+1. RED on: no HOLDOUT unit, no observed-change row, a censoring or publishing gap (R9 as built), a
+   recent or undated touch, or a stale feed;
+2. else AMBER on: an older touch, a re-baselined setting, or a change before the window;
+3. else GREEN.
+
+`V_DAILY_BRIEF`'s SYSTEM line counts RED rows, so a touched control reaches the brief. Acceptance:
+`HOLDOUT_INTEGRITY_acceptance.sql` H4 (one doctored input per kind of touch) and H5 (one per procedure
+and per table). The measured results land in that file's header with the deploy. Until they do, every
+number in this paragraph is the plan's measurement, not the board's.
 
 **A refused pass, and the board's memory (v27.163, 2026-10-03; money-plan piece-1 Task 9).**
 *Why:* the piece-0 proof found `SP_BUILD_NEXT_WEEK_PLAN` refused 3 of 9 passes from 2026-09-29 to
