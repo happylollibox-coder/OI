@@ -35,6 +35,12 @@
 > rule**, §2.7 kind 4), in the founding baseline (Task 3), c33's `BASELINE_DIFF` (Task 6) and K12 (§5).
 > A NULL `value` on a later baseline row means absent (Task 2, Step 3b). The "8 of the 12 controls"
 > figure is corrected to 7 (Appendix C11, C12).
+>
+> **Second follow-up (2026-10-04, re-review).** Kind 4 now names the controls it watches: the live
+> trial's HOLDOUT units with `STARTS_WITH(assignment_rule, 'FOUNDING')`, whether or not they have a
+> baseline row. `BASELINE_DIFF`'s today side reads only those. A `LATE ARRIVAL` control is named
+> unwatched by its `assignment_rule`, never because it has no baseline row (§2.7 kind 4, Task 2 Step 3b,
+> Task 6, Task 7 H4, K12). The tests were re-run with c33's text and no id literal (Appendix C12).
 
 **Goal:** restart the randomized holdout so that a clean control group exists from 2026-10-06, keep the
 contaminated first trial on record untouched, and make the health board turn RED the night a control
@@ -313,8 +319,9 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
     `SP_RECORD_OBSERVED_CHANGES` and the three DIM loads run in every pass. An SP keyword or a campaign
     is dated by Amazon's own `last_updated_date`. An SB keyword is dated by the sync that first saw it,
     up to a day late (`V_AMAZON_OBSERVED_CHANGES` header).
-  - **A touch is any of four kinds.** Each is read for the live trial's HOLDOUT units only. The sources
-    were chosen after measuring what each one carries (2026-10-04, Appendix C).
+  - **A touch is any of four kinds.** Kinds 1–3 are read for every HOLDOUT unit of the live trial.
+    Kind 4 is read for its founding HOLDOUT units only (the watched set, defined under kind 4). The
+    sources were chosen after measuring what each one carries (2026-10-04, Appendix C).
     1. **A ledger row**, as first designed: `hu_led` ∪ `hu_pre`. The observed-change ledger records
        keyword and product-target bid and state, campaign budget and state, and ad-group default bid
        and state, whether they come from an applied change-log row or an observed one. R9 censors one
@@ -393,10 +400,11 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
        BigQuery time travel cannot compare a table with its own past inside one query (measured: "is
        referenced with and without 'FOR SYSTEM_TIME AS OF'"), so a stored value is the only reference.
        The design:
-       - the founding script (Task 3) writes each control's **present** settings once, by the presence
-         rule, into a new append-only table `DE_HOLDOUT_BASELINE` (Task 2);
-       - c33 compares today's present settings, by the same rule, with the latest baseline row per
-         setting. A changed value, or a setting present on one side only, is an **undated touch**;
+       - the founding script (Task 3) writes each watched control's **present** settings once, by the
+         presence rule, into a new append-only table `DE_HOLDOUT_BASELINE` (Task 2);
+       - c33 compares the watched controls' present settings today, by the same rule, with the latest
+         baseline row per setting. A changed value, or a setting present on one side only, is an
+         **undated touch**;
        - so a removal is seen. On SP, a removed adjustment's row stops being re-stamped, turns absent
          and differs from its baseline. A stale row that Fivetran drops later, for example on a
          re-sync, changes nothing, because it was already absent. Without the rule, the baseline
@@ -408,9 +416,35 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
        - Ori's ruling on it is recorded by appending a baseline row that carries his words. **A NULL
          `value` on a later baseline row means absent**, so a removal can be re-baselined like a
          changed value. A setting re-baselined that way reads AMBER from then on, as an aged touch
-         does. If it comes back later, it differs from the NULL and reads RED again;
-       - a late-arrival control has no baseline row, and the detail names it as unwatched on these
-         settings.
+         does. If it comes back later, it differs from the NULL and reads RED again.
+
+       **Which controls kind 4 watches (the watched set; second follow-up, 2026-10-04).** The watched
+       set is the live trial's HOLDOUT units with `STARTS_WITH(assignment_rule, 'FOUNDING')`, whether or
+       not they have a baseline row. c33 derives it from `hu_asg`, so it reads `DE_HOLDOUT_ASSIGNMENT`
+       no second time.
+       - **`BASELINE_DIFF`'s today side reads the watched set only.** A watched control with no
+         baseline row is still watched: any setting present on it differs from the absent baseline and
+         reads RED. Four founding controls carry no setting today: `273898143987321`,
+         `271009556929636`, `51727823265377` and ME-COMPETE `365568042533669`. This is what makes an
+         adjustment put back on ME-COMPETE read RED.
+       - **Every other HOLDOUT unit of the live trial is unwatched on kind-4 settings.** Under T2 that
+         means a `LATE ARRIVAL` from `SP_ASSIGN_HOLDOUT` (Task 4). No baseline is taken for it, its
+         settings are never compared, and the detail names it as unwatched. It is named by its
+         `assignment_rule`, never because it has no baseline row.
+       - **Why not every HOLDOUT unit:** a late arrival has no baseline, so every setting present on it
+         would be present on one side only, and it would read RED with nothing touched. SB campaigns
+         usually carry 0% placement rows: 356 of the 390 SB placement rows are 0%, and 124 of the 128
+         SB campaigns with placement rows carry at least one (read at the 2026-10-04 03:07 UTC sync).
+         So this would happen often. Measured on copies: a late SB control with two 0% placement rows
+         and one 0% shopper-cohort row read 3 differences that way (Appendix C12).
+       - **Why not only the controls that have a baseline row:** the four founding controls above have
+         none, so they would be silently unwatched, ME-COMPETE among them. Measured on copies: an
+         adjustment put back on ME-COMPETE read 0 differences that way (Appendix C12).
+       - **Kinds 1–3 are unchanged.** They watch every HOLDOUT unit of the live trial, late arrivals
+         included.
+       - If the watched set were ever empty while baseline rows exist (for example, an
+         `assignment_rule` written without its prefix), every baseline row is present on one side only,
+         so c33 reads RED. It cannot pass silently. Measured on copies: 15 differences (Appendix C12).
   - **Kinds 2–4 are seen by the alarm and not censored by R9.** R9 stays as Ori ruled it on 10-02, and
     the readout's censoring is not widened. The detail says "seen by the alarm, not censored by R9 —
     Ori to rule".
@@ -864,9 +898,15 @@ VALUES
     later is a touch. A later row whose `value` is NULL records that the setting is absent from then
     on, and c33 compares it like any other value. An absent setting matches a NULL baseline, and a
     present one differs from it.
-  - **Who writes it:** the founding script (Task 3) writes the first rows, and only for the trial's
-    HOLDOUT units. Nothing else writes it except an appended re-baseline row carrying Ori's ruling,
-    whose `value` is NULL when he accepts a removal.
+  - **Which controls it covers: kind 4's watched set (§2.7).** That is the trial's HOLDOUT units with
+    `STARTS_WITH(assignment_rule, 'FOUNDING')`, read from `DE_HOLDOUT_ASSIGNMENT`, never from an id
+    literal. A watched control is watched whether or not it has a baseline row. A founding control
+    with no present setting gets no row and is still compared. A `LATE ARRIVAL` HOLDOUT unit gets no
+    row and is unwatched on these settings. c33 names it by its `assignment_rule`, never because it
+    has no baseline row.
+  - **Who writes it:** the founding script (Task 3) writes the first rows, for the watched set only.
+    Nothing else writes it except an appended re-baseline row carrying Ori's ruling, whose `value` is
+    NULL when he accepts a removal.
   - **The house rules apply.** Register it in `config.yaml`. Its description says append-only, read by
     `V_ENGINE_HEALTH` c33, spec HOLDOUT.md §6.
   - **If it cannot be built and checked inside the deploy window,** deploy without it. Kind 4 then
@@ -975,9 +1015,11 @@ FROM v;
   campaign name contains a backslash (`FRESH - SB\BROAD (Hunter, FRESH)`), and the literal escapes it.
 
 - [ ] **The baseline (amendment 2026-10-04).** The same script then appends the `DE_HOLDOUT_BASELINE`
-  rows (Task 2, Step 3b) for the 12 HOLDOUT units. The same script reads them from the four sources
-  **by the presence rule of §2.7 kind 4**. It then asserts that their number equals a re-read of those
-  sources for the 12 campaigns, by the same rule.
+  rows (Task 2, Step 3b) for the watched set: the 12 HOLDOUT units it has just written with a
+  `FOUNDING` `assignment_rule`, read back from `DE_HOLDOUT_ASSIGNMENT` rather than from an id literal.
+  The same script reads them from the four sources **by the presence rule of §2.7 kind 4**. It then
+  asserts that their number equals a re-read of those sources for the same 12 campaigns, by the same
+  rule.
   - Measured 2026-10-04 at the 02:14 UTC sync (Appendix C11): 15 settings on 8 controls. 7 controls
     carry placement rows (6 of them non-zero), 1 carries a shopper-cohort row and 1 (`27660342907703`)
     carries an SB product target.
@@ -1102,8 +1144,9 @@ k AS (
 hu_trial AS (  -- the live trial: the row V_HOLDOUT_READOUT's k reads
   SELECT trial_id FROM `onyga-482313.OI.V_HOLDOUT_TRIAL` WHERE is_live
   QUALIFY ROW_NUMBER() OVER (ORDER BY assigned_on DESC, trial_id DESC) = 1),
-hu_asg AS (  -- the trial's units, both arms
-  SELECT a.unit_id, a.unit_name, a.arm, a.stratum, a.eligible_from, a.trial_end, a.assigned_at
+hu_asg AS (  -- the trial's units, both arms; assignment_rule decides which controls kind 4 watches
+  SELECT a.unit_id, a.unit_name, a.arm, a.stratum, a.eligible_from, a.trial_end, a.assigned_at,
+         a.assignment_rule
   FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` a JOIN hu_trial USING (trial_id)
   WHERE a.unit_type = 'CAMPAIGN'),
 -- (hu_chg, hu_led, hu_pre, hu_cens, hu_pre_ro, hu_obs, hu_gap, hu_pre_gap unchanged)
@@ -1156,10 +1199,56 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
        where `bid_optimization` or `bid_optimization_strategy` differs. Both use LA day ≥ the
        assignment day, ordered as `V_AMAZON_OBSERVED_CHANGES` orders versions.
     4. `BASELINE_DIFF`: today's **present** settings from the four current-state sources, by the
-       presence rule of §2.7 kind 4, full-outer-joined to the latest `DE_HOLDOUT_BASELINE` row per
-       (`trial_id`, `campaign_id`, `setting`) for the live trial, where the two sides differ.
-       `IS DISTINCT FROM` treats a setting on one side only as a difference. A baseline whose latest
-       `value` is NULL means absent, so an absent setting matches it and a present one differs from it.
+       presence rule of §2.7 kind 4, **for the watched set only**, full-outer-joined to the latest
+       `DE_HOLDOUT_BASELINE` row per (`trial_id`, `campaign_id`, `setting`) for the live trial, where
+       the two sides differ. `IS DISTINCT FROM` treats a setting on one side only as a difference. A
+       baseline whose latest `value` is NULL means absent, so an absent setting matches it and a
+       present one differs from it.
+       - **The watched set** is the live trial's HOLDOUT units with
+         `STARTS_WITH(assignment_rule, 'FOUNDING')`, whether or not they have a baseline row (§2.7). It
+         is derived from `hu_asg`, so K7's count of one `DE_HOLDOUT_ASSIGNMENT` reference in
+         `V_ENGINE_HEALTH` stands.
+       - **Unwatched:** every other HOLDOUT unit of the live trial (a `LATE ARRIVAL`). It is named in
+         the detail by its `assignment_rule`, never because it has no baseline row, and it is never
+         compared.
+       - **The text,** as tested on copies (Appendix C12). It names no campaign id:
+
+```sql
+hu_k4_watch AS (  -- kind 4 watches the founding controls, whether or not they have a baseline row
+  SELECT unit_id FROM hu_asg WHERE arm = 'HOLDOUT' AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+hu_k4_unwatched AS (  -- every other control (LATE ARRIVAL): named in the detail, never compared
+  SELECT unit_id, unit_name, assignment_rule FROM hu_asg
+  WHERE arm = 'HOLDOUT' AND unit_id NOT IN (SELECT unit_id FROM hu_k4_watch)),
+hu_k4_sp  AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`),
+hu_k4_sbp AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`),
+hu_k4_sbc AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`),
+hu_k4_sbt AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_product_target`),
+hu_k4_present AS (  -- the presence rule: re-stamped by its table's latest sync, and not deleted
+  SELECT campaign_id, CONCAT('SP_PLACEMENT|', placement) AS setting, CAST(percentage AS STRING) AS value
+  FROM hu_k4_sp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_PLACEMENT|', placement), CAST(percentage AS STRING)
+  FROM hu_k4_sbp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_SHOPPER_COHORT|', audience_id, '|', shopper_cohort_type),
+         CAST(percentage AS STRING)
+  FROM hu_k4_sbc WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_TARGET|', id, '|', kv.k), kv.v
+  FROM hu_k4_sbt, UNNEST([STRUCT('bid' AS k, CAST(bid AS STRING) AS v), STRUCT('state', state)]) kv
+  WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR) AND NOT COALESCE(_fivetran_deleted, FALSE)),
+hu_k4_now AS (  -- today's side of BASELINE_DIFF: the watched controls only
+  SELECT * FROM hu_k4_present WHERE campaign_id IN (SELECT unit_id FROM hu_k4_watch)),
+hu_k4_base AS (  -- the latest baseline row per setting, live trial; a NULL value means absent
+  SELECT b.campaign_id, b.setting, b.value
+  FROM `onyga-482313.OI.DE_HOLDOUT_BASELINE` b JOIN hu_trial USING (trial_id)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY b.campaign_id, b.setting ORDER BY b.recorded_at DESC) = 1),
+hu_k4_diff AS (  -- BASELINE_DIFF: a changed value, or a setting on one side only
+  SELECT campaign_id, setting, b.value AS base_value, n.value AS now_value
+  FROM hu_k4_base b FULL OUTER JOIN hu_k4_now n USING (campaign_id, setting)
+  WHERE b.value IS DISTINCT FROM n.value),
+```
+
+       The baseline side is not restricted to the watched set. Only the founding script and Ori's
+       re-baseline rows write the table, so every baseline row belongs to a watched control. If the
+       watched set were ever empty, its baseline rows would each read as a difference, RED.
   - **`hu_live` reads fifteen ages:** the four procedures' last OK runs, and `MAX(_fivetran_synced)` of
     each of the eleven Fivetran tables listed in §2.7, each read by name. Read them from the Fivetran
     tables themselves, as the `V_SRC_` views do: no OI view tells the three keyword tables apart.
@@ -1175,7 +1264,9 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
       history"), and what changed;
     - for kinds 2–4, "seen by the alarm, not censored by R9 — Ori to rule";
     - then every age, with any stale one named;
-    - a late-arrival control with no baseline is named as unwatched on kind-4 settings;
+    - each row of `hu_k4_unwatched` (a `LATE ARRIVAL` control, by its `assignment_rule`) is named as
+      unwatched on kind-4 settings. A founding control is never named unwatched, whether or not it
+      has baseline rows. An unwatched control does not change the status by itself;
     - **the standing tail, on every read:** "not seen by any source: negatives (mirrors frozen since
       2026-01-03), ads and creatives (frozen since 2025-12-28 .. 2026-01-03), a change undone before
       the next sync".
@@ -1207,8 +1298,21 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
     - an `sb_campaign_history` copy with a `bid_optimization` flip today reads RED;
     - a `DE_HOLDOUT_BASELINE` copy with one placement value altered reads RED while it stands. With a
       later re-baseline row carrying a `ruling`, it reads AMBER;
-    - **the presence rule (follow-up 2026-10-04).** These inputs use the copies of Appendix C12, and
-      that appendix gives the `BASELINE_DIFF` counts each must reproduce:
+    - **How the kind-4 inputs run (second follow-up 2026-10-04).** Each runs c33's deployed text with
+      its table names pointed at `TMP_HT2_` copies: the four sources, `DE_HOLDOUT_BASELINE`,
+      `DE_HOLDOUT_ASSIGNMENT` (with T2's founding rows) and the registry with `V_HOLDOUT_TRIAL`. The
+      text that is run carries **no campaign-id literal**, so the watched set comes from the
+      assignment copy exactly as it will on the board. Only the doctoring statements name an id.
+      Appendix C12 gives the `BASELINE_DIFF` count each input must reproduce;
+    - **the watched set (second follow-up 2026-10-04):**
+      - a `campaign_placement_bidding` copy with a present ME-COMPETE `365568042533669`
+        `PLACEMENT_TOP` 30 row added (stamped at the table's latest sync) reads RED, with
+        `BASELINE_DIFF` 1, although ME-COMPETE has no baseline row;
+      - an assignment copy with one `LATE ARRIVAL` HOLDOUT row added for an SB campaign that carries
+        present 0% SB placement rows reads not-RED on this term. The detail names that campaign as
+        unwatched;
+    - **the presence rule (follow-up 2026-10-04).** These inputs use the copies above, and
+      Appendix C12 gives the `BASELINE_DIFF` counts each must reproduce:
       - a `campaign_placement_bidding` copy in which one control's row is not re-stamped (its stamp
         moved one sync back) reads RED, as a removal;
       - the same copy with a re-baseline row whose `value` is NULL reads AMBER;
@@ -1337,7 +1441,7 @@ input doctored, and must read the stated count. `T1` = `'HOLDOUT-2026Q4-CAMPAIGN
 | K9 | the plan agrees (latest `FACT_PLAN_NEXT_WEEK` live partition): `COUNTIF(T2 control AND NOT holdout) + COUNTIF(T1-only control AND holdout)` | the 10-03 partition reads > 0 (T1 controls carried `holdout = TRUE`) |
 | K10 | the readout serves T2: exactly one `NOT_YET` row, whose verdict names `2027-02-09`; no `CENSORED` or `PRE_WINDOW_CHANGE` row names a unit outside T2; no number on any row before `first_readout` (H3) | the readout's text with `k` pinned to T1 reads ≥ 1 (the verdict names 2027-01-05, and the CENSORED rows name T1 units) |
 | K11 | the touch alarm and the feed term: HOLDOUT_INTEGRITY H4 and H5 | as stated in Task 7 |
-| K12 | the baseline is whole (amendment 2026-10-04): for T2's HOLDOUT units, the symmetric difference between the founding `DE_HOLDOUT_BASELINE` rows (`ruling IS NULL`) and a re-read of the four sources' **present** settings at the read, by the presence rule of §2.7 kind 4 (re-stamped by the table's latest sync, within 1 hour of its `MAX(_fivetran_synced)`, and not `_fivetran_deleted`), compared as (`campaign_id`, `setting`, `value`). Add 1 when the re-read finds no setting for any T2 HOLDOUT unit, because an empty input would pass. Measured 2026-10-04 by the rule: 15 settings on 8 controls, of which 7 carry placement rows. Run it straight after Task 3; afterwards it reads as kind-4 touches | a copy minus one row reads 1. A copy with one value altered reads 2. A re-read emptied for the 12 controls reads 16. All three were measured on `TMP_HT2_` copies on 2026-10-04 (Appendix C12) |
+| K12 | the baseline is whole (amendment 2026-10-04): for T2's watched set (its HOLDOUT units with `STARTS_WITH(assignment_rule, 'FOUNDING')`, §2.7 kind 4, read from `DE_HOLDOUT_ASSIGNMENT` and not from an id literal), the symmetric difference between the founding `DE_HOLDOUT_BASELINE` rows (`ruling IS NULL`) and a re-read of the four sources' **present** settings at the read, by the presence rule of §2.7 kind 4 (re-stamped by the table's latest sync, within 1 hour of its `MAX(_fivetran_synced)`, and not `_fivetran_deleted`), compared as (`campaign_id`, `setting`, `value`). Add 1 when the re-read finds no setting for any unit of the watched set, because an empty input would pass. Measured 2026-10-04 by the rule: 15 settings on 8 controls, of which 7 carry placement rows. Run it straight after Task 3; afterwards it reads as kind-4 touches | a copy minus one row reads 1. A copy with one value altered reads 2. A re-read emptied for the 12 controls reads 16. All three were measured on `TMP_HT2_` copies on 2026-10-04 (Appendix C12) |
 
 ---
 
@@ -1565,7 +1669,9 @@ rows read without the rule).
 
 The test query is the c33 `BASELINE_DIFF` sketch of Task 6: the latest baseline row per key,
 full-outer-joined to the present settings of the 12 controls, counting `IS DISTINCT FROM`. It also
-computes K12 as in §5 and the count of re-baselined keys (AMBER).
+computes K12 as in §5 and the count of re-baselined keys (AMBER). In this first run (about 02:38–02:43
+UTC) the 12 controls were an id literal in the test text. That does not test how c33 will choose them,
+so the cases were run again below with the watched set.
 
 | case (doctored input) | rule | `BASELINE_DIFF` | K12 | re-baselined |
 |---|---|---|---|---|
@@ -1587,3 +1693,47 @@ computes K12 as in §5 and the count of re-baselined keys (AMBER).
 | K12 emptiness: the four copies with the 12 controls' rows deleted | with | 15 | **16** (15 + 1) | |
 
 After the last case, `INFORMATION_SCHEMA.TABLES` and `ROUTINES` listed no `TMP_HT2_%` object.
+
+**C12, re-run with the watched set (second follow-up, 2026-10-04, about 03:01–03:10 UTC).** This run
+used the plan's own text and no id literal:
+- **The registry.** `TMP_HT2_TRIAL` was built from Task 2's Step 1 DDL and Step 3 rows. `TMP_HT2_V_TRIAL`
+  was built from Step 2's `V_HOLDOUT_TRIAL` body. Read on 10-04, both trials are live, because T1's
+  archive starts 10-05, and `hu_trial`'s tie-break picks T2.
+- **The assignment.** `TMP_HT2_ASSIGNMENT` copied `DE_HOLDOUT_ASSIGNMENT` (T1's 69 rows). Task 3's
+  founding script then ran on it unchanged apart from the names. Every ASSERT passed and it wrote 59
+  rows, 12 of them HOLDOUT, all `FOUNDING (approved list)`.
+- **The sources.** Copies of the four sources were taken at the 02:14 UTC sync: `TMP_HT2_SP`, `_SBP`,
+  `_SBC` and `_TG`. `TMP_HT2_BASELINE` was empty.
+- **The baseline insert** read the watched set from the assignment copy through the Task 6 text. It wrote
+  15 rows on 8 controls: none for ME-COMPETE, and 7 controls with placement rows.
+- **The test text** was Task 6's `hu_trial`, `hu_asg` and `hu_k4_*` CTEs, verbatim, with the table names
+  pointed at the copies. A harness `SELECT` added K12 (§5, over the watched set) and the re-baselined
+  count. For comparison it also computed the same diff two other ways: with the today side over every
+  HOLDOUT unit (reading a), and over only the controls that have a baseline row (reading b).
+- **The doctoring** followed the first run, except that the removal moved the stamp 12 hours back. Each
+  case was undone before the next. The SB placement table re-synced at 03:07 UTC, before the last two
+  cases. Its copy and the cohort copy were then re-taken, and the undoctored case read 0 again.
+
+| case (doctored input) | `BASELINE_DIFF`, watched set | c33 kind-4 term | K12 | re-baselined | reading (a): every HOLDOUT unit | reading (b): baseline rows only |
+|---|---|---|---|---|---|---|
+| no doctoring | 0 | not-RED | 0 | 0 | 0 | 0 |
+| **NC 1:** a present ME-COMPETE `PLACEMENT_TOP` 30 row added, stamped at the table's latest sync | **1** (absent → 30) | **RED** | 1 | 0 | 1 | **0**: missed |
+| **NC 2:** a `LATE ARRIVAL` HOLDOUT row added for SB `111024628782640` STORE-SPOTLIGHT (tween-girl-gift). It is outside the 59 and carries two present 0% SB placement rows and one 0% shopper-cohort row | **0** | **not-RED**; the detail lists it as unwatched (`STORE-SPOTLIGHT (tween-girl-gift) (111024628782640): LATE ARRIVAL`) | 0 | 0 | **3**: RED with nothing touched | 0 |
+| a removal on SP: `130115986205897` TOP's stamp moved 12 h back | 1 (100 → absent) | RED | 1 | 0 | 1 | 1 |
+| the same, plus a re-baseline row with `value` NULL and a `ruling` | 0 | not-RED | 1 | 1 | 0 | 0 |
+| then the row is re-stamped again (the setting comes back) | 1 (absent → 100) | RED | 0 | 1 | 1 | 1 |
+| the 14 stale SP rows deleted (a re-sync) | 0 | not-RED | 0 | 0 | 0 | 0 |
+| a value altered: `130115986205897` TOP 100 → 120 | 1 | RED | 2 | 0 | 1 | 1 |
+| the SB target on `27660342907703` flagged `_fivetran_deleted` | 2 | RED | 2 | 0 | 2 | 2 |
+| K12 NC: a baseline copy without one row (`53343800376430` TOP) | 1 | RED | **1** | 0 | 1 | **0**: that control has no other row |
+| K12 NC: a baseline copy with that value altered (25 → 30) | 1 | RED | **2** | 0 | 1 | 1 |
+| K12 emptiness: the four copies with the trial's HOLDOUT units' rows deleted (selected through the assignment copy, no literal) | 15 | RED | **16** (15 + 1) | 0 | 15 | 15 |
+| an empty watched set: the 12 founding rows' `assignment_rule` re-prefixed `LATE ARRIVAL` | 15 (every baseline row, one side only) | RED; all 12 listed as unwatched | 16 | 0 | 0 | 0 |
+
+- **Reading (a)** turns a late SB control RED on 0% rows, with nothing touched.
+- **Reading (b)** misses an adjustment put back on ME-COMPETE. It also misses a lost baseline row
+  whenever that was the control's only one.
+- **The watched set** reads every case as designed.
+
+All `TMP_HT2_` objects of this run were dropped. Afterwards `INFORMATION_SCHEMA.TABLES` and `ROUTINES`
+listed 0 `TMP_HT2_%` objects.

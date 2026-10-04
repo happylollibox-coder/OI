@@ -112,7 +112,7 @@ between its keywords instead of being fooled by it.
 | `DE_HOLDOUT_TRIAL` | (trial 2) **Which trial is live.** It is append-only, with one row per event, `OPENED` or `ARCHIVED`. A trial is archived by appending a row, never by editing its assignment rows. Trial 1 has a back-filled `OPENED` row (its v27.83 constants) and an `ARCHIVED` row effective 2026-10-05 that states its contamination. Trial 2's `OPENED` row carries its seed, dates, `t_mult`, MDE and Ori's words. |
 | `V_HOLDOUT_TRIAL` | (trial 2) One row per trial: `gate_from`, `gate_to` = `LEAST(win_end, archived_from − 1)`, `win_start`, `win_end`, `interim_look`, `first_readout`, `is_live`, `status_today`. Exactly one trial is live. The readout, the board and `SP_ASSIGN_HOLDOUT` read that row. |
 | `V_HOLDOUT_ARM` | (trial 2) **The gate: the arm that binds today, any trial.** One row per control campaign whose arm binds today or later: `campaign_id`, `gate_from`, `gate_to`, `trial_id`. Every reader that keeps the engine off a control reads it. A hold ends on its trial's last day, and a trial-1 control that trial 2 drew as TREATED is released on 2026-10-05. **A trial with no `OPENED` row is invisible to it**, so an empty registry empties the gate, and the board then reads RED ("no HOLDOUT unit"). |
-| `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script, which records only **present** settings: a row counts only when its source table's latest sync re-stamped it and it is not flagged deleted (§6, kind 4). A later row carries Ori's ruling on a difference. Its value is NULL when he rules that a setting is gone. Read by `holdout_unit_changed`. |
+| `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each founding control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script, for the founding controls only. A late arrival gets no row and is unwatched on these settings (§6, kind 4). The script records only **present** settings: a row counts only when its source table's latest sync re-stamped it and it is not flagged deleted (§6, kind 4). A later row carries Ori's ruling on a difference. Its value is NULL when he rules that a setting is gone. Read by `holdout_unit_changed`. |
 | `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. From 2026-10-05 it writes into **the live trial only, and late arrivals only**. A founding cohort is written once from the approved list, never by this procedure, and it writes nothing into a trial that has no founding rows. |
 | `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. Reads `V_HOLDOUT_ARM` (the arm that binds today, any trial), between `gate_from` and `gate_to`. |
 | the other gate readers | `V_PLAN_WINDOW_JUDGMENT`, `V_FAMILY_SEAT_REGISTER` and the three bulksheet generators (`build_reprice_bulksheet.py`, `build_seasonal_unpause_bulksheet.py`, `build_seat_moves_bulksheet.py`) read `V_HOLDOUT_ARM` (the arm that binds today, any trial). Their `eligible_from` is the arm's `gate_from`. Their snapshots `T_FAMILY_SEAT_REGISTER` and `FACT_PLAN_NEXT_WEEK` follow on the next rebuild. |
@@ -486,6 +486,15 @@ then AMBER for as long as any control was ever touched, and it names each one:
    - By that rule, 7 of the 12 controls carry placement rows, 6 of them with a non-zero adjustment.
      1 carries a shopper-cohort row and 1 an SB product target: 15 settings on 8 controls. ME-COMPETE
      carries none.
+   - **Which controls it watches.** The live trial's founding controls (`assignment_rule` starting
+     `FOUNDING`), whether or not they have a baseline row. Four of the 12 carry no setting today,
+     ME-COMPETE among them. An adjustment put on one of them later is present on one side only, and
+     it reads RED.
+   - **A late-arrival control is not watched on these settings.** That is a control whose
+     `assignment_rule` starts `LATE ARRIVAL`. No baseline is taken for it and its settings are never
+     compared. The board names it as unwatched, by its `assignment_rule`. Comparing it would read RED
+     with nothing touched, because it has no baseline and most SB campaigns carry 0% placement rows.
+     Kinds 1–3 still watch it.
    - Such a difference is RED while it stands, because there is no date to age it.
    - Ori's ruling on it is recorded as a new baseline row, after which it reads AMBER. When he rules
      that a setting is gone, that row's value is NULL, meaning absent. If the setting comes back
@@ -504,6 +513,8 @@ not censored by R9 — Ori to rule". Each one is a ruling for Ori, and nothing i
 - **A change undone before the next sync,** and two changes between two loads, which read as one
   change carrying the later value.
 - **A kind-4 setting put back to its baseline value** before the board reads it.
+- **A late-arrival control's kind-4 settings.** It has no baseline, so they are never compared. The
+  board names each such control as unwatched.
 - **Not a touch at all:** Amazon's own automation, such as dynamic bidding and any budget rule already
   in place, which runs in both arms. That is a shared confounder and is fine (§6 #5 above).
 

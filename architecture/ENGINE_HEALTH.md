@@ -124,6 +124,13 @@ above are unchanged, and two terms are added:
        08-14). Two of them were control ME-COMPETE's removed adjustments.
      - By the rule, 7 of the 12 controls carry placement rows, 6 of them non-zero: 15 settings on 8
        controls.
+     - **Watched:** the live trial's HOLDOUT units with `STARTS_WITH(assignment_rule, 'FOUNDING')`,
+       whether or not they have a baseline row. Today's side of the comparison reads only them, so a
+       setting that appears on a founding control with no baseline row (four of the 12, ME-COMPETE
+       among them) reads RED.
+     - **Unwatched:** every other HOLDOUT unit of the live trial, that is a `LATE ARRIVAL`. Its
+       settings are never compared. The detail names it as unwatched on these settings, by its
+       `assignment_rule`, never because it has no baseline row.
 
   Kinds 2–4 are "seen by the alarm, not censored by R9 — Ori to rule". A kind-4 difference has no date,
   so it reads RED while it stands. Ori's ruling on it is appended as a baseline row, and the setting
