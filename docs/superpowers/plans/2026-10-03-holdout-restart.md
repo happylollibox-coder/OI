@@ -1486,6 +1486,10 @@ Task 4.
   change-log row on the 12 controls, any batch prefix, any build date, and **STOPs** while one is left
   (`--check` refuses); each batch is either marked uploaded (it went up on or before LA 10-04) or
   labelled `SUPERSEDED_NEVER_UPLOADED`. `--post-pass` repeats it on every `V_HOLDOUT_ARM` campaign.
+  - **Measured 2026-10-04 15:07 UTC: 11 such rows on 6 of the 12 controls, all in
+    `weekly_book_20260825_214435`** (63 `PENDING_UPLOAD` rows in all, built 2026-08-25 and never marked
+    uploaded or labelled). The deploy STOPs at preflight until Ori rules on that batch: `--mark-uploaded`
+    if it went up in August, else `--supersede`. Rule on it before the window opens.
   - **One caution for that upload.** An SB keyword change is dated by the sync that first saw it, up to
     a day late. A 10-04 change to an SB control's keywords can therefore be dated 10-05.
     `537046793426450` carries 83 SB keywords, 12 of them enabled; `71317833591283` carries 1.

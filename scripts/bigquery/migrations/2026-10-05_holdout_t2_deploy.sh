@@ -346,6 +346,42 @@
 #     no TMP_HT2_ table or routine, none of DE_HOLDOUT_TRIAL / V_HOLDOUT_TRIAL / V_HOLDOUT_ARM /
 #     DE_HOLDOUT_BASELINE, DE_HOLDOUT_ASSIGNMENT 69 rows, and the seven replaced objects kept their last-modified
 #     times (all before 2026-10-04 08:00 UTC).
+#
+# REVIEW FIXES of 648f201 (MUST_FIX 1-3 of the adversarial panel, 2026-10-04), commit 811bd6b, measured 15:07-15:36 UTC.
+#   1 PENDING_UPLOAD on the controls. LIVE, 15:07 UTC: 11 rows on 6 of the 12 controls (130115986205897,
+#     230219410635024, 271009556929636, 365568042533669, 51727823265377, 537046793426450), all in ONE batch,
+#     weekly_book_20260825_214435 (63 PENDING_UPLOAD rows in all, logged 2026-08-25 21:44:45, never marked
+#     uploaded or labelled; an independent read of the batch gave the same 11). So --check now REFUSEs and
+#     --deploy would STOP at preflight until Ori rules on that batch: --mark-uploaded if it went up in August,
+#     else --supersede. Negative control on a scratch copy (OI.TMP_HT2_RV_CHANGE_LOG, 5 rows; dropped): the
+#     generated SQL counted 2 = the PENDING_UPLOAD rows on controls (a reprice_book_ row built LA 10-04 and a
+#     weekly_book_ row built 10-01), not the NULL-status row on a control, the PENDING row on a non-control, nor
+#     the SUPERSEDED row on a control. The change-log rows since LA 10-04 on the 12 (INFO): 0.
+#   2 The Do page hold: tsc on dashboard-react (tsconfig.app.json): 412 errors before and after, none in
+#     DoPage.tsx. The cube's SQL on the rehearsal copy of the arm (TMP_HT2_R_V_HOLDOUT_ARM, LA pinned to 10-05,
+#     after the founding insert): 12 rows = the founding file's 12 controls, 0 others, trial 2, 2026-10-05 ..
+#     2027-01-26. Not exercised in a browser (no cube served the new schema today).
+#   3 Book branch, git-only, on a `git clone --shared` of this worktree with a stub bq (deleted afterwards):
+#     --deploy and --post-pass with feat/campaign-first-strategy (31e08fd) lacking the tip: STOP "... does not
+#     contain the holdout-t2 tip (811bd6b) ...", 0 bq calls; the tip merged into the clone's feat in a worktree
+#     (clean; config.yaml auto-merged): --deploy "book branch: ... contains holdout-t2, and its checkout's tools
+#     are its committed text", went on to the INFO read (its first bq call); one line appended to that
+#     worktree's tools/build_weekly_book.py: STOP "... builds books from a working tree whose tools differ ...",
+#     0 bq calls. On feat's committed tools: K7b counts DE_HOLDOUT_ASSIGNMENT 2 / 1 / 2 / 0 (reprice, unpause,
+#     seat moves, weekly book: FAIL), and k13_mend.py --tool on its build_weekly_book.py: "K13 FAIL: the gate
+#     is not in MEND_SQL exactly once" (0 V_HOLDOUT_ARM references), exit 1.
+#   --check (real bq) 15:07:30-15:08:20 in this worktree, exit 1: "preflight refusals 2" (the book branch;
+#     the 11 PENDING_UPLOAD rows), drift 0, the window refused (LA 10-04).
+#   --rehearse 15:07:07-15:33:47 (27 min), exit 0, on the committed tree 811bd6b: WARNING (rehearsal) for the
+#     book branch (K7b / K13 read holdout-t2's committed tools via git show) and for the 11 PENDING_UPLOAD rows;
+#     drift 0; step 1 K1 0, K2 0; step 2 founding 59, baseline 15 rows on 8 controls, K3-K6 0, K12 0; step 3 both
+#     replaced, the CALL 59 -> 59, K2-K4 0; step 4 register BEFORE FAIL B04 39, B29 1, B32 2, B38 1 (as before),
+#     three replaced, K7 1 (the board, expected), K7b 0 on the four tools and MEND_SQL 1; step 5 both replaced,
+#     K7 0, K10 0, K11 0 (17 of 17 tokens, c33 GREEN), K13 gated 0 / ungated 5 on 3 controls, HOLDOUT_INTEGRITY
+#     71 rows, 0 FAIL (948 s, 41,683.4 slot-s); register AFTER: no regression, B09 / B34 PASS, B38 1 -> 0.
+#   --rehearse-drop 15:33:53-15:34:10: 12 TMP_HT2_R_ objects. Then INFORMATION_SCHEMA held no TMP_HT2_ table or
+#     routine, none of DE_HOLDOUT_TRIAL / V_HOLDOUT_TRIAL / V_HOLDOUT_ARM / DE_HOLDOUT_BASELINE,
+#     DE_HOLDOUT_ASSIGNMENT 69 rows; the seven replaced objects' last-modified times all before 2026-10-04 08:00 UTC.
 # =============================================================================================
 set -euo pipefail
 
