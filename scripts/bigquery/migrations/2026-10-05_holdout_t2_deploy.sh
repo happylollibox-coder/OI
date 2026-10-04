@@ -272,6 +272,37 @@
 #   (all seven = pre-branch), change-log rows on the 12 controls 0, the window refused (LA 10-04), exit 1.
 #   Not covered: a base commit put on holdout-t2's first-parent line WITHOUT a merge (a rebase or cherry-pick)
 #   reads as holdout-t2's own edit. The brief's workflow is a merge; review any such commit as this deploy's.
+#
+# REVIEW FIXES (MUST_FIX 1-3 of the adversarial panel, 2026-10-04), commit 648f201, measured 13:20-14:41 UTC.
+#   1 the weekly book's mend: MEND_SQL joins V_HOLDOUT_ARM (K7b counts 1); K13 = 2026-10-05_holdout_t2_k13_mend.py.
+#     On a scratch copy of the arm (OI.TMP_HT2_RV_HOLDOUT_ARM: the 12 controls, gate_from 2026-10-06; dropped):
+#       as of LA 10-06: gated 0, ungated 5 trims on 3 controls (230219410635024, 271009556929636,
+#       537046793426450), the reviewer's 5; as of LA 10-04 (gate not yet binding): gated 5, FAIL, as it must.
+#       mend_rows() on the same copy: 30 executable trims account-wide, 0 on a control; 5 Refused rows on the
+#       3 controls ("HOLDOUT: ... held from 2026-10-06 ... refused, not shipped"), tier BRAIN.
+#   2 the window: STEP_NEED 5/5/5/10/5, a step needs the sum to step 5 (30/25/20/15/5 min). sqltool guard on
+#     synthetic logs (pass 3 of 10-05 finished): 04:30 UTC 10-06 needing 30, 25, 20, 15 min: REFUSE (10 min
+#     left); needing 5: OPEN; 04:05 needing 30: OPEN (35 min left); --running-only at 06:30 with no pass
+#     running: "OK: no pass is running" (the late resume of Safe stopping points).
+#   3 c33 kind 3 watches end_date (campaign_history SP, sb_campaign_history SB). Measured 2026-01-01 .. 10-04,
+#     the same version-pair rule account-wide: SP 2 edits (2026-08, 2 campaigns; one on control 51727823265377,
+#     end 2026-09-28 -> none on 08-09), SB 0. None of the 12 controls has an end date: the board GREEN below.
+#   --rehearse, 14:13:26-14:39:40 (26 min), exit 0, on the committed tree 648f201: preflight clean (foreign
+#     edits none; the HOLDOUT_INTEGRITY paste = V_ENGINE_HEALTH.sql's hu_gap .. c33 block); drift 0 (all seven
+#     = pre-branch). The window lines: "needing 30 min for steps 1-5", 25, 20, 15, 5. step 1 K1 0, K2 0;
+#     step 2 founding 59, baseline 15 rows on 8 controls, K3-K6 0, K12 0; step 3 both replaced, the CALL 59 ->
+#     59, K2-K4 0; step 4 register BEFORE FAIL B04 39, B29 1, B32 2, B38 1 (as at 09:03), three replaced, K7 1
+#     (the board, expected), K7b 0 on the four tools and MEND_SQL 1 reference; step 5 both replaced (the board
+#     63,193 characters), K7 0, K10 0, K11 0 (17 of 17 tokens; c33 GREEN, 15 feed ages), K13 gated 0 / ungated
+#     5 on 3 controls (the copies' arm and assignment), HOLDOUT_INTEGRITY 71 rows, 0 FAIL (944 s, 41,023.8
+#     slot-s): H45_TEXT 21,685 characters, 38 of 38 cases, 0 live references; H4_END_DATE RED 1, H4_SB_END_DATE
+#     RED 1, H4_SB_BID_OPT RED 1, H4_BASE GREEN 0. Register AFTER: no regression, B09 / B34 PASS, B38 1 -> 0.
+#     All writes, step 1's guard 14:15:41 to step 5's last replace 14:21:42: 6.0 min.
+#   --rehearse-drop 14:39:49-14:40:06: 12 TMP_HT2_R_ objects. The 10 TMP_HT2_RV_ objects an earlier reviewer
+#     left (created 10:50-10:52 UTC) and this review's arm copy were dropped by hand; INFORMATION_SCHEMA then held
+#     no TMP_HT2_ table or routine, none of DE_HOLDOUT_TRIAL / V_HOLDOUT_TRIAL / V_HOLDOUT_ARM /
+#     DE_HOLDOUT_BASELINE, DE_HOLDOUT_ASSIGNMENT 69 rows, and the seven replaced objects kept their last-modified
+#     times (all before 2026-10-04 08:00 UTC).
 # =============================================================================================
 set -euo pipefail
 
