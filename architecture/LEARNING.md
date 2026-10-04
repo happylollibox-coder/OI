@@ -2160,3 +2160,11 @@ load AS (
   GROUP BY r.run, r.s, r.f)
 SELECT * FROM kids JOIN load USING (run) ORDER BY run;
 ```
+
+**2026-10-04 14:23 UTC — NC_F1_SECOND_WRITE_AFTER_MIDNIGHT fixed (test-only).** `check_plan_clock_controls.py`'s
+copy now also restamps the night 00:35 Los Angeles on its own `as_of` (not re-keyed) and moves its
+`DELETE` and `INSERT` with it, so the doctored second write is after Los Angeles midnight whatever hour
+the first was written. Defaults on the real 10-04 night: job `bqjob_r7679d928f877cc68_000001a10745edc6_1`,
+exit 0, 12,702.4 slot-seconds; that copy F1 1 (it read 0 in `bqjob_r730f81050fb2532c_000001a1072b424b_1`),
+unasserted C01 712, H23M 712, H23S 1, C13 1 (the restamp moves the build's Los Angeles date and its
+saved-judgement key). HC_F1_REWRITE_BEFORE_MIDNIGHT and NC_F1_REWRITE_AT_MIDNIGHT unchanged (F1 0 / 1).

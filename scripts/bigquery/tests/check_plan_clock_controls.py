@@ -59,7 +59,11 @@ H23S = 1 when its status is RED)
     LIVE (on such a night)        the late first write: F1 0, F2 0.
     NC_EMPTY                      also F1 1, F2 1 (emptiness terms).
     NC_F1_SECOND_WRITE_AFTER_MIDNIGHT  the plan's control — its DELETE recorded as removing the
-                                  night's rows (a second write), stamped after Los Angeles midnight: F1 1.
+                                  night's rows (a second write), the night restamped 00:35 Los Angeles
+                                  on its own as_of (after Los Angeles midnight; not re-keyed), its two
+                                  jobs moved with it: F1 1. Until 2026-10-04 the copy kept the write's
+                                  stamp, so on a night written on time (22:30 Los Angeles the evening
+                                  before) it was a rewrite before midnight and read F1 0.
     HC_F1_REWRITE_BEFORE_MIDNIGHT that rewrite re-keyed to the next New York night and stamped 22:35
                                   Los Angeles on its original date (the 05:00 UTC pass's hour, before
                                   Los Angeles midnight of the new as_of), its two jobs moved with it: F1 0, F2 0.
@@ -108,7 +112,9 @@ exit 0 on the live table; 2,407.5 slot-seconds and exit 0 on a simulated 22:40 L
 bqjob_r3b355b0a9c44aefd_000001a0ffb852de_1; with the eight v27.171 C13 copies, 25 copies, 10,134.5
 slot-seconds and about 6 minutes on 2026-10-03 18:40 UTC, exit 0 on a simulated pass, --plan-table
 OI._tmp_c13_plan --jobs-table-id _tmp_c13_plan --judge-table OI._tmp_c13_judge --build-judge-table
-OI._tmp_c13_bj, job bqjob_r2bf99b8d41e5b9f7_000001a10310eb8f_1)
+OI._tmp_c13_bj, job bqjob_r2bf99b8d41e5b9f7_000001a10310eb8f_1; with NC_F1_SECOND_WRITE_AFTER_MIDNIGHT
+restamped, defaults on the real 10-04 night (written 05:30:18 UTC), 12,702.4 slot-seconds and about 7
+minutes on 2026-10-04 14:16 UTC, exit 0, that copy F1 1, job bqjob_r7679d928f877cc68_000001a10745edc6_1)
     python3 scripts/bigquery/tests/check_plan_clock_controls.py [--judge-table PROJECT.DATASET.TABLE]
         [--plan-table PROJECT.DATASET.TABLE --jobs-table-id TABLE_ID --build-judge-table PROJECT.DATASET.TABLE]
     python3 scripts/bigquery/tests/check_plan_clock_controls.py --submit [--judge-table ...]
@@ -202,12 +208,13 @@ F_DEL_IS_REWRITE = ("IF(jrn = (SELECT f_del_jrn FROM pick), STRUCT(dml_statistic
                     "(SELECT f_n FROM pick) AS deleted_row_count), dml_statistics) AS dml_statistics")
 
 
-def f_moved(stamp):
-    """The latest night re-keyed to the next New York date and stamped at `stamp` (Los Angeles time on
-    its original as_of, or the next day's midnight); its write's two jobs moved by the same amount,
-    the DELETE recorded as a rewrite."""
+def f_moved(stamp, rekey=True):
+    """The latest night stamped at `stamp` (Los Angeles time; {d} is its original as_of) and, with
+    `rekey`, re-keyed to the next New York date; its write's two jobs moved by the same amount, the
+    DELETE recorded as a rewrite."""
     new_built = f"TIMESTAMP(DATETIME({stamp}), 'America/Los_Angeles')"
-    plan = rows(F_LATEST, as_of="DATE_ADD(as_of, INTERVAL 1 DAY)", built_at=new_built.replace("{d}", "as_of"))
+    moved = {"as_of": "DATE_ADD(as_of, INTERVAL 1 DAY)"} if rekey else {}
+    plan = rows(F_LATEST, **moved, built_at=new_built.replace("{d}", "as_of"))
     delta = (f"TIMESTAMP_DIFF({new_built.replace('{d}', '(SELECT f_as_of FROM pick)')}, "
              "(SELECT f_built_at FROM pick), MICROSECOND)")
     jobs = ("SELECT * EXCEPT (jrn) REPLACE ("
@@ -219,11 +226,15 @@ def f_moved(stamp):
 
 F_HC_PLAN, F_HC_JOBS = f_moved("{d}, TIME '22:35:00'")
 F_NC_PLAN, F_NC_JOBS = f_moved("DATE_ADD({d}, INTERVAL 1 DAY), TIME '00:00:00'")
+# 2026-10-04: the second write is restamped 00:35 Los Angeles on the night's own as_of. The copy used to
+# keep the write's stamp, which on an on-time night (the 05:00 UTC pass, 22:30 Los Angeles the evening
+# before) is a rewrite BEFORE midnight, which D2 (c) allows: F1 0 on the real 10-04 night.
+F_2ND_PLAN, F_2ND_JOBS = f_moved("{d}, TIME '00:35:00'", rekey=False)
 F_NEEDS = ["f_as_of", "f_ins_jrn", "f_del_jrn"]
 
 # name -> doctored write record (copies not named read JLIVE)
 JCOPIES = {
-    "NC_F1_SECOND_WRITE_AFTER_MIDNIGHT": f"SELECT * EXCEPT (jrn) REPLACE ({F_DEL_IS_REWRITE}) FROM jbase",
+    "NC_F1_SECOND_WRITE_AFTER_MIDNIGHT": F_2ND_JOBS,
     "HC_F1_REWRITE_BEFORE_MIDNIGHT": F_HC_JOBS,
     "NC_F1_REWRITE_AT_MIDNIGHT": F_NC_JOBS,
     "NC_F1_WRITE_NOT_ON_RECORD": f"{JLIVE} WHERE jrn != (SELECT f_ins_jrn FROM pick)",
@@ -273,7 +284,7 @@ COPIES = {
     "NC_C13_STATE_DIFFERS": (LIVE, [("C13", 1)], BJ_NEEDS),
     # v27.170 (D2 (c)): the freeze. LIVE (on a night written since the cutover by its first write,
     # however late) is the late-first-write case and reads F1 0, F2 0.
-    "NC_F1_SECOND_WRITE_AFTER_MIDNIGHT": (LIVE, [("F1", 1)], F_NEEDS),
+    "NC_F1_SECOND_WRITE_AFTER_MIDNIGHT": (F_2ND_PLAN, [("F1", 1)], F_NEEDS),
     "HC_F1_REWRITE_BEFORE_MIDNIGHT": (F_HC_PLAN, [("F1", 0), ("F2", 0)], F_NEEDS),
     "NC_F1_REWRITE_AT_MIDNIGHT": (F_NC_PLAN, [("F1", 1)], F_NEEDS),
     "NC_F1_WRITE_NOT_ON_RECORD": (LIVE, [("F1", 1)], F_NEEDS),
