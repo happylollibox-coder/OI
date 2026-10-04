@@ -1335,6 +1335,26 @@ hu_k4_diff AS (  -- BASELINE_DIFF: a changed value, or a setting on one side onl
 **The runbook** is `scripts/bigquery/migrations/2026-10-05_holdout_t2_deploy.sh` (Task R). It runs steps
 1–5 below in order, stops at the first failure, and records each check's result.
 
+**Task R (built 2026-10-04).**
+- Files: `migrations/2026-10-05_holdout_t2_deploy.sh` (`--check`, `--deploy`, `--from-step N`,
+  `--rehearse`, `--rehearse-drop`, `--post-pass`), `_rollback.sh`, and their helpers `_lib.sh` and
+  `_sqltool.py`. The header of each script states what it does and what was measured.
+- The board (`V_ENGINE_HEALTH` c33) reads `DE_HOLDOUT_BASELINE`, whose DDL and founding insert were not on
+  the branch, so the board could not be created. Task R adds them as Step 3b and Task 3 describe:
+  `tables/DE_HOLDOUT_BASELINE.sql` (step 1) and `migrations/2026-10-05_holdout_t2_baseline.sql` (step 2,
+  after the founding file; run-once). It also adds K12 to the acceptance file. The presence rule is one
+  text in c33, the baseline file and K12, and the runbook refuses to start if the three differ.
+- **When a pass has finished**, read from `LOG_PIPELINE_RUNS`. Each orchestrator call draws one `run_id`
+  and logs one row per step when the step ends, OK or FAIL; nothing is logged when a step starts.
+  - A pass has **finished** when its `run_id` has logged the orchestrator's last step,
+    `SP_SNAPSHOT_ENGINE_HEALTH`.
+  - A pass is **running** when it has logged its first step (`SP_SRC_ACC_PRODUCTS`) and not its last, and
+    started less than 8 h ago. It is also running when `JOBS_BY_PROJECT` holds an orchestrator job that is
+    not DONE.
+  - The first and last steps are read from the deployed orchestrator body each time. The runbook refuses
+    if they are no longer these two.
+  - "No new row for a while" is never read as "finished": one step ran 362 min.
+
 **Measured pass times.** These come from `LOG_PIPELINE_RUNS`: the 21 passes from 2026-09-27 05:00 to
 2026-10-03 16:47 UTC, 7 in each slot (query in Appendix C). All times are UTC start times, except the
 last column.

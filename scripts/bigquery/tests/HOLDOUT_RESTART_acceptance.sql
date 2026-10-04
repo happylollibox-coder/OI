@@ -5,14 +5,15 @@
 --     "$(grep -v '^[[:space:]]*--' FILE)"
 -- Each statement returns one row (check_name, violations, detail); parse the multi-statement output
 -- by regex over the {"check_name"...} objects.
--- This file holds K1-K11 and K9b: K1-K6 (plan Tasks 2-3), K7 (Task 5), K8-K11 and K9b (Task 7).
--- K12 (the baseline is whole, plan §5) is NOT here: DE_HOLDOUT_BASELINE's DDL and its founding insert
--- are not on this branch yet (plan Task 2 Step 3b, Task 3); K12 lands with them.
+-- This file holds K1-K12 and K9b: K1-K6 (plan Tasks 2-3), K7 (Task 5), K8-K11 and K9b (Task 7), K12 (Task 3's
+-- baseline, added with tables/DE_HOLDOUT_BASELINE.sql and migrations/2026-10-05_holdout_t2_baseline.sql by
+-- Task R, 2026-10-04). The runbook migrations/2026-10-05_holdout_t2_deploy.sh runs them by id, step by step.
 -- K11 is the board half of plan §5's K11; the touch alarm and the feed term are tested on doctored
 -- copies by HOLDOUT_INTEGRITY_acceptance.sql H4 / H5 (every row PASS), run after this file.
 -- Objects: scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql, views/V_HOLDOUT_TRIAL.sql,
 --          views/V_HOLDOUT_ARM.sql, migrations/2026-10-05_holdout_t2_registry_rows.sql,
---          migrations/2026-10-05_holdout_t2_founding.sql. SOP: architecture/HOLDOUT.md §4, §5, §9.
+--          migrations/2026-10-05_holdout_t2_founding.sql, tables/DE_HOLDOUT_BASELINE.sql,
+--          migrations/2026-10-05_holdout_t2_baseline.sql. SOP: architecture/HOLDOUT.md §4, §5, §6, §9.
 --
 -- WHEN EACH CHECK CAN PASS (deploy 2026-10-05 by the runbook, plan Task 8):
 --   BEFORE THE DEPLOY none can: DE_HOLDOUT_TRIAL, V_HOLDOUT_TRIAL and V_HOLDOUT_ARM do not exist (the
@@ -20,7 +21,7 @@
 --     is archived from 2026-10-05, so on LA 2026-10-04 both trials are live (K1 reads 2) and trial 1's
 --     14 controls still bind (K6 reads 26).
 --   RIGHT AFTER THE DEPLOY (LA 2026-10-05, inside the runbook):
---     K1, K2, K6 after step 1 (Task 2); K3, K4, K5 after step 2 (Task 3);
+--     K1, K2 after step 1 (Task 2); K3, K4, K5, K6, K12 after step 2 (Task 3: K6 needs trial 2's rows);
 --     K7 after step 5 (until V_ENGINE_HEALTH reads V_HOLDOUT_ARM it reads 1);
 --     K10 and K11 after step 5 (Task 6: the readout and the board). K11's feed term reads the live
 --     board, so it also fails while any feed stamp is > 36 h old: that is the alarm working.
@@ -101,6 +102,22 @@
 --       V_ENGINE_HEALTH body; the holdout_unit_changed row must exist, print 15 feed ages and carry no
 --       FEED STALE clause. The board row is read once (each reference of the board is planned again:
 --       the first draft read it five times and failed "query is too complex" on the planner).
+--   K12 the baseline is whole: the founding DE_HOLDOUT_BASELINE rows of trial 2 (ruling NULL) against a re-read
+--       of the present settings of the watched set (trial 2's HOLDOUT units whose assignment_rule starts
+--       'FOUNDING', read from DE_HOLDOUT_ASSIGNMENT), compared as (campaign_id, setting, value): rows on one
+--       side only + duplicate (campaign_id, setting) keys + 1 when the re-read finds nothing. The presence rule
+--       (hu_k4_sp .. hu_k4_present) is V_ENGINE_HEALTH.sql's c33 text verbatim; the runbook refuses to start
+--       when the three copies differ. Run it straight after step 2: afterwards a difference is a kind-4 touch
+--       and c33's BASELINE_DIFF reads it.
+--
+-- TASK R REHEARSAL, 2026-10-04 09:03-09:39 UTC (LA date 2026-10-04), the runbook --rehearse: every name of
+-- the deploy on OI.TMP_HT2_R_ copies, CURRENT_DATE('America/Los_Angeles') pinned to 2026-10-05, this file
+-- run by id with the same renaming; every copy dropped afterwards. Deploy state: K1 0, K2 0, K3 0, K4 0,
+-- K5 0, K6 0, K12 0 (15 founding baseline rows on 8 controls = the re-read), K7 1 after step 4 (the board
+-- copy 3, expected 1) then 0 after step 5, K10 0, K11 0; the full record is in the runbook's header.
+--   K12 negative controls (expected / measured): baseline copy minus one row 1 / 1; one value altered
+--   2 / 2; every row doubled 15 / 15; the four sources' copies emptied of the 12 controls 16 / 16.
+--   slot time: K3-K6 with K12 213.5 slot-s in one script.
 --
 -- MEASURED 2026-10-04 ~03:20-03:35 UTC (LA date 2026-10-03), rehearsal on TMP_HT2_ copies, all
 -- dropped afterwards. Copies: DE_HOLDOUT_TRIAL from its DDL; DE_HOLDOUT_ASSIGNMENT by COPY of the
@@ -575,3 +592,49 @@ SELECT 'K11_touch_alarm_and_feed_on_board' AS check_name,
               miss.n_missing, miss.n_need, IF(miss.n_missing > 0, CONCAT(' (', miss.missing_txt, ')'), ''), bm.n_rows,
               IFNULL(bm.status, 'none'), bm.n_ages, IF(bm.n_stale > 0, ', FEED STALE', ''), IFNULL(bm.ages_txt, 'none')) AS detail
 FROM miss, bm;
+
+-- K12 the baseline is whole: the founding DE_HOLDOUT_BASELINE rows = a re-read of the present settings
+-- of the watched set (hu_k4_sp .. hu_k4_present = V_ENGINE_HEALTH.sql's c33 text verbatim)
+WITH
+watch AS (
+  SELECT unit_id FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT'
+    AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+hu_k4_sp  AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`),
+hu_k4_sbp AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`),
+hu_k4_sbc AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`),
+hu_k4_sbt AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_product_target`),
+hu_k4_present AS (  -- the presence rule: re-stamped by its table's latest sync, and not deleted
+  SELECT campaign_id, CONCAT('SP_PLACEMENT|', placement) AS setting, CAST(percentage AS STRING) AS value
+  FROM hu_k4_sp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_PLACEMENT|', placement), CAST(percentage AS STRING)
+  FROM hu_k4_sbp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_SHOPPER_COHORT|', audience_id, '|', shopper_cohort_type),
+         CAST(percentage AS STRING)
+  FROM hu_k4_sbc WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_TARGET|', id, '|', kv.k), kv.v
+  FROM hu_k4_sbt, UNNEST([STRUCT('bid' AS k, CAST(bid AS STRING) AS v), STRUCT('state', state)]) kv
+  WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR) AND NOT COALESCE(_fivetran_deleted, FALSE)),
+now_set AS (
+  SELECT campaign_id, setting, COALESCE(value, '(null)') AS v FROM hu_k4_present
+  WHERE campaign_id IN (SELECT unit_id FROM watch)),
+base AS (
+  SELECT campaign_id, setting, COALESCE(value, '(null)') AS v FROM `onyga-482313.OI.DE_HOLDOUT_BASELINE`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND ruling IS NULL),
+x AS (
+  SELECT b.campaign_id IS NOT NULL AS in_base, n.campaign_id IS NOT NULL AS in_now
+  FROM (SELECT DISTINCT * FROM base) b
+  FULL OUTER JOIN (SELECT DISTINCT * FROM now_set) n USING (campaign_id, setting, v)),
+m AS (
+  SELECT (SELECT COUNTIF(in_base AND NOT in_now) FROM x) AS only_base,
+         (SELECT COUNTIF(in_now AND NOT in_base) FROM x) AS only_now,
+         (SELECT COUNT(*) - COUNT(DISTINCT FORMAT('%s|%s', campaign_id, setting)) FROM base) AS dup_keys,
+         (SELECT COUNT(*) FROM base) AS n_base, (SELECT COUNT(DISTINCT campaign_id) FROM base) AS c_base,
+         (SELECT COUNT(*) FROM now_set) AS n_now, (SELECT COUNT(DISTINCT campaign_id) FROM now_set) AS c_now,
+         (SELECT COUNT(*) FROM watch) AS n_watch)
+SELECT 'K12_baseline_is_whole' AS check_name,
+       only_base + only_now + dup_keys + IF(n_now = 0, 1, 0) AS violations,
+       FORMAT('watched controls %d · founding baseline rows %d on %d controls · re-read %d on %d · only in the baseline %d · only in the re-read %d · duplicate keys %d%s',
+              n_watch, n_base, c_base, n_now, c_now, only_base, only_now, dup_keys,
+              IF(n_now = 0, ' · the re-read found no present setting for the watched set', '')) AS detail
+FROM m;
