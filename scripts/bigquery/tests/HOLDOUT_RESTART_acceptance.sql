@@ -24,15 +24,36 @@
 --     K7 after step 5 (until V_ENGINE_HEALTH reads V_HOLDOUT_ARM it reads 1);
 --     K10 and K11 after step 5 (Task 6: the readout and the board). K11's feed term reads the live
 --     board, so it also fails while any feed stamp is > 36 h old: that is the alarm working.
---   ONLY AFTER THE FIRST PASS GATED FOR T2 — the ~16:00 UTC pass of 2026-10-05 in the primary window
---   (05:00 UTC 2026-10-06 in the fallback window) — because they read SNAPSHOTS that a pass rebuilds:
---     K8  T_ENGINE_PREFLIGHT (SP_ENGINE_PREFLIGHT, every pass);
---     K9  the latest live FACT_PLAN_NEXT_WEEK partition (SP_BUILD_NEXT_WEEK_PLAN; it refused 10 of its
---         21 runs 09-27..10-03, so this can be a later pass than the first; no book from
---         tools/build_weekly_book.py until K9 reads 0);
---     K9b T_FAMILY_SEAT_REGISTER (SP_REFRESH_CUBE_TABLES, every pass).
---     Each carries a freshness term: it adds 1 while its snapshot was built before trial 2's founding
---     insert (MAX(assigned_at) of the FOUNDING rows), so run before that pass it FAILS and says so.
+--   ONLY AFTER A PASS HAS REBUILT THEIR SNAPSHOT ON THE DEPLOYED CODE, because they read SNAPSHOTS.
+--   K9's pass is not K8's (corrected 2026-10-04 after review of ee41813, which put all three after
+--   the ~16:00 UTC pass of 10-05). Each carries a freshness term: it adds 1 while its snapshot was
+--   built before trial 2's founding insert (MAX(assigned_at) of the FOUNDING rows), so run too early
+--   it FAILS and says 'BUILT BEFORE TRIAL 2 WAS FOUNDED'.
+--     K8  T_ENGINE_PREFLIGHT (SP_ENGINE_PREFLIGHT, every pass) and
+--     K9b T_FAMILY_SEAT_REGISTER (CREATE OR REPLACE by SP_REFRESH_CUBE_TABLES, every pass):
+--         primary window: after pass 3 of 2026-10-05 (starts 16:00 UTC; over the 7 passes measured in
+--         plan Task 8 its preflight started 16:31-16:57 and its refresh 16:35-17:04 UTC);
+--         fallback window: after pass 1 of 2026-10-06 (starts 05:00 UTC).
+--     K9  the latest live FACT_PLAN_NEXT_WEEK partition: after pass 1 of 2026-10-06 (its plan step
+--         started 05:32-05:43 UTC over the 7 passes measured; 05:30 UTC is 22:30 Los Angeles 10-05),
+--         which writes as_of 2026-10-06. This holds in EITHER window. K9 cannot read 0 before that
+--         pass, so NO WEEKLY BOOK CAN BE BUILT ON 2026-10-05 (UTC and New York date; in Los Angeles
+--         none before ~22:30 of 10-05): no book from tools/build_weekly_book.py until K9 reads 0.
+--         Why: the live SP_BUILD_NEXT_WEEK_PLAN (v27.171, altered 2026-10-03 18:37 UTC) keys as_of on
+--         CURRENT_DATE('America/New_York') (v27.160). Once a partition for that as_of exists and Los
+--         Angeles midnight of the as_of has passed, it does not rewrite it (FROZEN, v27.170): it
+--         RETURNs and the step logs OK. Pass 1 of 10-05 (05:00 UTC = 01:00 New York 10-05 = 22:00 Los
+--         Angeles 10-04) writes as_of 2026-10-05 before the deploy. Passes 2 and 3 of 10-05 (00:35 and
+--         09:00 Los Angeles) are FROZEN: they log OK and write nothing. So 'the step logged OK' does
+--         not mean 'a partition was written'. Measured 2026-10-04: pass 2's SP_BUILD_NEXT_WEEK_PLAN
+--         logged OK at 08:09:42 UTC in 1 s, and the as_of 2026-10-04 partition kept built_at 05:30:18
+--         UTC (712 rows).
+--         The freeze needs an existing partition: a night with none is written by the next pass that
+--         logs OK. So if the step refuses on pass 1 of 10-06, a later pass of 10-06 writes as_of
+--         10-06. Only if it refused on both passes 1 and 2 of 10-05 could pass 3 of 10-05 write as_of
+--         10-05 after a primary-window deploy. tools/build_weekly_book.py reads the rows with the
+--         latest DATE(built_at) (UTC). From pass 1 of 10-05 to pass 1 of 10-06 that is the pre-deploy
+--         as_of 2026-10-05 partition.
 --
 --   K1  one live trial and it is T2: ABS(COUNTIF(is_live) - 1) + COUNTIF(is_live AND trial_id != T2)
 --       over V_HOLDOUT_TRIAL. An empty registry reads 1.
@@ -254,6 +275,32 @@
 --   register copy: 0; the old CTE (DE_HOLDOUT_ASSIGNMENT, all trials) on the copy 67 (over the live
 --   table or over the copy with trial 2's rows); the new CTE on the live T_FAMILY_SEAT_REGISTER 49;
 --   the old CTE on the live T_FAMILY_SEAT_REGISTER 0.
+--
+-- FOLLOW-UP 2026-10-04 ~08:10-08:25 UTC (LA date 2026-10-04), review of ee41813 (K9's timing). The
+-- WHEN block above and K9's 'BUILT BEFORE' text are corrected. No check's arithmetic changed.
+-- Read-only on live objects:
+--   INFORMATION_SCHEMA.ROUTINES: SP_BUILD_NEXT_WEEK_PLAN last_altered 2026-10-03 18:37:21 UTC; its body
+--     holds 'FROZEN' and CURRENT_DATE('America/New_York').
+--   LOG_PIPELINE_RUNS: SP_BUILD_NEXT_WEEK_PLAN logged OK on 2026-10-04 at 05:29:07 (95 s) and 08:09:42
+--     (1 s), and on all 7 of its runs from 2026-10-02 08:05:31 to 2026-10-04 08:09:42.
+--   FACT_PLAN_NEXT_WEEK as_of 2026-10-04 after the 08:09 run: 712 rows, MAX(built_at) 05:30:18 UTC.
+-- K9 re-run on TMP_HT2_G5F_ copies, all dropped afterwards (0 TMP_HT2_ tables, 0 routines). Copies:
+-- assignment = COPY of DE_HOLDOUT_ASSIGNMENT + the founding file (59 trial-2 rows, 12 HOLDOUT);
+-- registry from its DDL and the rows file; V_HOLDOUT_TRIAL / V_HOLDOUT_ARM from their files, pinned
+-- to 2026-10-05 (arm: 12 rows, all T2). The plan copy = the latest live partition (as_of 2026-10-04,
+-- 712 rows) with holdout, holdout_member and holdout_eligible_from from the pinned arm and
+-- built_at = now (after the copy's founding insert).
+--   (expected / measured)
+--   K9 deploy-state copy                                                  0 / 0 (47 live rows on
+--                                                                           10 T2 controls, all holdout)
+--   NC the copy with built_at 2026-10-04 05:30:18 UTC (before the founding)   1 / 1
+--   NC an empty copy                                                      2 / 2 (empty + no build stamp)
+--   NC the live FACT_PLAN_NEXT_WEEK against the copied assignment       > 0 / 113 = 47 + 65 + 1
+--   NC every name live (no trial 2 yet, founded NULL)                   > 0 / 66 = 65 + 1
+--   the live as_of 10-04 rows + the deploy-state copy as as_of 10-05        0 / 0
+--   the deploy-state copy as as_of 10-04 + the live rows as as_of 10-05   > 0 / 113
+--     (K9 reads only the partition with the latest as_of)
+--   slot time: 1.4 s (the first five statements), 0.3 s (the last two).
 -- =============================================================================================
 
 -- K1 one live trial, and it is T2
@@ -425,7 +472,7 @@ SELECT 'K9_plan_holdout_is_t2' AS check_name,
        FORMAT('live plan as_of %t built %t (trial 2 founded %t)%s · %d rows · T2 control rows %d on %d campaigns, not holdout %d · T1-only control rows holdout %d · other rows holdout %d',
               m.as_of, m.built_at, f.founded_at,
               IF(f.founded_at IS NULL OR m.built_at IS NULL OR m.built_at < f.founded_at,
-                 ' — BUILT BEFORE TRIAL 2 WAS FOUNDED: no book from tools/build_weekly_book.py until this reads 0', ''),
+                 ' — BUILT BEFORE TRIAL 2 WAS FOUNDED: as_of is the New York date and a written night is FROZEN once Los Angeles midnight of its as_of has passed (a FROZEN pass logs OK and writes nothing), so the first partition after the founding is the first New York date not yet written at the founding (a 2026-10-05 deploy: as_of 2026-10-06, pass 1 of 10-06); no book from tools/build_weekly_book.py until this reads 0', ''),
               m.n_rows, m.t2_rows, m.t2_campaigns, m.t2_not_holdout, m.t1only_holdout, m.other_holdout) AS detail
 FROM m, f;
 

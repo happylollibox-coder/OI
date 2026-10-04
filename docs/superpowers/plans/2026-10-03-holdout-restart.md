@@ -146,7 +146,7 @@ of the table. They are snapshots of two readers, and they keep the old holds unt
 | 13 | `tests/V_FAMILY_SEAT_REGISTER_acceptance.sql` (line 350) | `MIN(eligible_from)` over all trials | expects T1 controls held forever | reads `V_HOLDOUT_ARM` (Task 7) |
 | 14 | `tests/PLAN_OWNERSHIP_acceptance.sql` (**untracked, another session's work in progress**) | `hold_open`: HOLDOUT rows in window, all trials | T1 controls stay "open" holds | **do not edit**; tell its owner to read `V_HOLDOUT_ARM` (Task 7) |
 | 15 | `T_FAMILY_SEAT_REGISTER` (snapshot of reader 6) | `CREATE OR REPLACE` from `V_FAMILY_SEAT_REGISTER` by `SP_REFRESH_CUBE_TABLES` (Refresh Task 21), once per pass. Read by `V_DAILY_BRIEF`, `V_RUN_SUMMARY`, the `seat_*` board checks, `SP_SNAPSHOT_ENGINE_HEALTH` and `cube/schema/SeatRegister.js` | from the deploy until that step next logs OK, it still marks T1's controls `holdout` and not T2's | none: the next rebuild inherits Task 5's fix. Check it after that pass (Task 8) |
-| 16 | `FACT_PLAN_NEXT_WEEK` (snapshot of reader 7) | a partition per night, written by `SP_BUILD_NEXT_WEEK_PLAN` from `V_PLAN_WINDOW_JUDGMENT`. Its `holdout` column is read by `tools/build_weekly_book.py` (`AND NOT c.holdout`), `SP_APPEND_SEAT_REQUEST` (copied into `FACT_SEAT_REQUEST`) and `V_PREDICTION_LEDGER` | from the deploy until the plan step next logs OK, the latest partition holds T1's controls and not T2's. **A book built from it in that gap would carry T2 controls.** The step refused 10 of its 21 runs from 09-27 to 10-03 (Task 8), so "the next pass" can mean the next day | none: the next OK build inherits Task 5's fix. K9 runs on the first partition written after the deploy (Task 8) |
+| 16 | `FACT_PLAN_NEXT_WEEK` (snapshot of reader 7) | a partition per night, written by `SP_BUILD_NEXT_WEEK_PLAN` from `V_PLAN_WINDOW_JUDGMENT`. Its `holdout` column is read by `tools/build_weekly_book.py` (`AND NOT c.holdout`), `SP_APPEND_SEAT_REQUEST` (copied into `FACT_SEAT_REQUEST`) and `V_PREDICTION_LEDGER` | from the deploy until the first partition written after it, the latest partition holds T1's controls and not T2's. **A book built from it in that gap would carry T2 controls.** That first partition is `as_of` 2026-10-06, written by pass 1 of 10-06 (~05:30 UTC), in either deploy window. `as_of` is the New York date (v27.160), and pass 1 of 10-05 (01:00 New York, 22:00 LA 10-04) writes `as_of` 10-05 before the deploy. From LA midnight that night is FROZEN (v27.170): passes 2 and 3 of 10-05 log OK and write nothing, so "the step logged OK" does not mean "a partition was written" (measured 10-04: pass 2's step logged OK in 1 s at 08:09:42 UTC, and the `as_of` 10-04 partition kept `built_at` 05:30:18). **No weekly book can be built on 10-05**, none before that pass (Task 8). Corrected 2026-10-04: this row first said "until the plan step next logs OK" | none: the first partition written after the deploy (`as_of` 10-06) inherits Task 5's fix. K9 runs on it, after pass 1 of 10-06 (Task 8, Task 9) |
 
 **Double counting.** Only the readout aggregates the arms, and it filters on one `trial_id`. Every other
 reader takes a set of campaigns (`GROUP BY` campaign), so a second trial cannot double any number. The
@@ -224,7 +224,9 @@ A change that lands on a T2 control on 10-05 can only come from a book built bef
 hand change. The readout already publishes such a change as a `PRE_WINDOW_CHANGE` row, and it is **not
 censored**: R9 as Ori built it reads the window only. That is pre-declared here for T2, so no ruling is
 left pending. The new touch alarm (§2.7) turns RED on it anyway. The runbook (Task 8) forbids both
-sources: on 10-05, upload only a book built after the deploy, or none. Sunday's Weekly Run upload on 10-04
+sources: no book is uploaded on 10-05, because none can be built after the deploy that day (the plan
+partition a book reads is first rebuilt on the deployed code by pass 1 of 10-06, Task 8; corrected
+2026-10-04 from "upload only a book built after the deploy, or none"). Sunday's Weekly Run upload on 10-04
 comes before the assignment and is fine.
 
 ### 2.4 The eligible population, with the same exclusions re-applied on the design date
@@ -1358,16 +1360,23 @@ Task 4.
     measured end is 08:55 UTC.
   - Finish before pass 3 starts at 16:00 UTC. **Stop by 15:40 UTC.** Whatever is not done by then waits
     for the fallback.
-  - Pass 3 of 10-05 (09:00 LA) is then the first pass gated for T2.
+  - Pass 3 of 10-05 (09:00 LA) is then the first pass gated for T2 **for the preflight and the
+    register image** (K8, K9b). It does not apply to `FACT_PLAN_NEXT_WEEK`: pass 3 finds the `as_of`
+    10-05 night already written and FROZEN, and writes nothing (below). The first plan partition
+    gated for T2 is `as_of` 10-06, written by pass 1 of 10-06 (K9).
 - **Fallback window.**
   - Start after pass 3 of 10-05 has finished. Confirm it; the latest measured end is 17:37 UTC.
   - Finish by **04:40 UTC on 10-06**. Pass 1 of 10-06 starts at 05:00 UTC, which is 22:00 LA on 10-05.
     It judges under LA 10-05 and builds the book uploaded on 10-06, so it must run on the deployed
     code.
+  - Pass 1 of 10-06 is then the first pass gated for T2, for all three snapshots (K8, K9, K9b).
 - **If both windows are missed,** every T2 date shifts by a day, and so does T1's archive date
   (Task 0), before step 1.
 - **Pass 2 of 10-05 runs before the deploy,** at 00:35 LA on 10-05, on the old code. Its outputs carry
   T2 controls unblocked and T1 controls still held. Hence the upload rule below.
+- **Pass 1 of 10-05 writes the `as_of` 10-05 plan partition on the old code,** at 22:00 LA on 10-04,
+  before either window opens. From LA midnight that night is frozen (below), and it stays the latest
+  partition until pass 1 of 10-06 writes `as_of` 10-06.
 
 | step | when | what |
 |---|---|---|
@@ -1377,7 +1386,7 @@ Task 4.
 | 3 | right after | Task 4: `SP_ASSIGN_HOLDOUT` **first**, then `V_HOLDOUT_ELIGIBLE` (review fix 3) |
 | 4 | right after | Task 5: preflight, judgment, register, tools. K7 |
 | 5 | right after | Task 6: readout, board. Task 7 acceptance |
-| 6 | by 15:40 UTC (primary) or 04:40 UTC 10-06 (fallback) | the runbook ends. The next pass is the first one gated for T2 |
+| 6 | by 15:40 UTC (primary) or 04:40 UTC 10-06 (fallback) | the runbook ends. The next pass is the first one gated for T2 for the preflight and the register image (K8, K9b). For `FACT_PLAN_NEXT_WEEK` the first is pass 1 of 10-06 in either window (K9) |
 
 **The two snapshot tables keep T1's holds until a pass rebuilds them** (§1 rows 15 and 16).
 
@@ -1386,18 +1395,39 @@ Task 4.
   cube mark T1's controls as holdout and T2's as ordinary campaigns.
   - **Check it after the first gated pass.** In the image, every T2 control has `holdout = TRUE` and no
     T1-only control does.
-- **`FACT_PLAN_NEXT_WEEK`** gets a new partition only when `SP_BUILD_NEXT_WEEK_PLAN` logs OK.
-  - Measured: the step refused (FAIL, on an ASSERT) 10 of its 21 runs from 09-27 to 10-03, six of them
-    in a row (09-27 05:32 to 09-28 16:44). It has logged OK on the 5 runs since 10-02 08:05.
-  - So after the deploy, the latest partition can stay pre-deploy for a day or more.
-  - **Run K9 on the first partition built after the deploy.**
-  - **No book may be built with `tools/build_weekly_book.py` until K9 passes.** The tool reads the
-    partition's `holdout` column, so a book built from a pre-deploy partition would carry T2 controls.
+- **`FACT_PLAN_NEXT_WEEK`** gets a new partition only when `SP_BUILD_NEXT_WEEK_PLAN` logs OK **and
+  is not FROZEN**. Corrected 2026-10-04 (review of G5): the first version said "only when it logs OK".
+  - `as_of` is the New York date (v27.160). Once a partition for that `as_of` exists and LA midnight
+    of the `as_of` has passed, the step does not rewrite it (FROZEN, v27.170; live v27.171, altered
+    2026-10-03 18:37 UTC). It returns and logs OK.
+  - Measured 10-04: pass 2's step logged OK at 08:09:42 UTC in 1 s, and the `as_of` 10-04 partition
+    kept `built_at` 05:30:18 UTC (712 rows). So "the step logged OK" does not mean "a partition was
+    written".
+  - On 10-05, pass 1 (05:00 UTC = 01:00 New York 10-05 = 22:00 LA 10-04) writes `as_of` 10-05 on the
+    old code. Passes 2 and 3 of 10-05 (00:35 and 09:00 LA) are FROZEN: they log OK and write nothing.
+  - **So the first partition built after the deploy is `as_of` 10-06, written by pass 1 of 10-06
+    (~05:30 UTC 10-06, which is ~22:30 LA 10-05), in either window.** Until then the latest
+    partition is pre-deploy.
+  - The freeze needs an existing partition. A night with none is written by the next pass that logs
+    OK. The step refused (FAIL, on an ASSERT) 10 of its 21 runs from 09-27 to 10-03, six of them in a
+    row (09-27 05:32 to 09-28 16:44). It logged OK on all 7 runs from 10-02 08:05 to 10-04 08:09.
+    The last of these (1 s) wrote nothing.
+    - If it refuses on pass 1 of 10-06, a later pass of 10-06 writes `as_of` 10-06.
+    - Only if it refused on both passes 1 and 2 of 10-05 could pass 3 of 10-05 write `as_of` 10-05
+      after a primary-window deploy.
+  - **Run K9 after pass 1 of 10-06** (Task 9). Before then it reads ≥ 1 through its freshness term
+    ("BUILT BEFORE TRIAL 2 WAS FOUNDED").
+  - **No book may be built with `tools/build_weekly_book.py` until K9 passes, so no weekly book can be
+    built on 10-05** (UTC and New York date; in LA, none before ~22:30 of 10-05). The tool reads the rows with the latest `DATE(built_at)` (UTC), and their
+    `holdout` column. From pass 1 of 10-05 to pass 1 of 10-06, those rows are the pre-deploy `as_of`
+    10-05 partition, so a book built then would carry T2 controls.
   - The three bulksheet tools of Task 5 read `V_HOLDOUT_ARM` directly, so they are right from the
     deploy on.
 
 **Uploads and hand changes.**
-- **Uploads on 10-05:** only a book built after the deploy, by the first gated pass or later, or none.
+- **Uploads on 10-05: none.** No weekly book can be built after the deploy on 10-05 (above: K9 cannot
+  read 0 before pass 1 of 10-06). Corrected 2026-10-04: the first version said "only a book built
+  after the deploy, by the first gated pass or later, or none", and on 10-05 no such book can exist.
   Sunday's Weekly Run upload on 10-04 comes before the assignment and is fine.
   - **One caution for that upload.** An SB keyword change is dated by the sync that first saw it, up to
     a day late. A 10-04 change to an SB control's keywords can therefore be dated 10-05.
@@ -1405,7 +1435,8 @@ Task 4.
   - c33 would then read RED on day one, and the readout would publish it as a `PRE_WINDOW_CHANGE`.
   - Before step 1, list the 10-04 upload's rows on the 12 controls. If any SB keyword row is among
     them, the first RED is expected and is named in the deploy record.
-- **From 10-06:** books as usual, once K9 has passed. They no longer carry T2 controls.
+- **From 10-06:** books as usual, once K9 has passed after pass 1 of 10-06. They no longer carry T2
+  controls.
 - **Hand changes:** none to the 12 campaigns in §3.1, from the insert to 2027-01-26. The alarm cannot
   see every kind of change (§2.7, "What no source can see").
 
