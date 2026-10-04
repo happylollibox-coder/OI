@@ -394,7 +394,11 @@ future predictor must pass, each check with a negative control:
    family's `min_clicks`;
 5. three fixtures — a fabricated prediction that must grade `RIGHT`, one `WRONG`, one `INCONCLUSIVE` —
    read as expected (the fixtures are written under `predictor = 'FIXTURE'` and excluded from every
-   aggregate);
+   aggregate); *built 2026-10-04 (piece-2 Task 7): checks 3 and 5 need grader runs, which
+   `scripts/bigquery/tests/check_prediction_contract_controls.py` makes on copies of the grader and
+   its tables — the fixtures are written to those copies only, since `FACT_PREDICTION_GRADE` is
+   append-only and a fabricated row there could never be removed (`architecture/LEARNING.md` §4,
+   §10 "Task 7");*
 6. every `ACCEPTED` proposal has `applied_at` and a threshold-history row within one night; every
    `APPLIED` value equals the rule table's current value;
 7. no `OPEN` proposal duplicates another on `rule_key × scope`;

@@ -15,7 +15,10 @@ reads (§1 "The freeze"; §10 "Task 3 follow-up 2"). Task 4 (2026-10-03) deploye
 August nights are graded (§4, §5; §10 "Task 5"). Task 6 (2026-10-04) put the grader on the
 schedule (orchestrator Refresh Task 20.8f, v27.176), the three health checks on the board
 (`V_ENGINE_HEALTH` c35–c37) and the two RED-able ones on the brief's SYSTEM line (§6; §10 "Task
-6"). Nothing else below is deployed yet: the rest of the contract suite is Task 7. Each task appends
+6"). Task 7 (2026-10-04) completed the contract suite (spec §11 checks 1–5 and 8, the frozen check
+and the parity with `FN_PLAN_SCORECARD`) and its controls harness, which runs the grader's own text
+on copies (§4 "Fixtures", "The piece-0 scorecard keeps its own clock"; §10 "Task 7"); it deployed
+nothing. Each task appends
 its own entry to §10 "Deploy and verify" and corrects any sentence here that its build proves wrong.
 
 > Every night, for every keyword the money plan judges, two forecasts are written down — *if you do
@@ -468,8 +471,14 @@ predicted numbers and `pred_side`; `applied_scenario`, `is_applied`, `matched_ch
 `regrade_reason`. Checked by `scripts/bigquery/tests/PREDICTION_GRADE_acceptance.sql` (V1–V8, a
 negative control per check; §10 "Task 5").
 
-**Fixtures.** The contract suite (Task 7) writes three fabricated predictions under `predictor =
+**Fixtures.** The contract suite (Task 7) grades fabricated predictions under `predictor =
 'FIXTURE'` that must read `RIGHT`, `WRONG` and `INCONCLUSIVE`; every aggregate excludes them.
+*Corrected 2026-10-04 (Task 7): they are written to copies only, never to `FACT_PREDICTION_GRADE`
+— the table is append-only, so a fabricated row there could never be removed, and the grader grades
+only what the ledger holds, so a fixture in the real table would need a fabricated plan row in
+`FACT_PLAN_NEXT_WEEK`. `scripts/bigquery/tests/check_prediction_contract_controls.py` runs the
+grader's own text on a copy whose ledger and ads table carry the fixtures; the acceptance's C5z
+asserts the real table and report card hold none (§10 "Task 7").*
 
 **The piece-0 scorecard keeps its own clock (D5).** `FN_PLAN_SCORECARD` / `V_PLAN_SCORECARD` are
 unchanged in piece 2: they grade one night per Sunday week once the night is 14 days old, over
@@ -477,6 +486,16 @@ unchanged in piece 2: they grade one night per Sunday week once the night is 14 
 net equal, within a cent, to the grade table's computed the same way on the nights both grade.
 Piece 6 re-points GRADE and RECOMMENDATION at the grade table; GUARD and RULE_HINT grade the window
 the judge looked back on, which is not a prediction, and stay in the function.
+**FN keeps its own clock until piece 6** (Task 7). The two clocks differ in two ways: FN grades a
+night 14 days after the night, the grader 14 settled days after the horizon ends (§4 step 1); and
+FN's window starts on `as_of`, the ledger's horizon on the first full Los Angeles day after `built_at`
+(D2) — a day later on every night written after Los Angeles midnight of its `as_of`, which is every
+night stored up to 2026-10-03. So the parity has two parts (`PREDICTION_CONTRACT_acceptance.sql` P1,
+P2): the allocation (`alloc_spend`, which no clock moves) on every night both grade, and the realised
+numbers only on the family-nights both grade on one clock (horizon = FN's window) and not restated
+since grading — none on the live record until a night written before its Los Angeles midnight is
+graded by both (P2n reports the count). The controls harness runs the grader's own text on FN's
+clock and holds it to FN to the cent (§10 "Task 7").
 
 ---
 
@@ -593,8 +612,11 @@ Anything that may run past ~90 s is submitted `--nosync` and polled with `bq wai
    body against the file, where the new step must be the only difference; the orchestrator is never
    run by hand — then `V_ENGINE_HEALTH.sql`, `V_DAILY_BRIEF.sql`, then
    `scripts/bigquery/tests/PLAN_HEALTH_acceptance.sql` (`--nosync`, polled; it reads the whole brief).
-6. **The contract** (Task 7): `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql`, the parity
-   check, and the controls harness (`--submit` / `--collect`).
+6. **The contract** (Task 7): `scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql` (L1–L4, C2–C8,
+   F, P1–P2; `--nosync`, polled; run it after a grader run), then
+   `scripts/bigquery/tests/check_prediction_contract_controls.py --submit`, polled with `bq wait JOB
+   60` one call at a time, then `--collect JOB` (checks 3 and 5 and the parity on FN's clock, on
+   copies of the grader; it first checks that the deployed grader body is the file's).
 
 Every new object is registered in `config.yaml` by the task that creates it.
 
@@ -1893,3 +1915,120 @@ FROM `onyga-482313.OI.FACT_ENGINE_HEALTH_HISTORY`
 WHERE check_name IN ('prediction_grades_fresh', 'prediction_regression', 'response_model_unverified')
 ORDER BY snapshot_at DESC, check_name LIMIT 9;
 ```
+
+### Task 7 — the contract suite and the parity check (2026-10-04)
+
+**Nothing deployed, nothing written to a real table.** Task 7 creates no BigQuery object. It completed
+`scripts/bigquery/tests/PREDICTION_CONTRACT_acceptance.sql` (Task 4 started it with L1–L4) and added
+`scripts/bigquery/tests/check_prediction_contract_controls.py`, the controls harness that makes the
+grader runs that checks 3 and 5 and the parity on FN's clock need. After the harness run
+`FACT_PREDICTION_GRADE` still held 17,888 rows from two `graded_at`, highest `regrade_seq` 1, no
+`FIXTURE` row, and no `_tmp_t7c_*` table or routine was left in `OI`.
+
+**The suite** (spec §11 checks 1–5 and 8; 6–7 arrive with piece 6), every check a violation count
+with a capitalised line on what breaks in production and a control per check:
+
+| check | holds | spec §11 |
+|---|---|---|
+| L1a–L1d, L2–L4 | the ledger (Task 4) | 1 |
+| C2 | every ledger row gradable on the house watermark has exactly one current grade, and no graded prediction lacks a gradable ledger row (+1 when nothing is gradable) | 2 |
+| C3 | the record of every grader run: one row per prediction per `regrade_seq`, from 0 without a gap, a reason on every re-grade and on no first grade, each re-grade later than the grade it replaces, and every re-grade run covered its whole band from its first night (+1 when the table is empty) | 3 |
+| C4a, C4b | every current grade carries one of the four labels; no `INCONCLUSIVE` row with a click at or above its `min_clicks_at_grade`, no `RIGHT` / `WRONG` row below its line, without one, or with no click | 4 |
+| C5, C5z | fixtures read the label their keyword names (on the file's own fabricated copy, and on the harness's graded ones); the real grade table and report card hold no fixture | 5 |
+| C8a–C8c | the three learning checks are on `V_ENGINE_HEALTH` once each; `prediction_grades_fresh` GREEN, measured 0; the card was rebuilt by a run | 8 |
+| F | every grade row, re-grades included, still equals the ledger row it was graded from (the five numbers within 1e-6, `pred_side`, `built_at`, the horizon, the versions, the grain, the plan's ask and basis) | contract item 1 |
+| P1, P2, P2n | the parity with `FN_PLAN_SCORECARD` (D5), below | — |
+
+C4b and P2 have no emptiness term, each for a stated reason: at the 0.80 bar no family has a line, so
+on the live record the `RIGHT` / `WRONG` arm has no row (the harness's fixtures exercise both arms);
+and P2 compares realised numbers only on one clock, which no night has yet (P2n reports the count, the
+file's `PC_P2_FN_CLOCK` copy and the harness's `FNCLK` copy exercise it).
+
+**Run as written** after the deploys of Tasks 5–6, 2026-10-04 01:02 UTC (job
+`t7_acc2_1791075763`; the comment-stripped text's SHA-256 prefix `8250b70f3bd5`): 64 rows, 63 PASS
+and P2n REPORT 0. LIVE L1a–L4, C2, C3, C4a, C4b, C5z, C8a, C8b, C8c, F, P1 and P2 read 0 over 17,588
+ledger rows and 17,888 grade rows. 872.7 slot-seconds, 553,986,247 bytes processed, 74 s, 24
+statements (the same text at 00:33 UTC, `t7_acc1_1791073978`: the same 64 readings, 778.3
+slot-seconds). Every control, measured: NC_EMPTY C2 1, C3 1, C4a 1, C8a 3, C8b 1, F 1, P1 1 (and
+the L checks as in Task 4); NC_C2_UNGRADED 1, NC_C2_TWO_CURRENT 1, NC_C2_EARLY 1 (C2);
+NC_C3_SECOND_GRADE 2, NC_C3_NO_REASON 1, NC_C3_BAND_HOLE 1 (C3); NC_C4_NO_LABEL 1 (C4a);
+NC_C4_INCONCLUSIVE_AT_LINE 1, NC_C4_RIGHT_NO_LINE 1 (C4b); PC_C5_FIXTURES C5 0 and C5z 6;
+NC_C5_SWAPPED C5 4; NC_C5Z_CARD C5z 1; NC_C8_MISSING C8a 1; NC_C8_RED C8b 1; NC_C8_NO_RUN C8c 1;
+NC_F_MOVED (the plan's control: a graded ledger row's `pred_net` + 0.01) F 2 (its two
+`regrade_seq`); NC_F_LOST F 2; NC_P1_ALLOC (the plan's "one row doctored") P1 2; PC_P2_FN_CLOCK P1 0,
+P2 0, P2n 4; NC_P2_FN_DOCTORED P2 1.
+
+**The parity (D5).** `FN_PLAN_SCORECARD` at today's two clocks (New York 10-03, Los Angeles 10-03)
+grades one night, 2026-08-28 (the Sunday week of 08-23, PEAK), which the grade table also grades. P1
+holds its 4 FAMILY_WEEK rows (`allocated_a`, `allocated_b`) and 8 GRADE rows (`allocated_dollars`)
+to the grade table's `SUM(alloc_spend)` over the current DO_NOTHING grades to the cent. Its realised
+numbers are on another clock: FN reads 08-28 … 08-30, the ledger's horizon is 08-29 … 08-31 (the
+night was written after Los Angeles midnight of its `as_of`, D2), so the realised net differs
+(FN / grade table: Bottle 3.92 / 12.11, Fresh −298.28 / −290.36, LolliME −424.56 / −330.96, Lollibox
+−479.96 / −356.61; the query below as printed, job `t7_parity_sop_1791075961`, 43.6 slot-seconds) and P2
+compares none of them. **FN keeps its own clock until piece 6** (§4). The harness's `FNCLK` copy is
+the proof the realised side would agree: the grader's own text, run on that night with its horizon set
+to FN's window, matches FN's realised net, net at realised returns and unrealised allocation on all
+four family-nights and the GRADE rows, within a cent (P1 0, P2 0, P2n 4), and fires on FN doctored by
+$0.02 (P2 1).
+
+**The harness** — `check_prediction_contract_controls.py --submit`, polled with `bq wait JOB 60`,
+then `--collect JOB` — job `bqjob_r68f8c321bb6f68ea_000001a104611486_1`, 2026-10-04 00:47–01:01 UTC,
+632 child jobs, 1,972.1 slot-seconds, 1,582,040,784 bytes processed (6,598,688,768 billed): exit 0,
+every asserted reading held. It first checked that the deployed `SP_GRADE_PREDICTIONS` body equals
+the file's. A copy is the grader's file with its comment lines stripped and only the procedure, grade
+table, report card, ledger and `FACT_AMAZON_ADS` names swapped for `OI._tmp_t7c_*` scratch objects
+(the ledger read once; the ads copy every day from the ledger's earliest horizon, whose house
+watermark equals the real one: INPUTS WM 0); the file's own `fd`, `wmx`, `fnr` and C statement are
+cut out and run on each copy's grades. Picks: `rerun_night` = `fn_night` = 2026-08-28 (1,492
+predictions), `rg_from` 2026-08-26.
+
+| copy | what was run | readings |
+|---|---|---|
+| RERUN | the real grades without 08-28; two runs | first run inserted 1,492 = the predictions removed (C3f 0), the second 0 (C3i 0); C2, C3, C4a, C4b, F, P1, P2, C5z, C8c 0 |
+| NC_NOGUARD | the grader without its graded-once guard (`AND (c.predictor IS NULL OR …)` of `_due`), on the real grades | inserted 8,944 (C3i), C3 8,944 (re-grades with no reason) |
+| BASE | the real grades, one run | inserted 0 (C3i 0); C2, C3, C4a, C4b, F, P1, C5z, C8c 0; its card is C5x's reference (357 rows) |
+| REGRADE | `(DATE '2026-08-26', reason)` on the real grades | 4,476 rows, exactly the current grades of 08-26 … 08-28, one each, `regrade_seq` 2, the reason on each, none outside (C3n 0); C2, C3, C4a, C4b, F, P1, C8c 0 |
+| NC_REGRADE_LOST / _OUTSIDE | the run's first row removed / an 08-23 grade re-graded in the run too | C3n 1, C3 1 / C3n 1, C3 4,467 |
+| FIX | 34 fixtures × 2 scenarios under `predictor = 'FIXTURE'` in the ledger copy, their outcomes in the ads copy; one run | 68 inserted (C3f 0); the line 6 clicks on every fixture row (floor 1: 33 rows, 0.636; floor 6: 22 rows, 0.955 — the fixtures' design under the live bar 0.80 / 20 rows); FIXTURE_RIGHT `RIGHT`, FIXTURE_WRONG `WRONG`, FIXTURE_INCONCLUSIVE `INCONCLUSIVE` on both scenarios (labels RIGHT 42, WRONG 2, INCONCLUSIVE 24: C5 0, C4a 0, C4b 0 with both arms); the card equal to BASE's on all 357 rows, every column but `scored_at` (C5x 0); C2, C3, F, P1, C8c 0; C5z 68 |
+| NC_FIX_FLIP / _LINE / _MISSING | FIXTURE_RIGHT relabelled `WRONG` / FIXTURE_INCONCLUSIVE given a line at its own clicks / FIXTURE_WRONG's grades removed | C5 2 / C4b 2 / C5 2, C2 2 |
+| NC_FIXB / NC_CARD_EMPTY | the same fixtures under `PLAN_B` / an empty card | C5x 67 (a 402-row card) / C5x 357 |
+| FNCLK | the real grades without 08-28, its ledger horizon set to FN's window; one run | 1,492 inserted (C3f 0); P1 0, P2 0, P2n 4; C2, C3, C4a, F, C8c 0 |
+| NC_FNCLK_DOC | FN's first FAMILY_WEEK row of 08-28 with `net_at_realized_a` + 0.02 | P2 1 |
+
+```sql
+-- the parity's two sides on the night both grade (FN's realised numbers on its own window, the grade
+-- table's on the ledger's horizon); job t7_parity_sop_1791075961
+DECLARE nn DATE;
+CREATE TEMP TABLE fn AS
+SELECT row_type, plan, family, calendar_state, graded_night, allocated_dollars, realized_net, allocated_a, allocated_b
+FROM `onyga-482313.OI.FN_PLAN_SCORECARD`(CURRENT_DATE('America/New_York'), CURRENT_DATE('America/Los_Angeles'))
+WHERE row_type IN ('GRADE', 'FAMILY_WEEK');
+SET nn = (SELECT MAX(graded_night) FROM fn WHERE row_type = 'FAMILY_WEEK');
+CREATE TEMP TABLE g AS
+SELECT * FROM `onyga-482313.OI.FACT_PREDICTION_GRADE`
+WHERE scenario = 'DO_NOTHING' AND STARTS_WITH(predictor, 'PLAN_') AND as_of = nn
+QUALIFY regrade_seq = MAX(regrade_seq) OVER (PARTITION BY predictor, variant, as_of, campaign_id, keyword_id, scenario);
+SELECT f.row_type, f.family, f.plan, f.calendar_state, f.graded_night,
+       COALESCE(f.allocated_dollars, f.allocated_a) AS fn_alloc_or_a, f.allocated_b AS fn_alloc_b,
+       ROUND(SUM(IF(f.row_type = 'GRADE', IF(g.variant = f.plan, g.alloc_spend, 0), IF(g.variant = 'A', g.alloc_spend, 0))), 2) AS g_alloc_or_a,
+       ROUND(SUM(IF(f.row_type = 'FAMILY_WEEK' AND g.variant = 'B', g.alloc_spend, 0)), 2) AS g_alloc_b,
+       f.realized_net AS fn_realized_net,
+       ROUND(SUM(IF(f.row_type = 'FAMILY_WEEK', IF(g.is_live_plan, g.real_net, 0), IF(g.variant = f.plan, g.real_net, 0))), 2) AS g_real_net_ledger_horizon
+FROM fn f JOIN g ON g.family = f.family
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 10
+ORDER BY 2, 1, 3;
+
+-- no stored night is on FN's window: run 2026-10-04 01:06 UTC, 12 nights, 0 with horizon_from = as_of,
+-- every one shifted by exactly 1 day, the last night 2026-10-03
+SELECT COUNT(DISTINCT as_of) AS nights, COUNT(DISTINCT IF(horizon_from = as_of, as_of, NULL)) AS nights_on_fn_window,
+       MIN(DATE_DIFF(horizon_from, as_of, DAY)) AS min_shift, MAX(DATE_DIFF(horizon_from, as_of, DAY)) AS max_shift,
+       MAX(as_of) AS last_night
+FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p
+CROSS JOIN UNNEST([GREATEST(p.as_of, DATE_ADD(DATE(p.built_at, 'America/Los_Angeles'), INTERVAL 1 DAY))]) AS horizon_from;
+```
+
+`config.yaml`: the descriptions of `V_PREDICTION_LEDGER`, `FACT_PREDICTION_GRADE`, `SP_GRADE_PREDICTIONS`
+and `FN_PLAN_SCORECARD` name the completed suite and the harness; it parses. SOP: this file's status
+line, §4 ("Fixtures", corrected: copies only; "The piece-0 scorecard keeps its own clock") and §7
+step 6; the spec's §11 check 5 notes where checks 3 and 5 run.
