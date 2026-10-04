@@ -137,7 +137,7 @@ of the table. They are snapshots of two readers, and they keep the old holds unt
 | 4 | `V_ENGINE_HEALTH` c18 `seat_holdout_row_on_sheet` | `unit_id`, `arm`, **all trials**, book rows on or after `eligible_from`, **no end**; detail prints `MIN(eligible_from)` over all HOLDOUT rows | prints "the arm starts 2026-09-01" forever. A T1-only control released to the engine and put on a seat book would read RED | joins `V_HOLDOUT_ARM` between `gate_from` and `gate_to` (Task 6) |
 | 5 | `V_ENGINE_HEALTH` c33 `holdout_unit_changed` (`hu_asg`) | `trial_id = 'HOLDOUT-2026Q4-CAMPAIGN'` literal | watches T1 only | `hu_asg` reads the live trial. **Plus the touch alarm and the feed liveness term**, because as built c33 does not turn RED on a touch (§2.7) (Task 6) |
 | 6 | `V_FAMILY_SEAT_REGISTER` `holdout` | `unit_id`, `arm`, `MIN(eligible_from)` over **all trials**, **no end** | T1's 14 controls stay "holdout" on the register forever (no seat moves, no book rows) | reads `V_HOLDOUT_ARM` (Task 5) |
-| 7 | `V_PLAN_WINDOW_JUDGMENT` `holdout` | same as 6 | same: T1 controls get `NONE_HOLDOUT` forever. This flows into `SP_BUILD_NEXT_WEEK_PLAN`, `FACT_PLAN_NEXT_WEEK`, `tools/build_weekly_book.py`, `V_DAILY_BRIEF`, `SP_APPEND_SEAT_REQUEST` and `V_SEAT_REQUEST_OUTCOME`, all of which inherit the fix | reads `V_HOLDOUT_ARM` (Task 5) |
+| 7 | `V_PLAN_WINDOW_JUDGMENT` `holdout` | same as 6 | same: T1 controls get `NONE_HOLDOUT` forever. This flows into `SP_BUILD_NEXT_WEEK_PLAN`, `FACT_PLAN_NEXT_WEEK`, `tools/build_weekly_book.py` (its BUDGET rows only; its mend is row 17), `V_DAILY_BRIEF`, `SP_APPEND_SEAT_REQUEST` and `V_SEAT_REQUEST_OUTCOME`, all of which inherit the fix | reads `V_HOLDOUT_ARM` (Task 5) |
 | 8 | `tools/build_reprice_bulksheet.py` `hold` | same as 6 (`today_la >= eligible_from`) | the book never prices a T1 control again | reads `V_HOLDOUT_ARM` (Task 5) |
 | 9 | `tools/build_seasonal_unpause_bulksheet.py` `hold` | same as 6 | same | reads `V_HOLDOUT_ARM` (Task 5) |
 | 10 | `tools/build_seat_moves_bulksheet.py` `hold` (two CTEs) | same as 6 | same | reads `V_HOLDOUT_ARM` (Task 5) |
@@ -147,6 +147,7 @@ of the table. They are snapshots of two readers, and they keep the old holds unt
 | 14 | `tests/PLAN_OWNERSHIP_acceptance.sql` (**untracked, another session's work in progress**) | `hold_open`: HOLDOUT rows in window, all trials | T1 controls stay "open" holds | **do not edit**; tell its owner to read `V_HOLDOUT_ARM` (Task 7) |
 | 15 | `T_FAMILY_SEAT_REGISTER` (snapshot of reader 6) | `CREATE OR REPLACE` from `V_FAMILY_SEAT_REGISTER` by `SP_REFRESH_CUBE_TABLES` (Refresh Task 21), once per pass. Read by `V_DAILY_BRIEF`, `V_RUN_SUMMARY`, the `seat_*` board checks, `SP_SNAPSHOT_ENGINE_HEALTH` and `cube/schema/SeatRegister.js` | from the deploy until that step next logs OK, it still marks T1's controls `holdout` and not T2's | none: the next rebuild inherits Task 5's fix. Check it after that pass (Task 8) |
 | 16 | `FACT_PLAN_NEXT_WEEK` (snapshot of reader 7) | a partition per night, written by `SP_BUILD_NEXT_WEEK_PLAN` from `V_PLAN_WINDOW_JUDGMENT`. Its `holdout` column is read by `tools/build_weekly_book.py` (`AND NOT c.holdout`), `SP_APPEND_SEAT_REQUEST` (copied into `FACT_SEAT_REQUEST`) and `V_PREDICTION_LEDGER` | from the deploy until the first partition written after it, the latest partition holds T1's controls and not T2's. **A book built from it in that gap would carry T2 controls.** That first partition is `as_of` 2026-10-06, written by pass 1 of 10-06 (~05:30 UTC), in either deploy window. `as_of` is the New York date (v27.160), and pass 1 of 10-05 (01:00 New York, 22:00 LA 10-04) writes `as_of` 10-05 before the deploy. From LA midnight that night is FROZEN (v27.170): passes 2 and 3 of 10-05 log OK and write nothing, so "the step logged OK" does not mean "a partition was written" (measured 10-04: pass 2's step logged OK in 1 s at 08:09:42 UTC, and the `as_of` 10-04 partition kept `built_at` 05:30:18). **No weekly book can be built on 10-05**, none before that pass (Task 8). Corrected 2026-10-04: this row first said "until the plan step next logs OK" | none: the first partition written after the deploy (`as_of` 10-06) inherits Task 5's fix. K9 runs on it, after pass 1 of 10-06 (Task 8, Task 9) |
+| 17 | `tools/build_weekly_book.py` `MEND_SQL` (the mend, arm 2; added 2026-10-04, review of holdout-t2) | none: it trims bids on keywords in every losing campaign, on by default (off only with `--no-mend`). It never read a holdout source; the plan's `holdout` column reaches only the BUDGET rows, and `skip_keys` holds only the reprice book's executable rows, so a control the reprice tool refused was priced here | measured 2026-10-04 on the 12 T2 controls: 5 trims on 5 keywords in 3 controls (`537046793426450`, `230219410635024`, `271009556929636`), 6 controls counted as losers. c18 does not read `weekly_book_*` batches and c33 turns RED only after the upload, so the first book after the deploy would have changed bids on T2 controls inside the window | `LEFT JOIN V_HOLDOUT_ARM h` and `AND NOT (h.cid IS NOT NULL AND CURRENT_DATE('America/Los_Angeles') >= h.gate_from)`, the three tools' form; the held rows go to the Refused sheet (`MEND_HELD_SQL`, the gate inverted). K7b, K13 |
 
 **Double counting.** Only the readout aggregates the arms, and it filters on one `trial_id`. Every other
 reader takes a set of campaigns (`GROUP BY` campaign), so a second trial cannot double any number. The
@@ -345,6 +346,13 @@ stratum's count. A cohort campaign that is paused before 10-05 keeps its row and
          `''`. Their `bid_optimization` and `bid_optimization_strategy` are read the same way, from
          version pairs of `fivetran-hl.amazon_ads.sb_campaign_history`. That is a history table dated
          by `last_update_date`: 253 campaigns and 1,942 rows, with 0 such changes since 08-20.
+       - **A campaign end date** (added 2026-10-04, review of holdout-t2), SP and SB: `end_date` on
+         version pairs of `campaign_history` (by `last_updated_date`) and `sb_campaign_history`. An end
+         date stops a control serving; `DIM_CAMPAIGN` versions the resulting serving status, but the
+         ledger records only budget and state. 2 SP edits in 2026 (both August), one on T2 control
+         `51727823265377` (end 2026-09-28 -> none, 08-09); 0 SB. Not watched: `start_date` (Amazon rewrote
+         it on 16 SP and several SB campaigns in May 2026) and SB `rule_based_budget_applicable_rule_id`
+         (it flips monthly by itself).
     4. **A setting that differs from its value at the assignment:**
        - placement bid adjustments: `campaign_placement_bidding` (SP) and
          `sb_campaign_bid_adjustments_by_placement` (SB);
@@ -1198,7 +1206,9 @@ hu_live AS (   -- the path a console change takes to this check, each stamp's ag
        version of an `ad_group_id`, on a HOLDOUT unit, with LA day ≥ the unit's assignment day.
     3. `CAMPAIGN_ATTR`: `DIM_CAMPAIGN` version pairs on a HOLDOUT unit where `portfolio_id` or
        `bidding_strategy` differs, plus `fivetran-hl.amazon_ads.sb_campaign_history` version pairs
-       where `bid_optimization` or `bid_optimization_strategy` differs. Both use LA day ≥ the
+       where `bid_optimization`, `bid_optimization_strategy` or `end_date` differs, plus
+       `fivetran-hl.amazon_ads.campaign_history` (SP) version pairs where `end_date` differs (added
+       2026-10-04, review of holdout-t2; `start_date` is not watched: Amazon rewrote it in May 2026). Both use LA day ≥ the
        assignment day, ordered as `V_AMAZON_OBSERVED_CHANGES` orders versions.
     4. `BASELINE_DIFF`: today's **present** settings from the four current-state sources, by the
        presence rule of §2.7 kind 4, **for the watched set only**, full-outer-joined to the latest
@@ -1467,8 +1477,12 @@ Task 4.
   - c33 would then read RED on day one, and the readout would publish it as a `PRE_WINDOW_CHANGE`.
   - Before step 1, list the 10-04 upload's rows on the 12 controls. If any SB keyword row is among
     them, the first RED is expected and is named in the deploy record.
-- **From 10-06:** books as usual, once K9 has passed after pass 1 of 10-06. They no longer carry T2
-  controls.
+- **From 10-06:** books as usual, once K9 has passed after pass 1 of 10-06, K13 has read 0, and the
+  **Los Angeles** date is 10-06 (07:00 UTC 10-06). K9 can pass at ~22:30 LA 10-05, but every tool's
+  gate (reprice, seats, unpause and the mend) binds trial 2's own controls only from
+  `CURRENT_DATE('America/Los_Angeles') >= 2026-10-06`, so a book built late on LA 10-05 would price
+  them. They no longer carry T2 controls. **The mend (arm 2) has its own gate since 2026-10-04 (§1 row
+  17, K13). A book built from a checkout without it must be built with `--no-mend`.**
 - **Hand changes:** none to the 12 campaigns in §3.1, from the insert to 2027-01-26. The alarm cannot
   see every kind of change (§2.7, "What no source can see").
 
@@ -1499,12 +1513,13 @@ input doctored, and must read the stated count. `T1` = `'HOLDOUT-2026Q4-CAMPAIGN
 | K4 | the arms follow the rule from stored columns, and the sequences are whole: `COUNTIF(arm != IF(MOD(seq_in_stratum + MOD(ABS(FARM_FINGERPRINT(CONCAT(seed, '\|', stratum))), 5), 5) = 0, 'HOLDOUT', 'TREATED'))` + per stratum `(COUNT(*) − COUNT(DISTINCT seq_in_stratum)) + COUNTIF(seq_in_stratum >= stratum count)`, over `trial_id = T2`, with 1 added when T2 has no row | one arm flipped reads 1. One seq duplicated reads ≥ 1. An empty T2 reads 1 |
 | K5 | the seed is the first pass: on the founding rows, recompute A1–A3 for `OI-HOLDOUT-v2\|0` … `\|5`. Violations = (index 5 fails) + (number of indices 0–4 that pass) | A2's band set to [0.22, 0.26] reads 1 (index 5 fails) |
 | K6 | the gate is T2's arm: today's binding rows of `V_HOLDOUT_ARM` versus T2's HOLDOUT rows, the size of the symmetric difference, + 1 if T2 has no HOLDOUT row | the views' text on a registry copy without T1's `ARCHIVED` row reads **14**, because T1's controls bind beside T2's |
-| K7 | no gate reader bypasses the arm. In the deployed bodies (`INFORMATION_SCHEMA.VIEWS` and `ROUTINES`), occurrences of `` `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` `` per object must equal exactly: `V_HOLDOUT_ARM` 1, `V_HOLDOUT_READOUT` 1, `V_ENGINE_HEALTH` 1 (c33 `hu_asg`), `SP_ASSIGN_HOLDOUT` 3 (the guard, `assigned`, `INSERT INTO`); every other object 0. Plus `grep -c 'DE_HOLDOUT_ASSIGNMENT'` = 0 in the three tools' SQL strings. Violations = objects off their count | the same query on the bodies saved before the deploy reads ≥ 6 (preflight, judgment, register, `V_ENGINE_HEALTH` at 3, the readout's literal, and four CTEs in the three tools) |
+| K7 | no gate reader bypasses the arm. In the deployed bodies (`INFORMATION_SCHEMA.VIEWS` and `ROUTINES`), occurrences of `` `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` `` per object must equal exactly: `V_HOLDOUT_ARM` 1, `V_HOLDOUT_READOUT` 1, `V_ENGINE_HEALTH` 1 (c33 `hu_asg`), `SP_ASSIGN_HOLDOUT` 3 (the guard, `assigned`, `INSERT INTO`); every other object 0. Plus `grep -c 'DE_HOLDOUT_ASSIGNMENT'` = 0 in the three tools' SQL strings and in `tools/build_weekly_book.py`, and exactly 1 `V_HOLDOUT_ARM` reference in that tool's `MEND_SQL` (the mend's gate; K7b, added 2026-10-04). Violations = objects off their count | the same query on the bodies saved before the deploy reads ≥ 6 (preflight, judgment, register, `V_ENGINE_HEALTH` at 3, the readout's literal, and four CTEs in the three tools) |
 | K8 | the preflight bites on T2 only (latest `T_ENGINE_PREFLIGHT`): `COUNTIF(campaign in T2 HOLDOUT AND verdict != 'EXCLUDE') + COUNTIF(campaign in T1 HOLDOUT AND NOT in T2 HOLDOUT AND is_holdout)` | the 10-03 snapshot (pre-deploy) reads > 0 on the second term whenever a T1 control had a proposal that night. If it had none, the NC is the same text with T1 and T2 swapped |
 | K9 | the plan agrees (latest `FACT_PLAN_NEXT_WEEK` live partition): `COUNTIF(T2 control AND NOT holdout) + COUNTIF(T1-only control AND holdout)` | the 10-03 partition reads > 0 (T1 controls carried `holdout = TRUE`) |
 | K10 | the readout serves T2: exactly one `NOT_YET` row, whose verdict names `2027-02-09`; no `CENSORED` or `PRE_WINDOW_CHANGE` row names a unit outside T2; no number on any row before `first_readout` (H3) | the readout's text with `k` pinned to T1 reads ≥ 1 (the verdict names 2027-01-05, and the CENSORED rows name T1 units) |
 | K11 | the touch alarm and the feed term: HOLDOUT_INTEGRITY H4 and H5 | as stated in Task 7 |
 | K12 | the baseline is whole (amendment 2026-10-04): for T2's watched set (its HOLDOUT units with `STARTS_WITH(assignment_rule, 'FOUNDING')`, §2.7 kind 4, read from `DE_HOLDOUT_ASSIGNMENT` and not from an id literal), the symmetric difference between the founding `DE_HOLDOUT_BASELINE` rows (`ruling IS NULL`) and a re-read of the four sources' **present** settings at the read, by the presence rule of §2.7 kind 4 (re-stamped by the table's latest sync, within 1 hour of its `MAX(_fivetran_synced)`, and not `_fivetran_deleted`), compared as (`campaign_id`, `setting`, `value`). Add 1 when the re-read finds no setting for any unit of the watched set, because an empty input would pass. Measured 2026-10-04 by the rule: 15 settings on 8 controls, of which 7 carry placement rows. Run it straight after Task 3; afterwards it reads as kind-4 touches | a copy minus one row reads 1. A copy with one value altered reads 2. A re-read emptied for the 12 controls reads 16. All three were measured on `TMP_HT2_` copies on 2026-10-04 (Appendix C12) |
+| K13 | the weekly book's mend never prices a control (added 2026-10-04): `MEND_SQL`, read from `tools/build_weekly_book.py`'s source (no paste), run on the live trial's HOLDOUT units with its gate read as of LA 10-06 or later; violations = its rows on them (`scripts/bigquery/migrations/2026-10-05_holdout_t2_k13_mend.py`; the runbook runs it in step 5 and in `--post-pass`) | the same text with the gate removed: 5 trims on 3 controls, measured 2026-10-04 on a copy of the arm holding the 12 controls (gated 0). The gated text read as of LA 10-04, before trial 2's gate binds, reads 5 as well |
 
 ---
 

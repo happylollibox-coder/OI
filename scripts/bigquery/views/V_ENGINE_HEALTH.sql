@@ -1193,9 +1193,12 @@ hu_new AS (  -- kind 2: a keyword / product target (first DIM_KEYWORD version) o
   ) f ON f.campaign_id = h.unit_id
   WHERE f.change_day BETWEEN h.from_day AND h.trial_end
 ),
-hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN version pairs, SP and SB) and an SB
-  -- bid-optimization change (sb_campaign_history version pairs; DIM_CAMPAIGN carries '' for SB), versions ordered
-  -- as V_AMAZON_OBSERVED_CHANGES orders them
+hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN version pairs, SP and SB), an SB
+  -- bid-optimization change (sb_campaign_history version pairs; DIM_CAMPAIGN carries '' for SB), and a campaign end
+  -- date set, moved or cleared (campaign_history version pairs for SP, sb_campaign_history for SB; an end date stops
+  -- a control serving, and the ledger records only budget and state), versions ordered as V_AMAZON_OBSERVED_CHANGES
+  -- orders them. Not watched, on purpose: start_date (Amazon rewrote it on 16 SP and several SB campaigns in May
+  -- 2026, 05-12 -> 05-09, with no human touch) and SB rule_based_budget_applicable_rule_id (it flips monthly by itself)
   SELECT h.unit_id, h.unit_name, 'CAMPAIGN_ATTR' AS kind, v.change_day, v.what
   FROM hu_hold h
   JOIN (
@@ -1213,16 +1216,30 @@ hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN ve
     WHERE prev_from IS NOT NULL
       AND (portfolio_id IS DISTINCT FROM prev_pf OR bidding_strategy IS DISTINCT FROM prev_bs)
     UNION ALL
+    SELECT CAST(id AS STRING), DATE(last_updated_date, 'America/Los_Angeles'),
+           FORMAT('end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'), IFNULL(CAST(end_date AS STRING), 'none'))
+    FROM (SELECT id, last_updated_date, end_date, LAG(end_date) OVER w AS prev_end,
+                 LAG(last_updated_date) OVER w AS prev_at
+          FROM `fivetran-hl.amazon_ads.campaign_history`
+          WINDOW w AS (PARTITION BY id ORDER BY last_updated_date, _fivetran_synced))
+    WHERE prev_at IS NOT NULL AND end_date IS DISTINCT FROM prev_end
+    UNION ALL
     SELECT id, DATE(last_update_date, 'America/Los_Angeles'),
-           FORMAT('SB bid optimization %t / %s -> %t / %s', prev_bo, COALESCE(prev_bos, 'none'),
-                  bid_optimization, COALESCE(bid_optimization_strategy, 'none'))
-    FROM (SELECT id, last_update_date, bid_optimization, bid_optimization_strategy,
+           TRIM(CONCAT(
+             IF(bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos,
+                FORMAT('SB bid optimization %t / %s -> %t / %s ', prev_bo, COALESCE(prev_bos, 'none'),
+                       bid_optimization, COALESCE(bid_optimization_strategy, 'none')), ''),
+             IF(end_date IS DISTINCT FROM prev_end,
+                FORMAT('SB end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'),
+                       IFNULL(CAST(end_date AS STRING), 'none')), '')))
+    FROM (SELECT id, last_update_date, bid_optimization, bid_optimization_strategy, end_date,
                  LAG(bid_optimization) OVER w AS prev_bo, LAG(bid_optimization_strategy) OVER w AS prev_bos,
-                 LAG(last_update_date) OVER w AS prev_at
+                 LAG(end_date) OVER w AS prev_end, LAG(last_update_date) OVER w AS prev_at
           FROM `fivetran-hl.amazon_ads.sb_campaign_history`
           WINDOW w AS (PARTITION BY id ORDER BY last_update_date, _fivetran_synced))
     WHERE prev_at IS NOT NULL
-      AND (bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos)
+      AND (bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos
+           OR end_date IS DISTINCT FROM prev_end)
   ) v ON v.campaign_id = h.unit_id
   WHERE v.change_day BETWEEN h.from_day AND h.trial_end
 ),

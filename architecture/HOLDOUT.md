@@ -115,7 +115,7 @@ between its keywords instead of being fooled by it.
 | `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each founding control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script, for the founding controls only. A late arrival gets no row and is unwatched on these settings (§6, kind 4). The script records only **present** settings: a row counts only when its source table's latest sync re-stamped it and it is not flagged deleted (§6, kind 4). A later row carries Ori's ruling on a difference. Its value is NULL when he rules that a setting is gone. Read by `holdout_unit_changed`. |
 | `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. From 2026-10-05 it writes into **the live trial only, and late arrivals only**. A founding cohort is written once from the approved list, never by this procedure, and it writes nothing into a trial that has no founding rows. |
 | `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. Reads `V_HOLDOUT_ARM` (the arm that binds today, any trial), between `gate_from` and `gate_to`. |
-| the other gate readers | `V_PLAN_WINDOW_JUDGMENT`, `V_FAMILY_SEAT_REGISTER` and the three bulksheet generators (`build_reprice_bulksheet.py`, `build_seasonal_unpause_bulksheet.py`, `build_seat_moves_bulksheet.py`) read `V_HOLDOUT_ARM` (the arm that binds today, any trial). Their `eligible_from` is the arm's `gate_from`. Their snapshots `T_FAMILY_SEAT_REGISTER` and `FACT_PLAN_NEXT_WEEK` follow on the next rebuild. |
+| the other gate readers | `V_PLAN_WINDOW_JUDGMENT`, `V_FAMILY_SEAT_REGISTER` and the three bulksheet generators and the weekly book's mend (`build_weekly_book.py` `MEND_SQL`, added 2026-10-04) (`build_reprice_bulksheet.py`, `build_seasonal_unpause_bulksheet.py`, `build_seat_moves_bulksheet.py`) read `V_HOLDOUT_ARM` (the arm that binds today, any trial). Their `eligible_from` is the arm's `gate_from`. Their snapshots `T_FAMILY_SEAT_REGISTER` and `FACT_PLAN_NEXT_WEEK` follow on the next rebuild. |
 | `V_HOLDOUT_READOUT` | The answer, for **the live trial** (read from `V_HOLDOUT_TRIAL`). It is silent until that trial's `first_readout`: 2027-01-05 for trial 1, **2027-02-09 for trial 2**. From v27.162 it also publishes one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed between its assignment and its window start (dates and the reason, never a dollar) — §6 "Contamination". Trial 1's record is reproduced with `HOLDOUT_INTEGRITY_acceptance.sql`'s `led` and `pre` statements and trial 1's constants. |
 | `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day, or changed before its window and the readout does not publish it; AMBER while a change before the window stands unruled — §6 "Contamination". **From 2026-10-05** it reads the live trial and adds two terms. The **touch alarm** is RED for 7 Los Angeles days after any touch on a control, then AMBER. **Feed liveness** is RED when a feed is more than 36 hours old. §6 "What the alarm sees". |
 | `V_ENGINE_HEALTH` `seat_holdout_row_on_sheet` | A seat-book row naming a control built while its arm binds (between `gate_from` and `gate_to` of `V_HOLDOUT_ARM`). |
@@ -464,9 +464,17 @@ then AMBER for as long as any control was ever touched, and it names each one:
    R9 censors one inside the window. One on 2026-10-05 is published as `PRE_WINDOW_CHANGE`.
 2. **A new keyword, product target or ad group on a control.** The source is the entity's first version
    in `DIM_KEYWORD` or `DIM_AD_GROUP`. The ledger never counts a creation.
-3. **A portfolio move or a bidding-strategy change.**
+3. **A portfolio move, a bidding-strategy change, or a campaign end date.**
    - SP: `DIM_CAMPAIGN` versions on `portfolio_id` and `bidding_strategy`.
    - SB: the `bid_optimization` settings in Fivetran's `sb_campaign_history`.
+   - SP and SB: an **end date** set, moved or cleared by hand: `end_date` on version pairs of Fivetran's
+     `campaign_history` (SP) and `sb_campaign_history` (SB). An end date stops a control serving, and the
+     ledger records only budget and state, so before 2026-10-04 the board stayed GREEN on it. Measured
+     2026-01-01 .. 2026-10-04: 2 such edits account-wide (SP, August), one of them on T2 control
+     `51727823265377` MINT-SP/BROAD (Back to School), end 2026-09-28 -> none on 08-09; 0 on SB.
+   - **Not watched, on purpose:** `start_date` (Amazon rewrote it on 16 SP and several SB campaigns in
+     May 2026, 05-12 -> 05-09, with no human touch: a false RED) and SB
+     `rule_based_budget_applicable_rule_id` (it flips monthly by itself).
 4. **A placement or shopper-cohort bid adjustment, or an SB product target's bid or state, that differs
    from its value at the assignment.**
    - These sources have no history and no date, so a change is visible only against

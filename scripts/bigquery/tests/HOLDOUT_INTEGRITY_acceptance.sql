@@ -76,6 +76,9 @@
 --         H4_BIDDING_STRATEGY      the same with bidding_strategy changed           RED, 1
 --         H4_SB_BID_OPT            an sb_campaign_history version now with bid_optimization flipped
 --                                  (SB control)                                     RED, 1
+--         H4_END_DATE              a campaign_history version now on a founding SP control, end date set 16 days out
+--                                  (added 2026-10-04, review of holdout-t2: an end date stops a control serving)  RED, 1
+--         H4_SB_END_DATE           the same on the SB control, in sb_campaign_history                              RED, 1
 --         H4_BASELINE_ALTERED      one baseline value altered                       RED, 1 ("date unknown")
 --         H4_BASELINE_REBASED      the same plus a later baseline row carrying a ruling       AMBER, 0
 --         H4_WATCHED_NO_BASELINE   a present PLACEMENT_TOP 30 row put on a founding SP control with
@@ -465,9 +468,12 @@ hu_new AS (  -- kind 2: a keyword / product target (first DIM_KEYWORD version) o
   ) f ON f.campaign_id = h.unit_id
   WHERE f.change_day BETWEEN h.from_day AND h.trial_end
 ),
-hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN version pairs, SP and SB) and an SB
-  -- bid-optimization change (sb_campaign_history version pairs; DIM_CAMPAIGN carries '' for SB), versions ordered
-  -- as V_AMAZON_OBSERVED_CHANGES orders them
+hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN version pairs, SP and SB), an SB
+  -- bid-optimization change (sb_campaign_history version pairs; DIM_CAMPAIGN carries '' for SB), and a campaign end
+  -- date set, moved or cleared (campaign_history version pairs for SP, sb_campaign_history for SB; an end date stops
+  -- a control serving, and the ledger records only budget and state), versions ordered as V_AMAZON_OBSERVED_CHANGES
+  -- orders them. Not watched, on purpose: start_date (Amazon rewrote it on 16 SP and several SB campaigns in May
+  -- 2026, 05-12 -> 05-09, with no human touch) and SB rule_based_budget_applicable_rule_id (it flips monthly by itself)
   SELECT h.unit_id, h.unit_name, 'CAMPAIGN_ATTR' AS kind, v.change_day, v.what
   FROM hu_hold h
   JOIN (
@@ -485,16 +491,30 @@ hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN ve
     WHERE prev_from IS NOT NULL
       AND (portfolio_id IS DISTINCT FROM prev_pf OR bidding_strategy IS DISTINCT FROM prev_bs)
     UNION ALL
+    SELECT CAST(id AS STRING), DATE(last_updated_date, 'America/Los_Angeles'),
+           FORMAT('end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'), IFNULL(CAST(end_date AS STRING), 'none'))
+    FROM (SELECT id, last_updated_date, end_date, LAG(end_date) OVER w AS prev_end,
+                 LAG(last_updated_date) OVER w AS prev_at
+          FROM `fivetran-hl.amazon_ads.campaign_history`
+          WINDOW w AS (PARTITION BY id ORDER BY last_updated_date, _fivetran_synced))
+    WHERE prev_at IS NOT NULL AND end_date IS DISTINCT FROM prev_end
+    UNION ALL
     SELECT id, DATE(last_update_date, 'America/Los_Angeles'),
-           FORMAT('SB bid optimization %t / %s -> %t / %s', prev_bo, COALESCE(prev_bos, 'none'),
-                  bid_optimization, COALESCE(bid_optimization_strategy, 'none'))
-    FROM (SELECT id, last_update_date, bid_optimization, bid_optimization_strategy,
+           TRIM(CONCAT(
+             IF(bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos,
+                FORMAT('SB bid optimization %t / %s -> %t / %s ', prev_bo, COALESCE(prev_bos, 'none'),
+                       bid_optimization, COALESCE(bid_optimization_strategy, 'none')), ''),
+             IF(end_date IS DISTINCT FROM prev_end,
+                FORMAT('SB end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'),
+                       IFNULL(CAST(end_date AS STRING), 'none')), '')))
+    FROM (SELECT id, last_update_date, bid_optimization, bid_optimization_strategy, end_date,
                  LAG(bid_optimization) OVER w AS prev_bo, LAG(bid_optimization_strategy) OVER w AS prev_bos,
-                 LAG(last_update_date) OVER w AS prev_at
+                 LAG(end_date) OVER w AS prev_end, LAG(last_update_date) OVER w AS prev_at
           FROM `fivetran-hl.amazon_ads.sb_campaign_history`
           WINDOW w AS (PARTITION BY id ORDER BY last_update_date, _fivetran_synced))
     WHERE prev_at IS NOT NULL
-      AND (bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos)
+      AND (bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos
+           OR end_date IS DISTINCT FROM prev_end)
   ) v ON v.campaign_id = h.unit_id
   WHERE v.change_day BETWEEN h.from_day AND h.trial_end
 ),
@@ -757,9 +777,13 @@ CREATE TEMP TABLE d_dimc AS
   FROM `onyga-482313.OI.DIM_CAMPAIGN`, k45
   WHERE DATE(TIMESTAMP(effective_from, 'UTC'), 'America/Los_Angeles') < k45.asg_day;
 CREATE TEMP TABLE d_sbch AS
-  SELECT id, last_update_date, bid_optimization, bid_optimization_strategy, _fivetran_synced
+  SELECT id, last_update_date, bid_optimization, bid_optimization_strategy, end_date, _fivetran_synced
   FROM `fivetran-hl.amazon_ads.sb_campaign_history`, k45
   WHERE DATE(last_update_date, 'America/Los_Angeles') < k45.asg_day;
+CREATE TEMP TABLE d_ch AS
+  SELECT id, last_updated_date, end_date, _fivetran_synced
+  FROM `fivetran-hl.amazon_ads.campaign_history`, k45
+  WHERE DATE(last_updated_date, 'America/Los_Angeles') < k45.asg_day;
 CREATE TEMP TABLE d_sp AS
   SELECT campaign_id, placement, percentage, _fivetran_synced FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`;
 CREATE TEMP TABLE d_sbp AS
@@ -814,6 +838,8 @@ SELECT
    WHERE STARTS_WITH(w.stratum, 'SP|') ORDER BY w.unit_id LIMIT 1) AS sp_camp,
   (SELECT AS STRUCT w.unit_id, w.unit_name FROM w JOIN (SELECT DISTINCT id FROM d_sbch) s ON s.id = w.unit_id
    WHERE STARTS_WITH(w.stratum, 'SB|') ORDER BY w.unit_id LIMIT 1) AS sb_camp,
+  (SELECT AS STRUCT w.unit_id, w.unit_name FROM w JOIN (SELECT DISTINCT id FROM d_ch) c ON c.id = w.unit_id
+   WHERE STARTS_WITH(w.stratum, 'SP|') ORDER BY w.unit_id LIMIT 1) AS sp_ch,
   (SELECT AS STRUCT campaign_id, setting, value FROM d_base ORDER BY campaign_id, setting LIMIT 1) AS base_row,
   (SELECT AS STRUCT w.unit_id, w.unit_name FROM w
    WHERE STARTS_WITH(w.stratum, 'SP|') AND w.unit_id NOT IN (SELECT campaign_id FROM d_base)
@@ -863,11 +889,22 @@ CREATE TEMP TABLE d_dimc_add AS
   FROM (SELECT * FROM d_dimc WHERE campaign_id = (SELECT sp_camp.unit_id FROM pick45)
         QUALIFY ROW_NUMBER() OVER (ORDER BY effective_from DESC, _fivetran_synced DESC) = 1) d, k45,
        UNNEST([STRUCT('H4_PORTFOLIO' AS case_name), STRUCT('H4_BIDDING_STRATEGY')]) c;
+-- (and, H4_SB_END_DATE, a new sb_campaign_history version now with an end date 16 days out)
 CREATE TEMP TABLE d_sbch_add AS
-  SELECT id, (SELECT now_ts FROM k45) AS last_update_date, NOT COALESCE(bid_optimization, FALSE) AS bid_optimization,
-         bid_optimization_strategy, (SELECT now_ts FROM k45) AS _fivetran_synced
-  FROM d_sbch WHERE id = (SELECT sb_camp.unit_id FROM pick45)
-  QUALIFY ROW_NUMBER() OVER (ORDER BY last_update_date DESC, _fivetran_synced DESC) = 1;
+  SELECT c.case_name, s.id, (SELECT now_ts FROM k45) AS last_update_date,
+         IF(c.case_name = 'H4_SB_BID_OPT', NOT COALESCE(s.bid_optimization, FALSE), s.bid_optimization) AS bid_optimization,
+         s.bid_optimization_strategy,
+         IF(c.case_name = 'H4_SB_END_DATE', DATE_ADD((SELECT today FROM k45), INTERVAL 16 DAY), s.end_date) AS end_date,
+         (SELECT now_ts FROM k45) AS _fivetran_synced
+  FROM (SELECT * FROM d_sbch WHERE id = (SELECT sb_camp.unit_id FROM pick45)
+        QUALIFY ROW_NUMBER() OVER (ORDER BY last_update_date DESC, _fivetran_synced DESC) = 1) s,
+       UNNEST([STRUCT('H4_SB_BID_OPT' AS case_name), STRUCT('H4_SB_END_DATE')]) c;
+-- END DATE (SP): a new campaign_history version now on a founding SP control, its end date set 16 days out
+CREATE TEMP TABLE d_ch_add AS
+  SELECT id, (SELECT now_ts FROM k45) AS last_updated_date, DATE_ADD((SELECT today FROM k45), INTERVAL 16 DAY) AS end_date,
+         (SELECT now_ts FROM k45) AS _fivetran_synced
+  FROM d_ch WHERE id = (SELECT sp_ch.unit_id FROM pick45)
+  QUALIFY ROW_NUMBER() OVER (ORDER BY last_updated_date DESC, _fivetran_synced DESC) = 1;
 -- BASELINE_DIFF on the baseline side: one value altered; then re-baselined by a ruling; a removal re-baselined NULL
 CREATE TEMP TABLE d_base_doc AS
   SELECT c.case_name, b.* REPLACE (
@@ -937,7 +974,7 @@ SELECT t, o FROM UNNEST(['keyword_history', 'sb_keyword', 'targeting_clause_hist
                          'campaign_placement_bidding', 'sb_campaign_bid_adjustments_by_placement',
                          'sb_campaign_bid_adjustments_shopper_cohort', 'sb_product_target']) AS t WITH OFFSET o;
 CREATE TEMP TABLE repl45 AS
--- base ('*'): the 11 feed-age reads first (the five shared tables are also read whole, below), then every name
+-- base ('*'): the 11 feed-age reads first (the six shared tables are also read whole, below), then every name
 SELECT '*' AS case_name, CONCAT('MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.', t, '`') AS src,
        'MAX(_fivetran_synced) FROM d_fresh' AS dst, 10 + o AS ord
 FROM ft45
@@ -957,7 +994,8 @@ SELECT '*', src, dst, ord FROM UNNEST([
   ('`fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`', 'd_sbc', 41),
   ('`fivetran-hl.amazon_ads.sb_product_target`', 'd_sbt', 42),
   ('`onyga-482313.OI.DE_HOLDOUT_BASELINE`', 'd_base', 43),
-  ('`onyga-482313.OI.LOG_PIPELINE_RUNS`', 'd_log', 44)])
+  ('`onyga-482313.OI.LOG_PIPELINE_RUNS`', 'd_log', 44),
+  ('`fivetran-hl.amazon_ads.campaign_history`', 'd_ch', 45)])
 UNION ALL
 SELECT case_name, src, dst, ord FROM UNNEST([
   STRUCT('H4_LEDGER_TODAY' AS case_name, '`onyga-482313.OI.FACT_PPC_CHANGE_LOG`' AS src,
@@ -976,7 +1014,11 @@ SELECT case_name, src, dst, ord FROM UNNEST([
    "(SELECT * FROM d_dimc UNION ALL SELECT * EXCEPT (case_name) FROM d_dimc_add WHERE case_name = 'H4_PORTFOLIO')", 37),
   ('H4_BIDDING_STRATEGY', '`onyga-482313.OI.DIM_CAMPAIGN`',
    "(SELECT * FROM d_dimc UNION ALL SELECT * EXCEPT (case_name) FROM d_dimc_add WHERE case_name = 'H4_BIDDING_STRATEGY')", 37),
-  ('H4_SB_BID_OPT', '`fivetran-hl.amazon_ads.sb_campaign_history`', '(SELECT * FROM d_sbch UNION ALL SELECT * FROM d_sbch_add)', 38),
+  ('H4_SB_BID_OPT', '`fivetran-hl.amazon_ads.sb_campaign_history`',
+   "(SELECT * FROM d_sbch UNION ALL SELECT * EXCEPT (case_name) FROM d_sbch_add WHERE case_name = 'H4_SB_BID_OPT')", 38),
+  ('H4_SB_END_DATE', '`fivetran-hl.amazon_ads.sb_campaign_history`',
+   "(SELECT * FROM d_sbch UNION ALL SELECT * EXCEPT (case_name) FROM d_sbch_add WHERE case_name = 'H4_SB_END_DATE')", 38),
+  ('H4_END_DATE', '`fivetran-hl.amazon_ads.campaign_history`', '(SELECT * FROM d_ch UNION ALL SELECT * FROM d_ch_add)', 45),
   ('H4_BASELINE_ALTERED', '`onyga-482313.OI.DE_HOLDOUT_BASELINE`',
    "(SELECT * EXCEPT (case_name) FROM d_base_doc WHERE case_name = 'H4_BASELINE_ALTERED')", 43),
   ('H4_BASELINE_REBASED', '`onyga-482313.OI.DE_HOLDOUT_BASELINE`',
@@ -1044,6 +1086,14 @@ UNION ALL SELECT 'H4_BIDDING_STRATEGY', 'RED', 1,
 UNION ALL SELECT 'H4_SB_BID_OPT', 'RED', 1,
        [FORMAT('(%s) CAMPAIGN_ATTR on %t: SB bid optimization ', p.sb_camp.unit_id, k.today), 'not censored by R9'],
        ARRAY<STRING>[], p.sb_camp.unit_id IS NULL, 'bid_optimization flipped on an SB control now' FROM p, k
+UNION ALL SELECT 'H4_END_DATE', 'RED', 1,
+       [FORMAT('(%s) CAMPAIGN_ATTR on %t: end date ', p.sp_ch.unit_id, k.today), FORMAT(' -> %t', DATE_ADD(k.today, INTERVAL 16 DAY)),
+        'not censored by R9'],
+       ARRAY<STRING>[], p.sp_ch.unit_id IS NULL, 'an end date set by hand on an SP control now, 16 days out (campaign_history)' FROM p, k
+UNION ALL SELECT 'H4_SB_END_DATE', 'RED', 1,
+       [FORMAT('(%s) CAMPAIGN_ATTR on %t: SB end date ', p.sb_camp.unit_id, k.today), FORMAT(' -> %t', DATE_ADD(k.today, INTERVAL 16 DAY)),
+        'not censored by R9'],
+       ARRAY<STRING>[], p.sb_camp.unit_id IS NULL, 'an end date set by hand on an SB control now, 16 days out (sb_campaign_history)' FROM p, k
 UNION ALL SELECT 'H4_BASELINE_ALTERED', 'RED', 1,
        [FORMAT('(%s) BASELINE_DIFF date unknown: the source keeps no history: %s ', p.base_row.campaign_id, p.base_row.setting), 'not censored by R9'],
        ARRAY<STRING>[], p.base_row.campaign_id IS NULL, 'a baseline value altered (the setting differs from its value at the assignment)' FROM p

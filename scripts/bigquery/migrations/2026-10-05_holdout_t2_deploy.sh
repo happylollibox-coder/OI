@@ -19,8 +19,8 @@
 #                    makes fresh copies (the live assignment table, and the seven replaced objects from their
 #                    live DDL); with --from-step it resumes on the copies already there.
 #   --rehearse-drop  drops every OI.TMP_HT2_R_* object (views with DROP VIEW, tables, procedures).
-#   --post-pass      K8, K9b (after the first pass gated for trial 2), K9 (after pass 1 of 2026-10-06) and
-#                    K2-K4 (after the first pass that ran SP_ASSIGN_HOLDOUT). Read-only.
+#   --post-pass      K8, K9b (after the first pass gated for trial 2), K9 (after pass 1 of 2026-10-06),
+#                    K2-K4 (after the first pass that ran SP_ASSIGN_HOLDOUT) and K13. Read-only.
 #   --base REF       the pre-branch version of every replaced file (default: per file, the parent of the first
 #                    commit in 53326a5..holdout-t2 that touched it; = 53326a5 for all seven today). Only when the
 #                    base branch edited AND deployed a replaced object after the cut, whether HEAD or holdout-t2
@@ -33,9 +33,14 @@
 # and the UTC time inside one of:
 #   PRIMARY   from the moment pass 2 of 10-05 (starts ~07:35 UTC) has FINISHED, to 15:40 UTC;
 #   FALLBACK  from the moment pass 3 of 10-05 (starts ~16:00 UTC) has FINISHED, to 04:40 UTC 10-06.
-# and no pass running. Every step re-reads this before its writes and needs 5-10 minutes left; a step that
-# cannot start stops the run with the --from-step to resume with. Missing both windows shifts every trial-2
-# date and trial 1's ARCHIVED date together before step 1 (plan Task 0) — this script does not do that.
+# and no pass running. Every step re-reads this before its writes and needs the time of ITSELF AND EVERY LATER
+# STEP left (STEP_NEED, steps 1-5: 5, 5, 5, 10, 5 minutes; so step 1 needs 30, step 2 25, step 3 20, step 4 15,
+# step 5 5), whatever --to-step says. Measured: all writes of steps 1-5 took 6.3 min in the rehearsal (step 1's
+# guard 09:05:44 to step 5's writes 09:12:01). So the window cannot stop a run between step 2 and step 5 (review
+# of holdout-t2, 2026-10-04: with each step's own need only, a fallback start at ~04:30 UTC 10-06 passed steps
+# 1-3 and refused step 4, with no window left to resume in). A step that cannot start stops the run with the
+# --from-step to resume with. Missing both windows shifts every trial-2 date and trial 1's ARCHIVED date
+# together before step 1 (plan Task 0) — this script does not do that.
 #
 # WHAT A PASS IS, MEASURED (LOG_PIPELINE_RUNS, 2026-09-20 16:00 .. 2026-10-04 08:36 UTC, 42 passes; and the
 # deployed SP_ORCHESTRATE_DAILY_REFRESH, last altered 2026-10-03 22:47 UTC):
@@ -81,13 +86,24 @@
 #              outside trial 2 (what the next pass would append as LATE ARRIVALs).
 #   step 4     the register suite's pre-deploy baseline (merge-base text on the old register), then
 #              SP_ENGINE_PREFLIGHT, V_PLAN_WINDOW_JUDGMENT, V_FAMILY_SEAT_REGISTER. K7 (here exactly one
-#              object off its count: V_ENGINE_HEALTH 3, expected 1, until step 5), K7b (the three tools).
-#   step 5     V_HOLDOUT_READOUT, V_ENGINE_HEALTH. K7 (all on count), K7b, K10, K11; HOLDOUT_INTEGRITY
+#              object off its count: V_ENGINE_HEALTH 3, expected 1, until step 5), K7b (the three tools, and the
+#              weekly book's MEND_SQL: one V_HOLDOUT_ARM reference).
+#   step 5     V_HOLDOUT_READOUT, V_ENGINE_HEALTH. K7 (all on count), K7b, K10, K11, K13 (the weekly book's mend
+#              on the trial's controls, its gate read as of LA 10-06: 0); HOLDOUT_INTEGRITY
 #              (every row PASS; ~18 min); V_FAMILY_SEAT_REGISTER_acceptance (no check that passed before
 #              the deploy fails after it, and B09 / B34, the holdout checks, PASS).
-# Safe stopping points: after any whole step. Between steps 2 and 3 the old readers see trial 2's rows but
-# its eligible_from (10-06) has not come; between 3 and 4 the procedure and the population already follow
-# trial 2. No pass may run inside a step (the window).
+# Safe stopping points: after step 1; after step 2, 3 or 4 ONLY IF a resume reaches step 5 before pass 2 of
+# 2026-10-06 starts (~07:35 UTC, the first pass on LA 10-06). Between steps 2 and 3 the old readers see trial
+# 2's rows but its eligible_from (10-06) has not come; between 3 and 4 the procedure and the population already
+# follow trial 2. From LA 10-06 the OLD SP_ENGINE_PREFLIGHT, V_PLAN_WINDOW_JUDGMENT and V_FAMILY_SEAT_REGISTER
+# hold both trials' controls (26, the rollback header's measurement), and 10 of trial 1's 14 controls are trial-2
+# TREATED units: trial 2's TREATED arm would be held from its first day. Its dates cannot be shifted after step 2
+# (the assignment table is append-only), and the rollback does not cure it (it restores those same old readers).
+# So after a stop past step 2 (an error or a violation; the summed need keeps the window from causing one): fix
+# it and resume with --from-step N inside the window. After 04:40 UTC 10-06 the guard refuses every step; the
+# only resume left is GUARD_OPTS=--running-only (it refuses while a pass runs and skips the date and window
+# checks) once pass 1 of 10-06 has logged its last step and before 07:35 UTC, on Ori's ruling.
+# No pass may run inside a step (the window).
 #
 # DRIFT. Before replacing each of SP_ASSIGN_HOLDOUT, V_HOLDOUT_ELIGIBLE, SP_ENGINE_PREFLIGHT,
 # V_PLAN_WINDOW_JUDGMENT, V_FAMILY_SEAT_REGISTER, V_HOLDOUT_READOUT, V_ENGINE_HEALTH the script reads its
@@ -129,8 +145,10 @@
 #
 # AFTER THE RUN (plan Task 8, Task 9). K8 and K9b pass only after the next pass (pass 3 of 10-05 in the
 # primary window, pass 1 of 10-06 in the fallback); K9 only after pass 1 of 10-06 (~05:30 UTC): run
-# --post-pass then. No upload on 10-05; no book from tools/build_weekly_book.py until K9 reads 0; no hand
-# change to the 12 controls. HOLDOUT.md §9 becomes "running" on 10-06 (Task 9).
+# --post-pass then (it also runs K13). No upload on 10-05; no book from tools/build_weekly_book.py until K9 and
+# K13 read 0 AND the Los Angeles date is 10-06 (07:00 UTC 10-06): every tool's gate, the mend's included, binds
+# trial 2's own controls from CURRENT_DATE('America/Los_Angeles') >= 2026-10-06, and K9 can pass at ~22:30 LA
+# 10-05; no hand change to the 12 controls. HOLDOUT.md §9 becomes "running" on 10-06 (Task 9).
 #
 # ---------------------------------------------------------------------------------------------
 # REHEARSED 2026-10-04 (UTC 09:03-09:39, LA date 2026-10-04), on OI.TMP_HT2_R_* copies with the dates pinned to
@@ -694,13 +712,35 @@ PY
 
 k7b() {
   local f n bad=0
-  for f in tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py; do
+  for f in tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py tools/build_weekly_book.py; do
     n=$(grep -c 'DE_HOLDOUT_ASSIGNMENT' "$f" || true)
     log "  $([ "$n" = 0 ] && echo 'ok  ' || echo FAIL) K7b $f: $n reference(s) to DE_HOLDOUT_ASSIGNMENT"
     record "step$STEP" "K7b $f" "$n" "grep -c DE_HOLDOUT_ASSIGNMENT"
     [ "$n" = 0 ] || bad=1
   done
-  [ "$bad" = 0 ] || die "K7b: a bulksheet tool still reads DE_HOLDOUT_ASSIGNMENT"
+  # the weekly book's mend (arm 2) carries its own holdout gate: exactly one V_HOLDOUT_ARM reference in MEND_SQL
+  n=$(python3 -c 'import ast, sys
+t = ast.parse(open(sys.argv[1]).read())
+print(sum(x.value.value.count("V_HOLDOUT_ARM") for x in t.body if isinstance(x, ast.Assign)
+          and isinstance(x.targets[0], ast.Name) and x.targets[0].id == "MEND_SQL"))' tools/build_weekly_book.py)
+  log "  $([ "$n" = 1 ] && echo 'ok  ' || echo FAIL) K7b tools/build_weekly_book.py MEND_SQL: $n V_HOLDOUT_ARM reference(s) (expected 1, the mend's holdout gate)"
+  record "step$STEP" "K7b tools/build_weekly_book.py MEND_SQL" "$([ "$n" = 1 ] && echo 0 || echo 1)" "V_HOLDOUT_ARM references in MEND_SQL: $n (expected 1)"
+  [ "$n" = 1 ] || bad=1
+  [ "$bad" = 0 ] || die "K7b: a bulksheet tool still reads DE_HOLDOUT_ASSIGNMENT, or the weekly book's mend lost its holdout gate"
+}
+
+# K13 (plan §5): the weekly book's mend never prices a control. MEND_SQL read from the tool's source, run on the
+# trial's HOLDOUT units with its gate read as of LA 10-06 (or today, when later): gated 0; the ungated text is
+# the negative control (5 on 3 controls, measured 2026-10-04).
+k13() {
+  local asof rc=0
+  asof=$(TZ=America/Los_Angeles date +%F)
+  if [[ "$asof" < 2026-10-06 ]]; then asof=2026-10-06; fi
+  log "  K13 the weekly book's mend on the trial's controls, the gate read as of LA $asof"
+  python3 "$MIG/2026-10-05_holdout_t2_k13_mend.py" --as-of "$asof" ${PFX:+--prefix "$PFX"} > "$WORK/k13.out" 2>&1 || rc=$?
+  sed 's/^/    /' "$WORK/k13.out" | tee -a "$LOG"
+  record "step$STEP" "K13 the mend on the controls (LA $asof)" "$rc" "$(grep -E '^K13 (gated|ungated)' "$WORK/k13.out" | tr '\n' ' ')"
+  [ "$rc" = 0 ]
 }
 
 holdout_integrity() {
@@ -783,11 +823,17 @@ PY
 # the window
 # ---------------------------------------------------------------------------------------------
 STEP=0
-step_guard() {   # STEP NEED_MINUTES
+STEP_NEED=(0 5 5 5 10 5)   # minutes per step (index = step); a step needs the sum over itself and every later step
+step_guard() {   # STEP
+  local s need=0
   STEP=$1
-  log "STEP $1 — the window ($([ "$MODE" = rehearse ] && echo 'measured, not enforced: rehearsal' || echo enforced))"
-  if pass_guard "$2"; then return 0; fi
+  for ((s = $1; s <= 5; s++)); do need=$((need + STEP_NEED[s])); done
+  log "STEP $1 — the window, needing $need min for steps $1-5 ($([ "$MODE" = rehearse ] && echo 'measured, not enforced: rehearsal' || echo enforced))"
+  if pass_guard "$need"; then return 0; fi
   if [ "$MODE" = rehearse ]; then log "  (rehearsal: the refusal above is not enforced)"; return 0; fi
+  if [ "$1" -ge 3 ]; then
+    die "the window does not allow step $1 now. Nothing of step $1 was written. Trial 2's founding rows are in: steps $1-5 must be deployed before pass 2 of 2026-10-06 (~07:35 UTC) or trial 2 is contaminated (header: Safe stopping points). Resume with: $0 --deploy --from-step $1"
+  fi
   die "the window does not allow step $1 now. Nothing of step $1 was written. Resume with: $0 --deploy --from-step $1"
 }
 
@@ -796,7 +842,7 @@ step_guard() {   # STEP NEED_MINUTES
 # ---------------------------------------------------------------------------------------------
 step1() {
   local v
-  step_guard 1 5
+  step_guard 1
   deploy_table DE_HOLDOUT_TRIAL scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql
   deploy_table DE_HOLDOUT_BASELINE scripts/bigquery/tables/DE_HOLDOUT_BASELINE.sql
   deploy_new_view V_HOLDOUT_TRIAL scripts/bigquery/views/V_HOLDOUT_TRIAL.sql
@@ -809,7 +855,7 @@ step1() {
 
 step2() {
   local n
-  step_guard 2 5
+  step_guard 2
   n=$(scalar t2_rows "SELECT COUNT(*) FROM \`$PROJECT.$DS.$(obj DE_HOLDOUT_ASSIGNMENT)\` WHERE trial_id = '$T2'")
   if [ "$n" = 0 ]; then
     run_script founding "$MIG/2026-10-05_holdout_t2_founding.sql"
@@ -832,7 +878,7 @@ for l in sys.stdin:
 
 step3() {
   local before after
-  step_guard 3 5
+  step_guard 3
   replace_object SP_ASSIGN_HOLDOUT
   replace_object V_HOLDOUT_ELIGIBLE
   kchecks k_step3 0 K2 K3 K4 || die "step 3 checks"
@@ -856,7 +902,7 @@ step3() {
 }
 
 step4() {
-  step_guard 4 10
+  step_guard 4
   fsr_before
   replace_object SP_ENGINE_PREFLIGHT
   replace_object V_PLAN_WINDOW_JUDGMENT
@@ -866,11 +912,12 @@ step4() {
 }
 
 step5() {
-  step_guard 5 5
+  step_guard 5
   replace_object V_HOLDOUT_READOUT
   replace_object V_ENGINE_HEALTH
   kchecks k_step5 0 K7 K10 K11 || die "step 5 checks"
   k7b
+  k13 || die "K13: the weekly book's mend prices a control (or could not run)"
   holdout_integrity || die "HOLDOUT_INTEGRITY: a row is not PASS"
   fsr_after || die "V_FAMILY_SEAT_REGISTER_acceptance: a regression or a holdout check failed"
 }
@@ -934,6 +981,7 @@ case $MODE in
   postpass)
     log "POST-PASS CHECKS (read-only)"
     kchecks k_postpass 0 K2 K3 K4 K8 K9 K9b || die "post-pass checks: K8 / K9b pass after the first pass gated for trial 2, K9 after pass 1 of 2026-10-06 (its detail says which snapshot is stale)"
+    k13 || die "K13: the weekly book's mend prices a control: build every book with --no-mend until it reads 0"
     log "post-pass checks: every one reads 0" ;;
   check)
     preflight
@@ -964,5 +1012,6 @@ case $MODE in
     while [ "$s" -le "$TO_STEP" ]; do "step$s"; s=$((s + 1)); done
     log "DONE: steps $FROM_STEP-$TO_STEP deployed$([ "$MODE" = rehearse ] && echo ' (rehearsal, objects '"$REHEARSE_PREFIX"'*)') and checked. Record: $RECORD"
     log "NEXT: K8 and K9b after the next pass, K9 after pass 1 of 2026-10-06: $0 --post-pass. No upload on 10-05;"
-    log "      no book from tools/build_weekly_book.py until K9 reads 0; no hand change to the 12 controls." ;;
+    log "      no book from tools/build_weekly_book.py until K9 and K13 read 0 and the LA date is 2026-10-06;"
+    log "      no hand change to the 12 controls." ;;
 esac
