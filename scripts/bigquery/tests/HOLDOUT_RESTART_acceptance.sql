@@ -149,6 +149,19 @@
 --     control among them. build_seasonal_unpause_bulksheet: dry run only (it needs keyword ids).
 --   python3 -m pytest tools/tests -q: 225 passed before and after (test_seat_moves +
 --     test_seasonal_unpause: 91).
+--
+-- PLAN TASK 6 REHEARSAL, 2026-10-04 ~05:00-06:05 UTC (LA date 2026-10-03). V_HOLDOUT_READOUT (k reads
+-- the live trial) and V_ENGINE_HEALTH (c18 on V_HOLDOUT_ARM; c33 on the live trial, with the touch
+-- alarm and feed liveness) from this branch, comment lines stripped, names pointed at TMP_HT2_ copies;
+-- all dropped afterwards. Before the edit both deployed bodies matched the repo files apart from
+-- comment lines and the final ';'; feat/campaign-first-strategy had no commit on either file after
+-- 53326a5. The results, the H4/H5-style doctored inputs and the cost are in the two views' headers.
+--   K7's count over this branch's bodies after the edit: V_ENGINE_HEALTH 1 (c33 hu_asg),
+--     V_HOLDOUT_READOUT 1 (asg). The '(plan Task 6 pending)' 3 above is now 1.
+--   V_ENGINE_HEALTH reads DE_HOLDOUT_BASELINE (c33 kind 4). That table's DDL and its founding insert
+--     are not on this branch yet (plan Task 2 Step 3b, Task 3); the rehearsal used a copy with the
+--     columns of Step 3b (trial_id, campaign_id, setting, recorded_at NOT NULL; value, source,
+--     source_synced_at, ruling). The board cannot be created before the table exists.
 -- =============================================================================================
 
 -- K1 one live trial, and it is T2
