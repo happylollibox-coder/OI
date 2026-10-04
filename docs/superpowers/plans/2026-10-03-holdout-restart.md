@@ -1344,6 +1344,11 @@ hu_k4_diff AS (  -- BASELINE_DIFF: a changed value, or a setting on one side onl
   `tables/DE_HOLDOUT_BASELINE.sql` (step 1) and `migrations/2026-10-05_holdout_t2_baseline.sql` (step 2,
   after the founding file; run-once). It also adds K12 to the acceptance file. The presence rule is one
   text in c33, the baseline file and K12, and the runbook refuses to start if the three differ.
+- **The house rule on replacing a deployed object is enforced in two parts.** Drift: each deployed body
+  equals the file's pre-branch version. Foreign edits (added after the review of Task R): each of the 14
+  files the deploy sends is the holdout-t2 tip's text at HEAD, so a base-branch commit that was never
+  deployed cannot ship with the merge. With `--base B` (the base branch edited and deployed a replaced
+  object), a replaced object's file must be B's text plus the tip's edit, by a clean three-way merge.
 - **When a pass has finished**, read from `LOG_PIPELINE_RUNS`. Each orchestrator call draws one `run_id`
   and logs one row per step when the step ends, OK or FAIL; nothing is logged when a step starts.
   - A pass has **finished** when its `run_id` has logged the orchestrator's last step,

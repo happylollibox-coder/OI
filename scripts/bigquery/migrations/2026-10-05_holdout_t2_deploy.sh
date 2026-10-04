@@ -22,8 +22,10 @@
 #   --post-pass      K8, K9b (after the first pass gated for trial 2), K9 (after pass 1 of 2026-10-06) and
 #                    K2-K4 (after the first pass that ran SP_ASSIGN_HOLDOUT). Read-only.
 #   --base REF       the pre-branch version of every replaced file (default: per file, the parent of the first
-#                    commit in 53326a5..holdout-t2 that touched it; = 53326a5 for all seven today).
-#   --tip REF        the holdout-t2 tip that must be merged into HEAD (default holdout-t2).
+#                    commit in 53326a5..holdout-t2 that touched it; = 53326a5 for all seven today). Only when the
+#                    base branch edited AND deployed a replaced object after the cut (FOREIGN EDITS below).
+#   --tip REF        the holdout-t2 tip that must be merged into HEAD, and whose text the deploy sends (default
+#                    holdout-t2).
 #
 # ---------------------------------------------------------------------------------------------
 # THE WINDOW (plan Task 8). Los Angeles date 2026-10-05 (BigQuery's CURRENT_DATE('America/Los_Angeles')),
@@ -65,9 +67,10 @@
 # is re-read from INFORMATION_SCHEMA after the write and compared with the file (bodies with comments and
 # whitespace removed; tables by their columns).
 #   preflight  config.yaml parses; HEAD contains the holdout-t2 tip and no deployed file has an uncommitted
-#              change (deploy mode); the presence-rule block of c33 = the baseline file's = K12's; the
-#              HOLDOUT_INTEGRITY paste = c33's text; the 10-04 change-log rows on the 12 controls (INFO,
-#              plan Task 8 "one caution"); DRIFT of all seven replaced objects (below).
+#              change (deploy mode); FOREIGN EDITS: every file the deploy sends is the tip's text (below);
+#              the presence-rule block of c33 = the baseline file's = K12's; the HOLDOUT_INTEGRITY paste =
+#              c33's text; the 10-04 change-log rows on the 12 controls (INFO, plan Task 8 "one caution");
+#              DRIFT of all seven replaced objects (below).
 #   step 1     DE_HOLDOUT_TRIAL, DE_HOLDOUT_BASELINE (tables), V_HOLDOUT_TRIAL, V_HOLDOUT_ARM, the registry
 #              rows. K1, K2.
 #   step 2     the founding file (59 rows), then the baseline file. K3, K4, K5, K6, K12.
@@ -92,6 +95,19 @@
 # file: already replaced by an earlier run, skipped. Anything else: STOP, printing the difference. If the
 # base branch changed one of these objects after holdout-t2 was cut, deployed that change and the merge
 # carries it, re-run with --base <the base branch commit before the merge>.
+#
+# FOREIGN EDITS (review of Task R, 2026-10-04). Drift proves only that the deployed body is the pre-branch
+# file; the deploy sends HEAD's file, and HEAD is the merged checkout, where other sessions commit. A
+# base-branch commit to one of these files that was never deployed would read "= <pre-branch> (not yet
+# replaced)" and ship with this deploy. So preflight (git only, before any BigQuery read) requires, for the
+# 7 new-object and migration files and the 7 replaced objects' files:
+#   without --base   git diff --quiet <tip> HEAD -- FILE, for all 14;
+#   with --base B    a replaced object's file at HEAD = the clean three-way merge (git merge-file, histogram
+#                    or myers) of the tip's file and B's file over their merge base: B's text, which drift
+#                    then requires deployed, plus the tip's edit and nothing else. The 7 new-object and
+#                    migration files must still equal the tip's (no deployed body vouches for an edit to them).
+# Otherwise it prints the foreign diff and STOPs (--deploy), REFUSEs (--check) or warns (--rehearse). The
+# remedy is a reviewed edit on holdout-t2, or --base when the base branch's edit is proven deployed.
 #
 # AFTER THE RUN (plan Task 8, Task 9). K8 and K9b pass only after the next pass (pass 3 of 10-05 in the
 # primary window, pass 1 of 10-06 in the fallback); K9 only after pass 1 of 10-06 (~05:30 UTC): run
@@ -149,6 +165,36 @@
 #     The live log read: the 2026-10-03 05:00 pass has no SP_SNAPSHOT_ENGINE_HEALTH row (that step was added in
 #     the next pass); hence "running" needs a start less than 8 h ago.
 #   Rollback: 2026-10-05_holdout_t2_rollback.sh --rehearse on these copies (its header).
+#
+# FOREIGN EDITS, measured 2026-10-04 10:04-10:09 UTC (the check added after the review of Task R). Scratch
+# commits in a detached scratch worktree (never on a branch; the worktree removed afterwards). Where marked
+# "stub bq", a bq first on PATH refused and logged every call: the check is git-only, so 0 calls = it stopped
+# before BigQuery. No TMP_HT2_ object was made; the real-bq runs are --check (read-only).
+#   a scratch commit on the tip, V_ENGINE_HEALTH.sql c10's RED threshold 262144 * 0.85 -> 0.80:
+#     --check (real bq)     "FOREIGN EDIT ... differs between holdout-t2 and HEAD", the one-line diff printed,
+#                           "REFUSE: 1 of the 14 files ...", while drift still read V_ENGINE_HEALTH "= 93ba2a9:...
+#                           (not yet replaced)" (the gap the review found); "preflight refusals 1", exit 1
+#     --deploy (stub bq)    STOP at the check, the diff printed, 0 bq calls, exit 1
+#     --rehearse (stub bq)  the diff printed, "WARNING (rehearsal)", went on
+#     the same commit with --base 53326a5 (= the merge base): STOP, merge-file of the tip over 53326a5 = the tip
+#   a scratch commit on the tip touching only architecture/HOLDOUT.md: --deploy "foreign edits: none; the 14
+#     files the deploy sends are holdout-t2's text" (stub bq: went on to its first call, the INFO read)
+#   a simulated base-branch commit B on 53326a5 (the same 0.85 -> 0.80), then holdout-t2 merged into it (clean):
+#     --deploy, no --base (stub bq)      STOP, B's line printed as the foreign diff, 0 bq calls
+#     --deploy --base B (stub bq)        "foreign edits: none; the 7 new-object and migration files are
+#                                        holdout-t2's text, the 7 replaced objects' files B's text plus
+#                                        holdout-t2's edit", went on to the INFO read
+#     --check --base B (real bq)         foreign edits none; drift "V_ENGINE_HEALTH: DRIFT against B" (B's edit
+#                                        was never deployed), the other six "= B (not yet replaced)"; "drift 1"
+#     + a post-merge commit, AMBER 262144 * 0.70 -> 0.65, --deploy --base B (stub bq): STOP, "not B's text plus
+#                                        holdout-t2's edit", only that line in the diff, 0 bq calls
+#     + a post-merge commit to the founding file (one row 'HOLDOUT' -> 'CONTROL'), --deploy --base B (stub bq):
+#                                        STOP, that row printed, 0 bq calls
+#     --base no-such-ref: STOP "--base no-such-ref is not a commit here", 0 bq calls
+#   positive control: --check in this worktree, HEAD 4638d9a = holdout-t2 (this edit of the runbook uncommitted;
+#   the runbook is not a file the deploy sends), 10:08:20-10:08:52: "foreign edits: none; the 14 files the deploy
+#   sends are holdout-t2's text"; preflight refusals 0, drift 0 (all seven = pre-branch), change-log rows on the
+#   12 controls 0, the window refused (LA 10-04), exit 1.
 # =============================================================================================
 set -euo pipefail
 
@@ -209,13 +255,14 @@ log "holdout trial 2 runbook: mode $MODE, from step $FROM_STEP, HEAD $(git rev-p
 ACC=scripts/bigquery/tests/HOLDOUT_RESTART_acceptance.sql
 HI=scripts/bigquery/tests/HOLDOUT_INTEGRITY_acceptance.sql
 FSR=scripts/bigquery/tests/V_FAMILY_SEAT_REGISTER_acceptance.sql
-FILES="scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql scripts/bigquery/tables/DE_HOLDOUT_BASELINE.sql
+# the text this deploy sends to BigQuery: the new objects and the migrations, then the seven replaced objects
+NEW_FILES="scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql scripts/bigquery/tables/DE_HOLDOUT_BASELINE.sql
 scripts/bigquery/views/V_HOLDOUT_TRIAL.sql scripts/bigquery/views/V_HOLDOUT_ARM.sql
-$MIG/2026-10-05_holdout_t2_registry_rows.sql $MIG/2026-10-05_holdout_t2_founding.sql $MIG/2026-10-05_holdout_t2_baseline.sql
-scripts/bigquery/procedures/SP_ASSIGN_HOLDOUT.sql scripts/bigquery/views/V_HOLDOUT_ELIGIBLE.sql
-scripts/bigquery/procedures/SP_ENGINE_PREFLIGHT.sql scripts/bigquery/views/V_PLAN_WINDOW_JUDGMENT.sql
-scripts/bigquery/views/V_FAMILY_SEAT_REGISTER.sql scripts/bigquery/views/V_HOLDOUT_READOUT.sql
-scripts/bigquery/views/V_ENGINE_HEALTH.sql $ACC $HI $FSR $TOOL $MIG/2026-10-05_holdout_t2_lib.sh
+$MIG/2026-10-05_holdout_t2_registry_rows.sql $MIG/2026-10-05_holdout_t2_founding.sql $MIG/2026-10-05_holdout_t2_baseline.sql"
+REPLACED_FILES=$(for n in $REPLACED; do file_of "$n"; echo; done)
+FILES="$NEW_FILES
+$REPLACED_FILES
+$ACC $HI $FSR $TOOL $MIG/2026-10-05_holdout_t2_lib.sh
 tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py"
 
 # base_ref_for FILE: the commit holding FILE's pre-branch version
@@ -254,6 +301,7 @@ preflight() {
       git status --short -- $FILES | sed 's/^/    /' | tee -a "$LOG" >&2
     fi
   fi
+  foreign_all
   # the presence rule is one text in three places (plan §2.7 kind 4)
   tool block scripts/bigquery/views/V_ENGINE_HEALTH.sql 'hu_k4_sp  AS' hu_k4_present > "$WORK/pres_board.txt"
   tool block "$MIG/2026-10-05_holdout_t2_baseline.sql" 'hu_k4_sp  AS' hu_k4_present > "$WORK/pres_baseline.txt"
@@ -270,6 +318,70 @@ sys.exit(0 if b(v) == b(a) else 1)
 PY
   log "  HOLDOUT_INTEGRITY's hu_gap .. c33 block = V_ENGINE_HEALTH.sql's"
   upload_rows_info
+}
+
+# FOREIGN EDITS (house rule: "Before replacing a deployed object, diff its INFORMATION_SCHEMA body against the
+# file. The only difference allowed is this plan's edit."). The run sends HEAD's text, and HEAD is the merged
+# checkout, where other sessions commit; drift proves only deployed = the pre-branch file. So, read-only, in git:
+#   without --base: every file the deploy sends (NEW_FILES, REPLACED_FILES) is the $TIP text: git diff --quiet
+#                   $TIP HEAD -- FILE;
+#   with --base B:  a replaced object's file at HEAD = git merge-file of $TIP's file and B's over their merge
+#                   base, i.e. B's text (drift then proves B deployed) plus the tip's edit and nothing else; a
+#                   new object or migration file is still the $TIP text (no deployed body vouches for an edit).
+# Any other difference is printed: STOP (--deploy), REFUSE (--check), WARNING (--rehearse).
+FOREIGN_MB=""
+foreign_one() {   # FILE new|replaced -> 0 when HEAD's text is the reviewed text
+  local f=$1 kind=$2 w=$WORK/foreign alg
+  if [ -z "$BASE_OVERRIDE" ] || [ "$kind" = new ]; then
+    git diff --quiet --no-ext-diff "$TIP" HEAD -- "$f" && return 0
+    log "  FOREIGN EDIT: $f differs between $TIP and HEAD (git diff $TIP HEAD -- $f):"
+    git diff --no-ext-diff "$TIP" HEAD -- "$f" | sed 's/^/    /' | tee -a "$LOG" >&2 || true
+    return 1
+  fi
+  if ! { git show "$TIP:$f" > "$w.tip" && git show "$FOREIGN_MB:$f" > "$w.mb" \
+         && git show "$BASE_OVERRIDE:$f" > "$w.base" && git show "HEAD:$f" > "$w.head"; }; then
+    log "  FOREIGN EDIT: $f cannot be read at $TIP, $FOREIGN_MB (their merge base), $BASE_OVERRIDE and HEAD"
+    return 1
+  fi
+  # a clean merge by either algorithm: git merge's ort strategy merges with histogram (git help
+  # merge-strategies), git merge-file defaults to myers
+  for alg in histogram myers; do
+    git merge-file -p --diff-algorithm="$alg" "$w.tip" "$w.mb" "$w.base" > "$w.merged" 2> /dev/null || true   # rc = conflicts
+    cmp -s "$w.merged" "$w.head" && return 0
+  done
+  log "  FOREIGN EDIT: $f at HEAD is not $BASE_OVERRIDE's text plus $TIP's edit (diff: that merge -> HEAD):"
+  diff -u --label "git merge-file $TIP $FOREIGN_MB $BASE_OVERRIDE -- $f" --label "HEAD:$f" "$w.merged" "$w.head" \
+    | sed 's/^/    /' | tee -a "$LOG" >&2 || true
+  return 1
+}
+
+foreign_all() {
+  local f nf=0 nfiles nnew
+  if [ -n "$BASE_OVERRIDE" ]; then
+    git rev-parse -q --verify "$BASE_OVERRIDE^{commit}" > /dev/null || die "--base $BASE_OVERRIDE is not a commit here"
+    FOREIGN_MB=$(git merge-base "$TIP" "$BASE_OVERRIDE") || die "$TIP and --base $BASE_OVERRIDE have no merge base"
+    FOREIGN_MB=$(git rev-parse --short "$FOREIGN_MB")
+  fi
+  for f in $NEW_FILES; do foreign_one "$f" new || nf=$((nf + 1)); done
+  for f in $REPLACED_FILES; do foreign_one "$f" replaced || nf=$((nf + 1)); done
+  # shellcheck disable=SC2086
+  nfiles=$(printf '%s\n' $NEW_FILES $REPLACED_FILES | wc -l | tr -d ' ')
+  # shellcheck disable=SC2086
+  nnew=$(printf '%s\n' $NEW_FILES | wc -l | tr -d ' ')
+  if [ "$nf" = 0 ]; then
+    if [ -z "$BASE_OVERRIDE" ]; then
+      log "  foreign edits: none; the $nfiles files the deploy sends are $TIP's text"
+    else
+      log "  foreign edits: none; the $nnew new-object and migration files are $TIP's text, the $((nfiles - nnew)) replaced objects' files $BASE_OVERRIDE's text plus $TIP's edit (drift must find $BASE_OVERRIDE's text deployed)"
+    fi
+    return
+  fi
+  case $MODE in
+    deploy) die "$nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above): deploy reviewed text only. Put the edit on $TIP, or, if the base branch made AND deployed it, re-run with --base <that base-branch commit>" ;;
+    check) log "  REFUSE: $nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above)"
+           CHECK_REFUSALS=$((CHECK_REFUSALS + 1)) ;;
+    *) log "  WARNING (rehearsal): $nf of the $nfiles files differ from $TIP (above)" ;;
+  esac
 }
 
 # the change-log rows on trial 2's 12 controls since LA 2026-10-04 (plan Task 8, "one caution"): INFO
