@@ -5,14 +5,34 @@
 --     "$(grep -v '^[[:space:]]*--' FILE)"
 -- Each statement returns one row (check_name, violations, detail); parse the multi-statement output
 -- by regex over the {"check_name"...} objects.
--- This file holds K1-K6 (plan Tasks 2-3) and K7 (plan Task 5). K8-K12 are added by plan Task 7.
+-- This file holds K1-K11 and K9b: K1-K6 (plan Tasks 2-3), K7 (Task 5), K8-K11 and K9b (Task 7).
+-- K12 (the baseline is whole, plan §5) is NOT here: DE_HOLDOUT_BASELINE's DDL and its founding insert
+-- are not on this branch yet (plan Task 2 Step 3b, Task 3); K12 lands with them.
+-- K11 is the board half of plan §5's K11; the touch alarm and the feed term are tested on doctored
+-- copies by HOLDOUT_INTEGRITY_acceptance.sql H4 / H5 (every row PASS), run after this file.
 -- Objects: scripts/bigquery/tables/DE_HOLDOUT_TRIAL.sql, views/V_HOLDOUT_TRIAL.sql,
 --          views/V_HOLDOUT_ARM.sql, migrations/2026-10-05_holdout_t2_registry_rows.sql,
 --          migrations/2026-10-05_holdout_t2_founding.sql. SOP: architecture/HOLDOUT.md §4, §5, §9.
 --
--- WHEN TO RUN: on 2026-10-05 (LA), straight after deploy steps 1-2 of plan Task 8. K1 and K6 read
--- CURRENT_DATE('America/Los_Angeles'): trial 1 is archived from 2026-10-05, so on 2026-10-04 both
--- trials are live (K1 reads 2) and trial 1's 14 controls still bind (K6 reads 26).
+-- WHEN EACH CHECK CAN PASS (deploy 2026-10-05 by the runbook, plan Task 8):
+--   BEFORE THE DEPLOY none can: DE_HOLDOUT_TRIAL, V_HOLDOUT_TRIAL and V_HOLDOUT_ARM do not exist (the
+--     first statement fails "not found"). K1 and K6 read CURRENT_DATE('America/Los_Angeles'): trial 1
+--     is archived from 2026-10-05, so on LA 2026-10-04 both trials are live (K1 reads 2) and trial 1's
+--     14 controls still bind (K6 reads 26).
+--   RIGHT AFTER THE DEPLOY (LA 2026-10-05, inside the runbook):
+--     K1, K2, K6 after step 1 (Task 2); K3, K4, K5 after step 2 (Task 3);
+--     K7 after step 5 (until V_ENGINE_HEALTH reads V_HOLDOUT_ARM it reads 1);
+--     K10 and K11 after step 5 (Task 6: the readout and the board). K11's feed term reads the live
+--     board, so it also fails while any feed stamp is > 36 h old: that is the alarm working.
+--   ONLY AFTER THE FIRST PASS GATED FOR T2 — the ~16:00 UTC pass of 2026-10-05 in the primary window
+--   (05:00 UTC 2026-10-06 in the fallback window) — because they read SNAPSHOTS that a pass rebuilds:
+--     K8  T_ENGINE_PREFLIGHT (SP_ENGINE_PREFLIGHT, every pass);
+--     K9  the latest live FACT_PLAN_NEXT_WEEK partition (SP_BUILD_NEXT_WEEK_PLAN; it refused 10 of its
+--         21 runs 09-27..10-03, so this can be a later pass than the first; no book from
+--         tools/build_weekly_book.py until K9 reads 0);
+--     K9b T_FAMILY_SEAT_REGISTER (SP_REFRESH_CUBE_TABLES, every pass).
+--     Each carries a freshness term: it adds 1 while its snapshot was built before trial 2's founding
+--     insert (MAX(assigned_at) of the FOUNDING rows), so run before that pass it FAILS and says so.
 --
 --   K1  one live trial and it is T2: ABS(COUNTIF(is_live) - 1) + COUNTIF(is_live AND trial_id != T2)
 --       over V_HOLDOUT_TRIAL. An empty registry reads 1.
@@ -39,6 +59,27 @@
 --       Run after Task 6 is deployed: until V_ENGINE_HEALTH reads V_HOLDOUT_ARM, K7 reads 1 (it
 --       holds 3 references, expected 1). Comment text is removed from '--' to the end of the line,
 --       so a reference on the same line after a '--' inside a string literal would not be counted.
+--
+--   K8  the preflight bites on T2 only (T_ENGINE_PREFLIGHT): rows of a T2 HOLDOUT campaign that are not
+--       EXCLUDE with is_holdout and holdout_trial_id T2, + rows of any other campaign with is_holdout
+--       (plan: T1-only controls; any other campaign counts too), + 1 when the table is empty, + 1 when
+--       it was built before trial 2's founding insert.
+--   K9  the plan agrees (latest live FACT_PLAN_NEXT_WEEK partition: is_live_plan, MAX(as_of)): rows of
+--       a T2 HOLDOUT campaign with holdout not TRUE, + rows of any other campaign with holdout TRUE,
+--       + 1 when empty, + 1 when built_at is before trial 2's founding insert.
+--   K9b the register's snapshot agrees (T_FAMILY_SEAT_REGISTER, rows naming a campaign; plan §1 row 15,
+--       Task 8): as K9, the build time read from INFORMATION_SCHEMA.TABLES.creation_time (the
+--       snapshot is created with CREATE OR REPLACE each pass).
+--   K10 the readout serves T2: before 2027-02-09 exactly one NOT_YET row and its verdict names
+--       2027-02-09, no READY row; no CENSORED / PRE_WINDOW_CHANGE row names a unit outside T2; no
+--       number on a row other than READY (H3); no unknown state; + 1 unless V_HOLDOUT_TRIAL holds T2
+--       with first_readout 2027-02-09. An empty readout reads 1.
+--   K11 the touch alarm and the feed term are on the deployed board: 17 text tokens of c33 (the four
+--       touch kinds, the "not censored by R9" label, the four procedures' liveness read, the eleven
+--       Fivetran tables' MAX(_fivetran_synced) reads) must be in INFORMATION_SCHEMA.VIEWS'
+--       V_ENGINE_HEALTH body; the holdout_unit_changed row must exist, print 15 feed ages and carry no
+--       FEED STALE clause. The board row is read once (each reference of the board is planned again:
+--       the first draft read it five times and failed "query is too complex" on the planner).
 --
 -- MEASURED 2026-10-04 ~03:20-03:35 UTC (LA date 2026-10-03), rehearsal on TMP_HT2_ copies, all
 -- dropped afterwards. Copies: DE_HOLDOUT_TRIAL from its DDL; DE_HOLDOUT_ASSIGNMENT by COPY of the
@@ -162,6 +203,57 @@
 --     are not on this branch yet (plan Task 2 Step 3b, Task 3); the rehearsal used a copy with the
 --     columns of Step 3b (trial_id, campaign_id, setting, recorded_at NOT NULL; value, source,
 --     source_synced_at, ruling). The board cannot be created before the table exists.
+--
+-- PLAN TASK 7 REHEARSAL, 2026-10-04 ~06:40-07:10 UTC (LA date 2026-10-03), K8-K11 and K9b: rehearsal
+-- 2026-10-04 on TMP_HT2_ copies, all dropped afterwards. Copies: registry TMP_HT2_TRIAL from its DDL and
+-- the rows file (3 rows); assignment TMP_HT2_ASGN = COPY of DE_HOLDOUT_ASSIGNMENT (69 trial-1 rows) +
+-- the founding file (59 trial-2 rows, 12 HOLDOUT, assigned_at 2026-10-04 06:42:29 UTC); V_HOLDOUT_TRIAL
+-- / V_HOLDOUT_ARM from their files over the copies, pinned to 2026-10-05 (arm: 12 rows, all T2);
+-- V_HOLDOUT_READOUT and V_ENGINE_HEALTH from this branch over the copies (a baseline copy of 15 rows
+-- on 8 controls by the presence rule); this file rewritten with the names pointed at the copies and
+-- CURRENT_DATE('America/Los_Angeles') pinned to 2026-10-05. The three snapshots of the deploy state:
+--   T_ENGINE_PREFLIGHT  <- a CALL of SP_ENGINE_PREFLIGHT from this branch (comment lines stripped,
+--                          writes pointed at TMP_HT2_ copies, arm = the pinned copy) on a copy of the
+--                          latest FACT_ENGINE_PROPOSALS partition (2026-10-03, 406 rows); 37 holdout rows.
+--   FACT_PLAN_NEXT_WEEK <- the latest partition (as_of 2026-10-04, 356 rows in each of plans A and B) with holdout,
+--                          holdout_member and holdout_eligible_from recomputed from the pinned arm and
+--                          built_at = now. SP_BUILD_NEXT_WEEK_PLAN itself was not run: it carries the
+--                          judgment's holdout column, and the Task 5 rehearsal above measured the
+--                          judgment copy (holdout 10 = holdout_member 10, all T2).
+--   T_FAMILY_SEAT_REGISTER <- one read of V_FAMILY_SEAT_REGISTER from this branch over the pinned arm
+--                          (CREATE TABLE AS SELECT, 14,043.7 slot-s).
+--   deploy state (job g5_kr_POS_1791096554; the whole file 707.5 slot-s, 96.6 MB):
+--     K1 0 | K2 0 | K3 0 | K4 0 | K5 0 | K6 0 (12 bind, all T2)
+--     K8 0: 406 rows; 37 rows on 10 T2 controls, every one EXCLUDE + is_holdout + T2; 65 rows on 8
+--       T1-only controls, none held; no other campaign held; built after the founding insert.
+--     K9 0: 356 live-plan rows; 47 rows on 10 T2 controls, all holdout; T1-only and others 0.
+--     K9b 0: 163 rows naming a campaign; 31 rows on 9 T2 controls, all holdout; T1-only and others 0.
+--     K10 0: 1 row, NOT_YET, "not enough data yet — first readout 2027-02-09".
+--     K11 0: 17 of 17 tokens in the board's body; the c33 row GREEN with 15 feed ages (0.2-1.8 h).
+--     (K7 reads the live deployed bodies, not the copies, so it is not part of this rehearsal: 7 in
+--     this run, where the rewrite also renamed 'V_ENGINE_HEALTH' in K7's expected list; 6 in the
+--     negative-control run below, which did not, as measured above.)
+--   negative controls (expected / measured):
+--     K8  live T_ENGINE_PREFLIGHT (snapshot 2026-10-03, built 2026-10-04 05:27:54 UTC, before the
+--         copy's founding insert) against the copied assignment          > 0 / 103
+--         = 37 T2-control rows not EXCLUDE+held+T2 (35 not EXCLUDE) + 65 T1-only rows held + 1 stale
+--     K8  an empty preflight copy                                          2 / 2 (empty + no build stamp)
+--     K9  live latest partition (as_of 2026-10-04, built 05:30:18 UTC)   > 0 / 113 = 47 + 65 + 1
+--     K9  the deploy-state copy with built_at 2026-10-04 05:30:18 UTC (before the founding)  1 / 1
+--     K9b live T_FAMILY_SEAT_REGISTER (built 2026-10-04 05:36:11 UTC)    > 0 / 50 = 31 + 18 + 1
+--     K10 the readout's text with k on trial 1 (a registry copy holding trial 1's OPENED row only)
+--                                                                       >= 1 / 18 = 1 (the verdict
+--         names 2027-01-05) + 17 unit rows naming a unit outside T2 (of 61 CENSORED and 7
+--         PRE_WINDOW_CHANGE rows; the other 51 name campaigns trial 2 also holds)
+--     K10 the readout over an empty registry (no row at all)               1 / 1
+--     K11 the live, pre-deploy board                                      >= 1 / 18 = 17 tokens missing
+--         + feed ages printed 0 of 15
+--   before the deploy, the whole file on the live names stops at K1: "Not found: Table
+--   onyga-482313:OI.V_HOLDOUT_TRIAL" (run 2026-10-04 ~07:08 UTC).
+--   V_FAMILY_SEAT_REGISTER_acceptance.sql B09 (its holdout CTE now reads V_HOLDOUT_ARM) on the same
+--   register copy: 0; the old CTE (DE_HOLDOUT_ASSIGNMENT, all trials) on the copy 67 (over the live
+--   table or over the copy with trial 2's rows); the new CTE on the live T_FAMILY_SEAT_REGISTER 49;
+--   the old CTE on the live T_FAMILY_SEAT_REGISTER 0.
 -- =============================================================================================
 
 -- K1 one live trial, and it is T2
@@ -270,3 +362,169 @@ SELECT 'K7_no_reader_bypasses_arm' AS check_name,
        IFNULL(STRING_AGG(IF(n_refs != n_expected, FORMAT('%s %d (expected %d)', object_name, n_refs, n_expected), NULL),
                          '; ' ORDER BY object_name), 'every object on its count') AS detail
 FROM x;
+
+-- K8 the preflight bites on T2 only (T_ENGINE_PREFLIGHT, built after trial 2's founding insert)
+WITH c AS (
+  SELECT unit_id AS cid, LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN') AS t1,
+         LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2') AS t2
+  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT' GROUP BY 1),
+f AS (
+  SELECT MAX(assigned_at) AS founded_at FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+p AS (
+  SELECT p.campaign_id, p.verdict, COALESCE(p.is_holdout, FALSE) AS is_holdout, p.holdout_trial_id,
+         p.preflight_at, p.snapshot_date, COALESCE(c.t1, FALSE) AS t1, COALESCE(c.t2, FALSE) AS t2
+  FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT` p LEFT JOIN c ON c.cid = p.campaign_id),
+m AS (
+  SELECT COUNT(*) AS n_rows,
+         COUNTIF(t2 AND (verdict IS DISTINCT FROM 'EXCLUDE' OR NOT is_holdout
+                         OR holdout_trial_id IS DISTINCT FROM 'HOLDOUT-2026Q4-CAMPAIGN-T2')) AS t2_bad,
+         COUNTIF(t2 AND verdict IS DISTINCT FROM 'EXCLUDE') AS t2_not_excluded,
+         COUNTIF(t1 AND NOT t2 AND is_holdout) AS t1only_held,
+         COUNTIF(NOT t1 AND NOT t2 AND is_holdout) AS other_held,
+         COUNTIF(t2) AS t2_rows, COUNT(DISTINCT IF(t2, campaign_id, NULL)) AS t2_campaigns,
+         COUNTIF(t1 AND NOT t2) AS t1only_rows, COUNT(DISTINCT IF(t1 AND NOT t2, campaign_id, NULL)) AS t1only_campaigns,
+         MIN(preflight_at) AS built_at, MAX(snapshot_date) AS snap
+  FROM p)
+SELECT 'K8_preflight_bites_on_t2_only' AS check_name,
+       m.t2_bad + m.t1only_held + m.other_held + IF(m.n_rows = 0, 1, 0)
+       + IF(f.founded_at IS NULL OR m.built_at IS NULL OR m.built_at < f.founded_at, 1, 0) AS violations,
+       FORMAT('snapshot %t built %t (trial 2 founded %t)%s · %d rows · T2 control rows %d on %d campaigns, not EXCLUDE+is_holdout+T2 %d (of them not EXCLUDE %d) · T1-only control rows %d on %d campaigns, held %d · other held %d',
+              m.snap, m.built_at, f.founded_at,
+              IF(f.founded_at IS NULL OR m.built_at IS NULL OR m.built_at < f.founded_at,
+                 ' — BUILT BEFORE TRIAL 2 WAS FOUNDED: run after the first pass gated for T2', ''),
+              m.n_rows, m.t2_rows, m.t2_campaigns, m.t2_bad, m.t2_not_excluded,
+              m.t1only_rows, m.t1only_campaigns, m.t1only_held, m.other_held) AS detail
+FROM m, f;
+
+-- K9 the plan agrees (latest live FACT_PLAN_NEXT_WEEK partition, built after trial 2's founding insert)
+WITH c AS (
+  SELECT unit_id AS cid, LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN') AS t1,
+         LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2') AS t2
+  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT' GROUP BY 1),
+f AS (
+  SELECT MAX(assigned_at) AS founded_at FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+p AS (
+  SELECT p.campaign_id, COALESCE(p.holdout, FALSE) AS holdout, p.built_at, p.as_of,
+         COALESCE(c.t1, FALSE) AS t1, COALESCE(c.t2, FALSE) AS t2
+  FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` p LEFT JOIN c ON c.cid = p.campaign_id
+  WHERE p.is_live_plan
+    AND p.as_of = (SELECT MAX(as_of) FROM `onyga-482313.OI.FACT_PLAN_NEXT_WEEK` WHERE is_live_plan)),
+m AS (
+  SELECT COUNT(*) AS n_rows, COUNTIF(t2 AND NOT holdout) AS t2_not_holdout,
+         COUNTIF(t1 AND NOT t2 AND holdout) AS t1only_holdout, COUNTIF(NOT t1 AND NOT t2 AND holdout) AS other_holdout,
+         COUNTIF(t2) AS t2_rows, COUNT(DISTINCT IF(t2, campaign_id, NULL)) AS t2_campaigns,
+         MIN(built_at) AS built_at, MAX(as_of) AS as_of
+  FROM p)
+SELECT 'K9_plan_holdout_is_t2' AS check_name,
+       m.t2_not_holdout + m.t1only_holdout + m.other_holdout + IF(m.n_rows = 0, 1, 0)
+       + IF(f.founded_at IS NULL OR m.built_at IS NULL OR m.built_at < f.founded_at, 1, 0) AS violations,
+       FORMAT('live plan as_of %t built %t (trial 2 founded %t)%s · %d rows · T2 control rows %d on %d campaigns, not holdout %d · T1-only control rows holdout %d · other rows holdout %d',
+              m.as_of, m.built_at, f.founded_at,
+              IF(f.founded_at IS NULL OR m.built_at IS NULL OR m.built_at < f.founded_at,
+                 ' — BUILT BEFORE TRIAL 2 WAS FOUNDED: no book from tools/build_weekly_book.py until this reads 0', ''),
+              m.n_rows, m.t2_rows, m.t2_campaigns, m.t2_not_holdout, m.t1only_holdout, m.other_holdout) AS detail
+FROM m, f;
+
+-- K9b the register's snapshot agrees (T_FAMILY_SEAT_REGISTER, rebuilt after trial 2's founding insert)
+WITH c AS (
+  SELECT unit_id AS cid, LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN') AS t1,
+         LOGICAL_OR(trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2') AS t2
+  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT' GROUP BY 1),
+f AS (
+  SELECT MAX(assigned_at) AS founded_at FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+b AS (
+  SELECT MAX(creation_time) AS built_at FROM `onyga-482313.OI.INFORMATION_SCHEMA.TABLES`
+  WHERE table_name = 'T_FAMILY_SEAT_REGISTER'),
+r AS (
+  SELECT r.campaign_id, COALESCE(r.holdout, FALSE) AS holdout, COALESCE(c.t1, FALSE) AS t1, COALESCE(c.t2, FALSE) AS t2
+  FROM `onyga-482313.OI.T_FAMILY_SEAT_REGISTER` r LEFT JOIN c ON c.cid = r.campaign_id
+  WHERE r.campaign_id IS NOT NULL),
+m AS (
+  SELECT COUNT(*) AS n_rows, COUNTIF(t2 AND NOT holdout) AS t2_not_holdout,
+         COUNTIF(t1 AND NOT t2 AND holdout) AS t1only_holdout, COUNTIF(NOT t1 AND NOT t2 AND holdout) AS other_holdout,
+         COUNTIF(t2) AS t2_rows, COUNT(DISTINCT IF(t2, campaign_id, NULL)) AS t2_campaigns
+  FROM r)
+SELECT 'K9b_register_snapshot_holdout_is_t2' AS check_name,
+       m.t2_not_holdout + m.t1only_holdout + m.other_holdout + IF(m.n_rows = 0, 1, 0)
+       + IF(f.founded_at IS NULL OR b.built_at IS NULL OR b.built_at < f.founded_at, 1, 0) AS violations,
+       FORMAT('T_FAMILY_SEAT_REGISTER built %t (trial 2 founded %t)%s · %d rows naming a campaign · T2 control rows %d on %d campaigns, not holdout %d · T1-only control rows holdout %d · other rows holdout %d',
+              b.built_at, f.founded_at,
+              IF(f.founded_at IS NULL OR b.built_at IS NULL OR b.built_at < f.founded_at,
+                 ' — BUILT BEFORE TRIAL 2 WAS FOUNDED: run after SP_REFRESH_CUBE_TABLES next logs OK', ''),
+              m.n_rows, m.t2_rows, m.t2_campaigns, m.t2_not_holdout, m.t1only_holdout, m.other_holdout) AS detail
+FROM m, f, b;
+
+-- K10 the readout serves T2 (gate as H3: before first_readout one NOT_YET row naming T2's date, no number)
+WITH t AS (
+  SELECT first_readout FROM `onyga-482313.OI.V_HOLDOUT_TRIAL` WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2'),
+u AS (
+  SELECT DISTINCT unit_id FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
+  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN-T2' AND unit_type = 'CAMPAIGN'),
+ro AS (
+  SELECT r.state, r.unit_id, r.verdict, u.unit_id IS NOT NULL AS in_t2,
+         (r.holdout_n IS NOT NULL OR r.treated_n IS NOT NULL OR r.holdout_dollars_14d IS NOT NULL
+          OR r.treated_dollars_14d IS NOT NULL OR r.holdout_pre_dollars_14d IS NOT NULL
+          OR r.treated_pre_dollars_14d IS NOT NULL OR r.diff_raw_14d IS NOT NULL
+          OR r.diff_adjusted_14d IS NOT NULL OR r.band_95_14d IS NOT NULL OR r.mde_ex_ante_14d IS NOT NULL) AS has_number
+  FROM `onyga-482313.OI.V_HOLDOUT_READOUT` r LEFT JOIN u ON u.unit_id = r.unit_id),
+m AS (
+  SELECT COUNT(*) AS n, COUNTIF(state = 'NOT_YET') AS n_not_yet,
+         COUNTIF(state = 'NOT_YET' AND STRPOS(verdict, '2027-02-09') > 0) AS n_not_yet_t2,
+         COUNTIF(state = 'READY') AS n_ready,
+         COUNTIF(state IN ('CENSORED', 'PRE_WINDOW_CHANGE') AND NOT in_t2) AS n_alien,
+         COUNTIF(state != 'READY' AND has_number) AS n_number,
+         COUNTIF(state NOT IN ('NOT_YET', 'READY', 'CENSORED', 'PRE_WINDOW_CHANGE')) AS n_bad_state,
+         COUNTIF(state = 'CENSORED') AS n_cens, COUNTIF(state = 'PRE_WINDOW_CHANGE') AS n_pre,
+         MAX(IF(state = 'NOT_YET', verdict, NULL)) AS not_yet_verdict
+  FROM ro)
+SELECT 'K10_readout_serves_t2' AS check_name,
+       IF(CURRENT_DATE('America/Los_Angeles') < DATE '2027-02-09',
+          IF(m.n_not_yet = 1 AND m.n_not_yet_t2 = 1, 0, 1) + m.n_ready, 0)
+       + m.n_alien + m.n_number + m.n_bad_state
+       + IF((SELECT COUNT(*) FROM t) = 1 AND (SELECT first_readout FROM t) = DATE '2027-02-09', 0, 1) AS violations,
+       FORMAT('%d rows: NOT_YET %d (naming 2027-02-09: %d), READY %d, CENSORED %d, PRE_WINDOW_CHANGE %d · unit rows naming a unit outside T2 %d · rows carrying a number before the readout %d · unknown state %d · registry first_readout for T2 %s · verdict: %s',
+              m.n, m.n_not_yet, m.n_not_yet_t2, m.n_ready, m.n_cens, m.n_pre, m.n_alien, m.n_number, m.n_bad_state,
+              IFNULL((SELECT CAST(MAX(first_readout) AS STRING) FROM t), 'none'), IFNULL(m.not_yet_verdict, 'none')) AS detail
+FROM m;
+
+-- K11 the touch alarm and the feed term are on the board (the full test is HOLDOUT_INTEGRITY H4 / H5)
+WITH d AS (
+  SELECT view_definition AS body FROM `onyga-482313.OI.INFORMATION_SCHEMA.VIEWS` WHERE table_name = 'V_ENGINE_HEALTH'),
+need AS (
+  SELECT token FROM UNNEST([
+    "'LEDGER' AS kind", "'NEW_ENTITY' AS kind", "'CAMPAIGN_ATTR' AS kind", "'BASELINE_DIFF'",
+    'seen by the alarm, not censored by R9',
+    "procedure_name IN ('SP_RECORD_OBSERVED_CHANGES', 'SP_LOAD_DIM_KEYWORD', 'SP_LOAD_DIM_CAMPAIGN', 'SP_LOAD_DIM_AD_GROUP')",
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.keyword_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_keyword`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.targeting_clause_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.campaign_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.ad_group_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_ad_group_history`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`',
+    'MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_product_target`']) AS token),
+miss AS (
+  SELECT COUNT(*) AS n_need, COUNTIF(STRPOS(IFNULL(d.body, ''), need.token) = 0) AS n_missing,
+         STRING_AGG(IF(STRPOS(IFNULL(d.body, ''), need.token) = 0, need.token, NULL), ' | ') AS missing_txt
+  FROM need LEFT JOIN d ON TRUE),
+bm AS (  -- the board row, read once (each reference of the board is planned again)
+  SELECT COUNT(*) AS n_rows, COUNTIF(STRPOS(detail, 'FEED STALE') > 0) AS n_stale,
+         MAX(IFNULL(ARRAY_LENGTH(SPLIT(REGEXP_EXTRACT(detail, r'feed ages \(h\): (.*?) · not seen by any source'), ', ')), 0)) AS n_ages,
+         MAX(status) AS status,
+         MAX(REGEXP_EXTRACT(detail, r'feed ages \(h\): (.*?) · not seen by any source')) AS ages_txt
+  FROM `onyga-482313.OI.V_ENGINE_HEALTH` WHERE check_name = 'holdout_unit_changed')
+SELECT 'K11_touch_alarm_and_feed_on_board' AS check_name,
+       miss.n_missing + IF(bm.n_rows = 1, 0, 1) + bm.n_stale + IF(bm.n_ages = 15, 0, 1) AS violations,
+       FORMAT('deployed V_ENGINE_HEALTH: %d of %d tokens missing%s · board row holdout_unit_changed: %d row(s), status %s, feed ages printed %d of 15%s · ages (h): %s · the full test is HOLDOUT_INTEGRITY_acceptance.sql H4 and H5 (every row PASS)',
+              miss.n_missing, miss.n_need, IF(miss.n_missing > 0, CONCAT(' (', miss.missing_txt, ')'), ''), bm.n_rows,
+              IFNULL(bm.status, 'none'), bm.n_ages, IF(bm.n_stale > 0, ', FEED STALE', ''), IFNULL(bm.ages_txt, 'none')) AS detail
+FROM miss, bm;
