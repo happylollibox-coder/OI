@@ -103,6 +103,13 @@
 # 2026-10-05. Every copy was dropped afterwards (--rehearse-drop: 21 objects; INFORMATION_SCHEMA then held no
 # TMP_HT2_ table or routine). Live objects were only read: the seven replaced objects and DE_HOLDOUT_ASSIGNMENT
 # kept their last-modified times (all before 09:00 UTC 10-04) and the table its 69 rows.
+#   --check, 09:40:59-09:41:31, on the committed tree (34325f0), exit 1, as it must on LA 2026-10-04:
+#     preflight clean; drift 0 (all seven "= <pre-branch>:<file> (not yet replaced)"); change-log rows on the
+#     12 controls since LA 10-04: 0; the window:
+#       "REFUSE: the Los Angeles date is 2026-10-04, not 2026-10-05: the deploy runs on LA 2026-10-05 only"
+#       "REFUSE: the primary window has not opened: it opens when pass 2 of 2026-10-05 (starts ~07:35 UTC) has
+#        logged SP_SNAPSHOT_ENGINE_HEALTH (it has not started)"
+#       "CHECK: the deploy may NOT start now (preflight refusals 0, drift 0, window refused). Nothing was written."
 #   --rehearse, 09:03:33-09:30:35 (27 min, 86,119 slot-s in all), exit 0:
 #     live drift: the seven deployed bodies equal their pre-branch files.
 #     setup: the assignment copy (69 rows, all trial 1); the seven pre-images from the live DDL.
