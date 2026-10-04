@@ -1349,6 +1349,13 @@ hu_k4_diff AS (  -- BASELINE_DIFF: a changed value, or a setting on one side onl
   files the deploy sends is the holdout-t2 tip's text at HEAD, so a base-branch commit that was never
   deployed cannot ship with the merge. With `--base B` (the base branch edited and deployed a replaced
   object), a replaced object's file must be B's text plus the tip's edit, by a clean three-way merge.
+  Merges (added after the review of d2c8df1): a base-branch edit that holdout-t2 itself merged in (the
+  brief's workflow when a fix touches a file with newer base commits) passes both checks above, because
+  the tip then carries it and the per-file pre-branch text predates it. So the runbook refuses every
+  first-parent merge in `53326a5..holdout-t2` that changed one of the 14 files, unless `--base B` is given
+  and each merged-in parent is an ancestor of B; drift then requires B's text, the merged edit included,
+  deployed. A merge that changed a new-object or migration file is refused even with `--base`. Merging the
+  base branch into holdout-t2 is therefore never a remedy for an edit that is not proven deployed.
 - **When a pass has finished**, read from `LOG_PIPELINE_RUNS`. Each orchestrator call draws one `run_id`
   and logs one row per step when the step ends, OK or FAIL; nothing is logged when a step starts.
   - A pass has **finished** when its `run_id` has logged the orchestrator's last step,

@@ -23,7 +23,8 @@
 #                    K2-K4 (after the first pass that ran SP_ASSIGN_HOLDOUT). Read-only.
 #   --base REF       the pre-branch version of every replaced file (default: per file, the parent of the first
 #                    commit in 53326a5..holdout-t2 that touched it; = 53326a5 for all seven today). Only when the
-#                    base branch edited AND deployed a replaced object after the cut (FOREIGN EDITS below).
+#                    base branch edited AND deployed a replaced object after the cut, whether HEAD or holdout-t2
+#                    carries that edit by a merge (FOREIGN EDITS and MERGES below).
 #   --tip REF        the holdout-t2 tip that must be merged into HEAD, and whose text the deploy sends (default
 #                    holdout-t2).
 #
@@ -67,7 +68,8 @@
 # is re-read from INFORMATION_SCHEMA after the write and compared with the file (bodies with comments and
 # whitespace removed; tables by their columns).
 #   preflight  config.yaml parses; HEAD contains the holdout-t2 tip and no deployed file has an uncommitted
-#              change (deploy mode); FOREIGN EDITS: every file the deploy sends is the tip's text (below);
+#              change (deploy mode); FOREIGN EDITS: every file the deploy sends is the tip's text, and MERGES:
+#              no merge into the tip carries a base-branch edit to one of them that is not proven deployed (below);
 #              the presence-rule block of c33 = the baseline file's = K12's; the HOLDOUT_INTEGRITY paste =
 #              c33's text; the 10-04 change-log rows on the 12 controls (INFO, plan Task 8 "one caution");
 #              DRIFT of all seven replaced objects (below).
@@ -93,8 +95,8 @@
 # comments and whitespace removed. Equal: the DDL is saved to .tmp/holdout_t2_predeploy/<name>.ddl.sql
 # (never overwritten; the rollback restores from there) and the object is replaced. Equal to this deploy's
 # file: already replaced by an earlier run, skipped. Anything else: STOP, printing the difference. If the
-# base branch changed one of these objects after holdout-t2 was cut, deployed that change and the merge
-# carries it, re-run with --base <the base branch commit before the merge>.
+# base branch changed one of these objects after holdout-t2 was cut, deployed that change and a merge
+# carries it, re-run with --base <the merged base-branch commit, or a later one>.
 #
 # FOREIGN EDITS (review of Task R, 2026-10-04). Drift proves only that the deployed body is the pre-branch
 # file; the deploy sends HEAD's file, and HEAD is the merged checkout, where other sessions commit. A
@@ -107,7 +109,23 @@
 #                    then requires deployed, plus the tip's edit and nothing else. The 7 new-object and
 #                    migration files must still equal the tip's (no deployed body vouches for an edit to them).
 # Otherwise it prints the foreign diff and STOPs (--deploy), REFUSEs (--check) or warns (--rehearse). The
-# remedy is a reviewed edit on holdout-t2, or --base when the base branch's edit is proven deployed.
+# remedy is to take the edit out of HEAD, or to make it on holdout-t2 by its own reviewed commit, or --base when
+# the base branch's edit is proven deployed. Merging the base branch into holdout-t2 is NOT a remedy: it only
+# moves the edit into the tip, where MERGES (next) refuses it unless that edit is proven deployed.
+#
+# MERGES (review of d2c8df1, 2026-10-04). The check above compares HEAD with the tip, so it cannot see a
+# base-branch edit E that holdout-t2 itself merged in (the brief's workflow when a later fix touches a file with
+# newer base commits): HEAD's file = the tip's, which carries E. Drift cannot see it either: base_ref_for's
+# pre-branch text is the parent of the oldest commit in 53326a5..holdout-t2 that touched the file, which predates
+# E, so the deployed pre-E body reads "(not yet replaced)" and E ships unproven. So preflight (git only) lists
+# the first-parent merges of the tip (git rev-list --first-parent --merges 53326a5..<tip>) and, for each merge M
+# whose result differs from M^1 in one of the 14 files (git diff --quiet M^1 M -- FILES fails), refuses:
+#   without --base   always (STOP / REFUSE / warn, as above), printing M's diff on those files;
+#   with --base B    unless every merged-in parent (M^2, ...) is an ancestor of B (git merge-base
+#                    --is-ancestor). Then the tip already holds B's ancestors' text, FOREIGN EDITS' merge base is
+#                    B itself (or the tip's last merged base commit when B is later), so HEAD must be the tip's
+#                    text plus B's later edits, and drift requires B's text, E included, deployed.
+#   always           when M changed one of the 7 new-object or migration files: no deployed body vouches for it.
 #
 # AFTER THE RUN (plan Task 8, Task 9). K8 and K9b pass only after the next pass (pass 3 of 10-05 in the
 # primary window, pass 1 of 10-06 in the fallback); K9 only after pass 1 of 10-06 (~05:30 UTC): run
@@ -195,6 +213,47 @@
 #   the runbook is not a file the deploy sends), 10:08:20-10:08:52: "foreign edits: none; the 14 files the deploy
 #   sends are holdout-t2's text"; preflight refusals 0, drift 0 (all seven = pre-branch), change-log rows on the
 #   12 controls 0, the window refused (LA 10-04), exit 1.
+#
+# MERGES, measured 2026-10-04 10:34-10:39 UTC (the check added after the review of d2c8df1). A `git clone
+# --shared` of this worktree in the scratchpad, its remote removed, scratch commits detached, the clone's own
+# holdout-t2 ref moved onto them where said, this runbook copied in uncommitted (the clone deleted afterwards).
+# "stub bq" as above. No TMP_HT2_ object was made; the real-bq runs are --check (read-only).
+#   B = a base commit on 53326a5 (V_FAMILY_SEAT_REGISTER kwfeed COALESCE(state, '') -> '?'); M = B merged into
+#   the tip d2c8df1 (clean); holdout-t2 := M; HEAD = M. The case the review found:
+#     d2c8df1's runbook, --deploy (stub bq)   "foreign edits: none; the 14 files the deploy sends are holdout-t2's
+#                                             text", went on to its first bq call: the merged edit would ship
+#     --deploy (stub bq)                      "FOREIGN MERGE: M ... no --base", B's line printed, STOP, 0 bq calls
+#                                             (also with --tip HEAD on the tip left at d2c8df1)
+#     --check (stub bq)                       "REFUSE: 1 merge(s) into holdout-t2 carry a base-branch edit ..."
+#     --rehearse (stub bq)                    "WARNING (rehearsal): 1 merge(s) ...", went on
+#     --check (real bq) 10:35:42-10:36:14     that REFUSE, while drift read V_FAMILY_SEAT_REGISTER "= 1d0fb90:...
+#                                             (not yet replaced)" (blind to the merge); "preflight refusals 1,
+#                                             drift 0", exit 1
+#     --deploy --base 53326a5 (stub bq)       STOP, "its merged-in parent B is not an ancestor of --base 53326a5"
+#     --deploy --base B (stub bq)             "merge M ... its merged-in parent(s) are in --base B"; "foreign
+#                                             edits: none"; went on to its first bq call
+#     --check --base B (real bq) 10:36:24-10:36:55  foreign edits none; "V_FAMILY_SEAT_REGISTER: DRIFT against B"
+#                                             (B's kwfeed line was never deployed); "preflight refusals 0, drift 1",
+#                                             exit 1. So the merged, undeployed edit stops either way.
+#   B2 = a later base commit on B (V_ENGINE_HEALTH c10 AMBER 262144 * 0.70 -> 0.65), merged into M (clean);
+#   holdout-t2 := that merge. No --base: STOP naming both merges. --base B: STOP (B2 is not an ancestor of B).
+#   --base B2: both merges pass, foreign edits none, first bq call.
+#   B3 = a base commit on B2 (SP_ENGINE_PREFLIGHT line 1), holdout-t2 merged into B3 (HEAD, clean): --base B3
+#   passes; --base B2 STOP (FOREIGN EDIT: SP_ENGINE_PREFLIGHT at HEAD is not B2's text plus holdout-t2's edit);
+#   no --base STOP (the file and both merges).
+#   a base commit outside the 14 files (a new scratch file) merged into the tip: --deploy (stub bq) "foreign
+#   edits: none; ... and no merge into holdout-t2 since 53326a5 changed them", first bq call.
+#   a side commit S on the tip editing V_HOLDOUT_ARM.sql, merged --no-ff into the tip: --deploy STOP without
+#   --base and with --base S ("it changed a new-object or migration file"), 0 bq calls; --check REFUSE.
+#   the earlier controls re-run with this runbook: NC-A (SP_ASSIGN_HOLDOUT c_every 5 -> 4 committed on the tip)
+#   --deploy STOP 0 calls, --check REFUSE, --rehearse WARNING, --base 53326a5 STOP; HEAD = the tip merged into B
+#   (the earlier base path): no --base STOP 0 calls, --base B passes, --base 53326a5 STOP.
+#   positive control: --check in this worktree, HEAD d2c8df1 = holdout-t2 (this edit uncommitted; the runbook is
+#   not a file the deploy sends), 10:38:46-10:39:17: "foreign edits: none; the 14 files the deploy sends are
+#   holdout-t2's text, and no merge into holdout-t2 since 53326a5 changed them"; preflight refusals 0, drift 0
+#   (all seven = pre-branch), change-log rows on the 12 controls 0, the window refused (LA 10-04), exit 1.
+#   Not covered: a base commit put on holdout-t2's first-parent line WITHOUT a merge (a rebase or cherry-pick)
+#   reads as holdout-t2's own edit. The brief's workflow is a merge; review any such commit as this deploy's.
 # =============================================================================================
 set -euo pipefail
 
@@ -265,7 +324,9 @@ $REPLACED_FILES
 $ACC $HI $FSR $TOOL $MIG/2026-10-05_holdout_t2_lib.sh
 tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py"
 
-# base_ref_for FILE: the commit holding FILE's pre-branch version
+# base_ref_for FILE: the commit holding FILE's pre-branch version. The per-file default predates any base-branch
+# edit that a merge brought into $TIP, so it is right only while no such merge changed the 14 files: preflight
+# (foreign_merges) refuses one unless --base is given, and with --base this returns --base for every file.
 base_ref_for() {
   local first
   if [ -n "$BASE_OVERRIDE" ]; then printf '%s' "$BASE_OVERRIDE"; return; fi
@@ -355,6 +416,51 @@ foreign_one() {   # FILE new|replaced -> 0 when HEAD's text is the reviewed text
   return 1
 }
 
+# MERGES (review of d2c8df1): a base-branch edit merged INTO $TIP passes foreign_one (HEAD's file = the tip's,
+# which carries it) and drift (base_ref_for's pre-branch text predates it). So every first-parent merge M in
+# $BRANCH_BASE..$TIP whose result differs from M^1 in one of the 14 files is refused, unless --base B is given
+# and every merged-in parent (M^2, ...) is an ancestor of B: then foreign_one's merge base is B (or the last
+# merged base commit, when B is later), and drift requires B's text, which carries the merged edit, deployed.
+# A merge that changed a new-object or migration file is refused even with --base (no deployed body vouches).
+FOREIGN_MERGES=0
+foreign_merges() {
+  local m p parents subj nchg bad merges
+  FOREIGN_MERGES=0
+  git merge-base --is-ancestor "$BRANCH_BASE" "$TIP" || die "$TIP does not contain the branch point $BRANCH_BASE"
+  merges=$(git rev-list --first-parent --merges "$BRANCH_BASE..$TIP") || die "git rev-list --first-parent --merges $BRANCH_BASE..$TIP failed"
+  for m in $merges; do
+    # shellcheck disable=SC2086
+    git diff --quiet --no-ext-diff "$m^1" "$m" -- $NEW_FILES $REPLACED_FILES && continue
+    parents=$(git rev-list --parents -n 1 "$m" | cut -d' ' -f3-)
+    subj=$(git log -1 --format=%s "$m")
+    # shellcheck disable=SC2086
+    nchg=$(git diff --name-only --no-ext-diff "$m^1" "$m" -- $NEW_FILES $REPLACED_FILES | wc -l | tr -d ' ')
+    bad=""
+    # shellcheck disable=SC2086
+    if ! git diff --quiet --no-ext-diff "$m^1" "$m" -- $NEW_FILES; then
+      bad="it changed a new-object or migration file, which no deployed body vouches for (refused even with --base)"
+    elif [ -z "$BASE_OVERRIDE" ]; then
+      bad="no --base: nothing proves the merged-in edit deployed"
+    else
+      for p in $parents; do
+        git merge-base --is-ancestor "$p" "$BASE_OVERRIDE" \
+          || bad="${bad:+$bad; }its merged-in parent $(git rev-parse --short "$p") is not an ancestor of --base $BASE_OVERRIDE"
+      done
+    fi
+    if [ -z "$bad" ]; then
+      log "  merge $(git rev-parse --short "$m") ($subj) changed $nchg of the 14 files; its merged-in parent(s) are in --base $BASE_OVERRIDE, whose text drift must find deployed"
+      continue
+    fi
+    FOREIGN_MERGES=$((FOREIGN_MERGES + 1))
+    log "  FOREIGN MERGE: $(git rev-parse --short "$m") ($subj), merged-in parent(s) $(for p in $parents; do git rev-parse --short "$p"; done | tr '\n' ' ')brought $nchg of the 14 files' edits into $TIP: $bad. Its diff on them (git diff $(git rev-parse --short "$m")^1 $(git rev-parse --short "$m") -- FILES):"
+    # shellcheck disable=SC2086
+    git diff --no-ext-diff "$m^1" "$m" -- $NEW_FILES $REPLACED_FILES > "$WORK/foreign_merge_$(git rev-parse --short "$m").diff" || true
+    sed -n '1,200p' "$WORK/foreign_merge_$(git rev-parse --short "$m").diff" | sed 's/^/    /' | tee -a "$LOG" >&2 || true
+    [ "$(wc -l < "$WORK/foreign_merge_$(git rev-parse --short "$m").diff")" -le 200 ] \
+      || log "    (first 200 lines; the whole diff is $WORK/foreign_merge_$(git rev-parse --short "$m").diff)"
+  done
+}
+
 foreign_all() {
   local f nf=0 nfiles nnew
   if [ -n "$BASE_OVERRIDE" ]; then
@@ -364,23 +470,35 @@ foreign_all() {
   fi
   for f in $NEW_FILES; do foreign_one "$f" new || nf=$((nf + 1)); done
   for f in $REPLACED_FILES; do foreign_one "$f" replaced || nf=$((nf + 1)); done
+  foreign_merges
   # shellcheck disable=SC2086
   nfiles=$(printf '%s\n' $NEW_FILES $REPLACED_FILES | wc -l | tr -d ' ')
   # shellcheck disable=SC2086
   nnew=$(printf '%s\n' $NEW_FILES | wc -l | tr -d ' ')
-  if [ "$nf" = 0 ]; then
+  if [ "$nf" = 0 ] && [ "$FOREIGN_MERGES" = 0 ]; then
     if [ -z "$BASE_OVERRIDE" ]; then
-      log "  foreign edits: none; the $nfiles files the deploy sends are $TIP's text"
+      log "  foreign edits: none; the $nfiles files the deploy sends are $TIP's text, and no merge into $TIP since $BRANCH_BASE changed them"
     else
-      log "  foreign edits: none; the $nnew new-object and migration files are $TIP's text, the $((nfiles - nnew)) replaced objects' files $BASE_OVERRIDE's text plus $TIP's edit (drift must find $BASE_OVERRIDE's text deployed)"
+      log "  foreign edits: none; the $nnew new-object and migration files are $TIP's text, the $((nfiles - nnew)) replaced objects' files $BASE_OVERRIDE's text plus $TIP's edit, and every merge into $TIP that changed them merged an ancestor of $BASE_OVERRIDE (drift must find $BASE_OVERRIDE's text deployed)"
     fi
     return
   fi
   case $MODE in
-    deploy) die "$nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above): deploy reviewed text only. Put the edit on $TIP, or, if the base branch made AND deployed it, re-run with --base <that base-branch commit>" ;;
-    check) log "  REFUSE: $nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above)"
-           CHECK_REFUSALS=$((CHECK_REFUSALS + 1)) ;;
-    *) log "  WARNING (rehearsal): $nf of the $nfiles files differ from $TIP (above)" ;;
+    deploy)
+      [ "$nf" = 0 ] || log "  $nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above). Take the edit out of HEAD, or make it on $TIP by its own reviewed commit; merging the base branch into $TIP is NOT a remedy (MERGES refuses a merged-in edit unless proven deployed)"
+      [ "$FOREIGN_MERGES" = 0 ] || log "  $FOREIGN_MERGES merge(s) into $TIP carry a base-branch edit to the files the deploy sends that is not proven deployed (above). Merging the base branch is not a remedy for an undeployed edit: deploy from a tip without that merge"
+      die "foreign edits: $nf file(s), $FOREIGN_MERGES merge(s) (above): deploy reviewed text only. If the base branch made AND deployed the edit, re-run with --base <a base-branch commit containing it and every merged-in parent>: drift then requires that commit's text deployed" ;;
+    check)
+      if [ "$nf" -gt 0 ]; then
+        log "  REFUSE: $nf of the $nfiles files the deploy sends carry an edit $TIP did not make (above)"
+        CHECK_REFUSALS=$((CHECK_REFUSALS + 1))
+      fi
+      if [ "$FOREIGN_MERGES" -gt 0 ]; then
+        log "  REFUSE: $FOREIGN_MERGES merge(s) into $TIP carry a base-branch edit to the files the deploy sends that is not proven deployed (above)"
+        CHECK_REFUSALS=$((CHECK_REFUSALS + 1))
+      fi ;;
+    *) [ "$nf" = 0 ] || log "  WARNING (rehearsal): $nf of the $nfiles files differ from $TIP (above)"
+       [ "$FOREIGN_MERGES" = 0 ] || log "  WARNING (rehearsal): $FOREIGN_MERGES merge(s) into $TIP carry a base-branch edit not proven deployed (above)" ;;
   esac
 }
 
