@@ -72,7 +72,11 @@ Boundaries, each deliberate:
   this one explains why the campaign will not move for four months.
 - **`TREATED` campaigns get no special handling of any kind.** Treatment *is* the status quo.
 - It reuses the existing `EXCLUDE` verdict on purpose, so `DoPage.exportBulksheet`'s refusal
-  enforces it with **no dashboard change**.
+  enforces it for the engine's own rows. That refusal matches (campaign, keyword-or-term, lever, value)
+  on BID, BUDGET and NEGATE only, so it never held a hand-queued or Weekly Run item, a `STOP_TARGET`, an
+  `ADD_PRODUCT_AD` or a campaign pause, enable or rename. Since 2026-10-04 (review of holdout-t2) the
+  export also holds **every** queued item on a campaign the `HoldoutArm` cube lists (`V_HOLDOUT_ARM`),
+  before this gate, and fails closed when that read errors (`architecture/HOLDOUT.md` §6 #2).
 - `T_ENGINE_PREFLIGHT` publishes `is_holdout` / `holdout_trial_id` so an audit can tell a HOLDOUT
   exclusion from a CLAIM or COLLISION one without re-deriving either.
 

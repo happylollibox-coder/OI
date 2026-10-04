@@ -148,6 +148,8 @@ of the table. They are snapshots of two readers, and they keep the old holds unt
 | 15 | `T_FAMILY_SEAT_REGISTER` (snapshot of reader 6) | `CREATE OR REPLACE` from `V_FAMILY_SEAT_REGISTER` by `SP_REFRESH_CUBE_TABLES` (Refresh Task 21), once per pass. Read by `V_DAILY_BRIEF`, `V_RUN_SUMMARY`, the `seat_*` board checks, `SP_SNAPSHOT_ENGINE_HEALTH` and `cube/schema/SeatRegister.js` | from the deploy until that step next logs OK, it still marks T1's controls `holdout` and not T2's | none: the next rebuild inherits Task 5's fix. Check it after that pass (Task 8) |
 | 16 | `FACT_PLAN_NEXT_WEEK` (snapshot of reader 7) | a partition per night, written by `SP_BUILD_NEXT_WEEK_PLAN` from `V_PLAN_WINDOW_JUDGMENT`. Its `holdout` column is read by `tools/build_weekly_book.py` (`AND NOT c.holdout`), `SP_APPEND_SEAT_REQUEST` (copied into `FACT_SEAT_REQUEST`) and `V_PREDICTION_LEDGER` | from the deploy until the first partition written after it, the latest partition holds T1's controls and not T2's. **A book built from it in that gap would carry T2 controls.** That first partition is `as_of` 2026-10-06, written by pass 1 of 10-06 (~05:30 UTC), in either deploy window. `as_of` is the New York date (v27.160), and pass 1 of 10-05 (01:00 New York, 22:00 LA 10-04) writes `as_of` 10-05 before the deploy. From LA midnight that night is FROZEN (v27.170): passes 2 and 3 of 10-05 log OK and write nothing, so "the step logged OK" does not mean "a partition was written" (measured 10-04: pass 2's step logged OK in 1 s at 08:09:42 UTC, and the `as_of` 10-04 partition kept `built_at` 05:30:18). **No weekly book can be built on 10-05**, none before that pass (Task 8). Corrected 2026-10-04: this row first said "until the plan step next logs OK" | none: the first partition written after the deploy (`as_of` 10-06) inherits Task 5's fix. K9 runs on it, after pass 1 of 10-06 (Task 8, Task 9) |
 | 17 | `tools/build_weekly_book.py` `MEND_SQL` (the mend, arm 2; added 2026-10-04, review of holdout-t2) | none: it trims bids on keywords in every losing campaign, on by default (off only with `--no-mend`). It never read a holdout source; the plan's `holdout` column reaches only the BUDGET rows, and `skip_keys` holds only the reprice book's executable rows, so a control the reprice tool refused was priced here | measured 2026-10-04 on the 12 T2 controls: 5 trims on 5 keywords in 3 controls (`537046793426450`, `230219410635024`, `271009556929636`), 6 controls counted as losers. c18 does not read `weekly_book_*` batches and c33 turns RED only after the upload, so the first book after the deploy would have changed bids on T2 controls inside the window | `LEFT JOIN V_HOLDOUT_ARM h` and `AND NOT (h.cid IS NOT NULL AND CURRENT_DATE('America/Los_Angeles') >= h.gate_from)`, the three tools' form; the held rows go to the Refused sheet (`MEND_HELD_SQL`, the gate inverted). K7b, K13 |
+| 18 | `dashboard-react/src/pages/DoPage.tsx` `exportBulksheet` (the Do page's export; added 2026-10-04, review of 648f201) | none: it refused an item only when `T_ENGINE_PREFLIGHT` held an `EXCLUDE` row on the same (campaign, keyword-or-term, lever) with the same value (±0.005), for BID, BUDGET and NEGATE only. `STOP_TARGET`, `ADD_PRODUCT_AD` and campaign pause, enable and rename were never gated, and the gate failed OPEN when the cube errored | every item queued on a control by any page reached the sheet unless the engine happened to have judged that exact row. Measured 2026-10-04 on T1's held controls: `T_WEEKLY_RUN_*` offered 6 budget actions, 16 bid moves, 1 `STOP_TARGET` and 35 negates on 6 controls; T1's in-window contamination was 25 observed changes, none logged (the review's measurements) | a campaign-level hold: every queued item, any action, on a campaign the `HoldoutArm` cube lists (`cube/schema/HoldoutArm.js`, `V_HOLDOUT_ARM` from the assignment to `gate_to`) is refused before the preflight gate; the arm read fails CLOSED (every item on an existing campaign refused). **Ships with the next dashboard and cube deploy, after step 1 of Task 8 (the view must exist first). Until it is live: nothing is queued on the 12 campaigns from the Do page** (Task 8) |
+| 19 | the Weekly Run page (`V_WEEKLY_RUN_CAMPAIGN` / `_KEYWORD` / `_NEGATIVE`, snapshotted as `T_WEEKLY_RUN_*`; added 2026-10-04, review of 648f201) | none: no holdout logic (`INFORMATION_SCHEMA` and the repository files have no `HOLDOUT` mention) | it offers budgets, bids, `STOP_TARGET` and negates on every control, and queues them into the Do page (row 18) | none in the views (not in this deploy). Row 18's hold refuses them at export; **until it is live, nothing from the Weekly Run page is queued on the 12 campaigns** (Task 8) |
 
 **Double counting.** Only the readout aggregates the arms, and it filters on one `trial_id`. Every other
 reader takes a set of campaigns (`GROUP BY` campaign), so a second trial cannot double any number. The
@@ -228,7 +230,8 @@ left pending. The new touch alarm (§2.7) turns RED on it anyway. The runbook (T
 sources: no book is uploaded on 10-05, because none can be built after the deploy that day (the plan
 partition a book reads is first rebuilt on the deployed code by pass 1 of 10-06, Task 8; corrected
 2026-10-04 from "upload only a book built after the deploy, or none"). Sunday's Weekly Run upload on 10-04
-comes before the assignment and is fine.
+comes before the assignment and is fine **if it is uploaded on LA 10-04**. A book built before step 4 of
+Task 8 is never uploaded after LA 10-04, whatever day it would go up (Task 8, review of 648f201).
 
 ### 2.4 The eligible population, with the same exclusions re-applied on the design date
 
@@ -1470,7 +1473,19 @@ Task 4.
 - **Uploads on 10-05: none.** No weekly book can be built after the deploy on 10-05 (above: K9 cannot
   read 0 before pass 1 of 10-06). Corrected 2026-10-04: the first version said "only a book built
   after the deploy, by the first gated pass or later, or none", and on 10-05 no such book can exist.
-  Sunday's Weekly Run upload on 10-04 comes before the assignment and is fine.
+  Sunday's Weekly Run upload on 10-04 comes before the assignment and is fine **only if it goes up on
+  LA 10-04**.
+- **A book built before step 4 is never uploaded after LA 10-04** (amended 2026-10-04, review of
+  648f201). It is discarded (`--supersede BATCH`, any batch prefix) and rebuilt after K9 and K13 read 0.
+  This covers the 10-04 Weekly Run book if its upload slips past Sunday, and any reprice, seat or weekly
+  book built on LA 10-05 before the deploy. Such a book is built by the old code, which holds T1's
+  controls and not T2's: the 10-04 mend alone trims 5 keywords on 3 T2 controls (§1 row 17). Nothing else
+  catches it before upload: c18 counts only `seat_moves_` / `reprice_book_` rows built between `gate_from`
+  and `gate_to` (a 10-04 build is before `gate_from`, and `weekly_book_` batches are never counted), and
+  c33 fires only after Amazon syncs the change. So the runbook's preflight lists every `PENDING_UPLOAD`
+  change-log row on the 12 controls, any batch prefix, any build date, and **STOPs** while one is left
+  (`--check` refuses); each batch is either marked uploaded (it went up on or before LA 10-04) or
+  labelled `SUPERSEDED_NEVER_UPLOADED`. `--post-pass` repeats it on every `V_HOLDOUT_ARM` campaign.
   - **One caution for that upload.** An SB keyword change is dated by the sync that first saw it, up to
     a day late. A 10-04 change to an SB control's keywords can therefore be dated 10-05.
     `537046793426450` carries 83 SB keywords, 12 of them enabled; `71317833591283` carries 1.
@@ -1483,6 +1498,28 @@ Task 4.
   `CURRENT_DATE('America/Los_Angeles') >= 2026-10-06`, so a book built late on LA 10-05 would price
   them. They no longer carry T2 controls. **The mend (arm 2) has its own gate since 2026-10-04 (§1 row
   17, K13). A book built from a checkout without it must be built with `--no-mend`.**
+  - **Books are built from `feat/campaign-first-strategy` (the `/Users/ori/Develop/OI` checkout), so
+    that branch must contain the holdout-t2 tip before the deploy** (amended 2026-10-04, review of
+    648f201). The runbook's `--book-branch` (default `feat/campaign-first-strategy`) STOPs `--deploy` and
+    `--post-pass` (and `--check` refuses) unless `git merge-base --is-ancestor <tip> <book-branch>` holds
+    and that checkout's four tools equal the branch's committed text; K7b and K13 read the tools as
+    committed on that branch (`git show`), never the working tree the runbook runs in. Before, a run from
+    the holdout-t2 worktree passed K7b and K13 on its own tools while the book checkout held 53326a5's,
+    which hold T1's 14 controls (10 of them T2 TREATED units) for good and have an ungated mend.
+  - **Where the merge happens.** In `/Users/ori/Develop/OI` itself: `git merge --no-ff holdout-t2` on
+    `feat/campaign-first-strategy`. Git refuses ("local changes would be overwritten") if a file the
+    merge touches is uncommitted there, as `config.yaml` was on 10-04: coordinate with that session to
+    commit it first, then merge. Never move the branch ref from another worktree (`git update-ref`,
+    `git branch -f`): the main checkout would keep the old tools in its working tree, as uncommitted
+    reverts of the merge, and the books would be built from them (the runbook's worktree check refuses
+    that state). Merging in a clean scratch worktree on a detached HEAD and then `git merge --ff-only
+    <that commit>` in the main checkout is equivalent.
+- **The Do page and the Weekly Run page** (§1 rows 18, 19; amended 2026-10-04, review of 648f201). Until
+  the Do page's campaign-level hold (`HoldoutArm`) is deployed, **nothing is queued on the 12 campaigns
+  from the Do page or the Weekly Run page**, on any lever: their export gate refused only matching
+  engine `EXCLUDE` rows, never `STOP_TARGET`, `ADD_PRODUCT_AD` or campaign pause, enable and rename, and
+  it failed open. The hold ships with the next dashboard and cube deploy, after step 1 (the view must
+  exist first; before it does, the hold fails closed and refuses every item on an existing campaign).
 - **Hand changes:** none to the 12 campaigns in §3.1, from the insert to 2027-01-26. The alarm cannot
   see every kind of change (§2.7, "What no source can see").
 
@@ -1536,8 +1573,12 @@ input doctored, and must read the stated count. `T1` = `'HOLDOUT-2026Q4-CAMPAIGN
    (§2.7). Task 6, widened by the 2026-10-04 amendment, must land with the rest, or ruling (1)'s
    safeguard is not there on day one. Even then it cannot see hand negatives or ads and creatives
    (§2.7).
-4. **No upload on 10-05 from a book built before the deploy, no book from `tools/build_weekly_book.py`
-   until K9 passes, and no hand change to a T2 control from the insert on.**
+4. **No upload on 10-05; no book built before step 4 uploaded after LA 10-04 (discard and rebuild it
+   after K9 and K13; the runbook STOPs on any `PENDING_UPLOAD` row on a control); no book from
+   `tools/build_weekly_book.py` until K9 passes; books only from `feat/campaign-first-strategy` once it
+   contains the holdout-t2 tip (`--book-branch`); nothing queued on a control from the Do page or the
+   Weekly Run page until the Do page's campaign-level hold is deployed; and no hand change to a T2
+   control from the insert on.**
 
 **Open, not blocking:**
 - **LolliME stock** (§3.3): a censor would leave 5 controls.

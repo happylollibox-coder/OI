@@ -27,6 +27,8 @@
 #                    carries that edit by a merge (FOREIGN EDITS and MERGES below).
 #   --tip REF        the holdout-t2 tip that must be merged into HEAD, and whose text the deploy sends (default
 #                    holdout-t2).
+#   --book-branch B  the branch the books are built from (default feat/campaign-first-strategy, the
+#                    /Users/ori/Develop/OI checkout). It must contain --tip (BOOK BRANCH below).
 #
 # ---------------------------------------------------------------------------------------------
 # THE WINDOW (plan Task 8). Los Angeles date 2026-10-05 (BigQuery's CURRENT_DATE('America/Los_Angeles')),
@@ -73,11 +75,13 @@
 # is re-read from INFORMATION_SCHEMA after the write and compared with the file (bodies with comments and
 # whitespace removed; tables by their columns).
 #   preflight  config.yaml parses; HEAD contains the holdout-t2 tip and no deployed file has an uncommitted
-#              change (deploy mode); FOREIGN EDITS: every file the deploy sends is the tip's text, and MERGES:
+#              change (deploy mode); BOOK BRANCH: the book branch contains the tip and its checkout's four
+#              tools are its committed text (below); FOREIGN EDITS: every file the deploy sends is the tip's text, and MERGES:
 #              no merge into the tip carries a base-branch edit to one of them that is not proven deployed (below);
 #              the presence-rule block of c33 = the baseline file's = K12's; the HOLDOUT_INTEGRITY paste =
 #              c33's text; the 10-04 change-log rows on the 12 controls (INFO, plan Task 8 "one caution");
-#              DRIFT of all seven replaced objects (below).
+#              every PENDING_UPLOAD change-log row on the 12 controls, any batch prefix, any build date
+#              (STOP; UPLOAD RULE below); DRIFT of all seven replaced objects (below).
 #   step 1     DE_HOLDOUT_TRIAL, DE_HOLDOUT_BASELINE (tables), V_HOLDOUT_TRIAL, V_HOLDOUT_ARM, the registry
 #              rows. K1, K2.
 #   step 2     the founding file (59 rows), then the baseline file. K3, K4, K5, K6, K12.
@@ -86,8 +90,8 @@
 #              outside trial 2 (what the next pass would append as LATE ARRIVALs).
 #   step 4     the register suite's pre-deploy baseline (merge-base text on the old register), then
 #              SP_ENGINE_PREFLIGHT, V_PLAN_WINDOW_JUDGMENT, V_FAMILY_SEAT_REGISTER. K7 (here exactly one
-#              object off its count: V_ENGINE_HEALTH 3, expected 1, until step 5), K7b (the three tools, and the
-#              weekly book's MEND_SQL: one V_HOLDOUT_ARM reference).
+#              object off its count: V_ENGINE_HEALTH 3, expected 1, until step 5), K7b (the four tools as
+#              committed on the book branch, and the weekly book's MEND_SQL there: one V_HOLDOUT_ARM reference).
 #   step 5     V_HOLDOUT_READOUT, V_ENGINE_HEALTH. K7 (all on count), K7b, K10, K11, K13 (the weekly book's mend
 #              on the trial's controls, its gate read as of LA 10-06: 0); HOLDOUT_INTEGRITY
 #              (every row PASS; ~18 min); V_FAMILY_SEAT_REGISTER_acceptance (no check that passed before
@@ -143,12 +147,51 @@
 #                    text plus B's later edits, and drift requires B's text, E included, deployed.
 #   always           when M changed one of the 7 new-object or migration files: no deployed body vouches for it.
 #
+# BOOK BRANCH (review of 648f201, MUST_FIX 3). The books are built in /Users/ori/Develop/OI, on
+# feat/campaign-first-strategy, not in the checkout this runbook runs in. A run from the holdout-t2 worktree
+# passed K7b and K13 on the worktree's tools while the book checkout held 53326a5's: a hold CTE of
+# MIN(eligible_from) over every trial with no end (trial 1's 14 controls held for good, 10 of them trial-2
+# TREATED units) and a mend with no holdout gate (5 trims on 3 trial-2 controls, measured 10-04). Every check
+# read 0 while both arms were contaminated from 10-06. So preflight and --post-pass (git only, before any
+# BigQuery read) require: git merge-base --is-ancestor <tip> <book-branch>; and, in every worktree that has the
+# book branch checked out, the four tools = the branch's committed text (git diff --quiet <book-branch> --).
+# K7b and K13 read the four tools as committed on the book branch (git show), never this working tree.
+# --deploy / --post-pass STOP, --check REFUSEs, --rehearse warns and reads the tip's committed tools.
+# WHERE THE MERGE HAPPENS: in /Users/ori/Develop/OI itself, `git merge --no-ff holdout-t2` on
+# feat/campaign-first-strategy, then run this runbook there. Git refuses ("local changes would be
+# overwritten") when a file the merge touches is uncommitted in that checkout, as config.yaml was on 10-04:
+# coordinate with that session to commit it first. Never move the branch ref from another worktree (git
+# update-ref / branch -f): that checkout would keep the old tools in its working tree as uncommitted reverts
+# and build books from them (the worktree check above refuses that state). Equivalent: merge in a clean scratch
+# worktree on a detached HEAD, then `git merge --ff-only <that commit>` in /Users/ori/Develop/OI.
+# Read 2026-10-04 ~14:30 UTC: feat/campaign-first-strategy = 31e08fd, 4 commits past 53326a5 (config.yaml and
+# learning files, none of the files this deploy sends); `git merge-tree --write-tree feat/campaign-first-strategy
+# holdout-t2` merges clean; the main checkout's uncommitted files (8, supply/plan pages, app.py,
+# deploy_all.sh, a spec) are none of holdout-t2's, config.yaml is clean there now.
+#
+# UPLOAD RULE (review of 648f201, MUST_FIX 1). A book built before step 4 is never uploaded after LA
+# 2026-10-04: it is discarded and rebuilt after K9 and K13 read 0. It was built by the old code, which holds
+# trial 1's controls and not trial 2's, and nothing else catches it before upload (c18 counts only
+# seat_moves_ / reprice_book_ rows built between gate_from and gate_to; weekly_book_ batches never; c33 fires
+# only after Amazon syncs the change). So preflight lists every PENDING_UPLOAD change-log row on the 12
+# controls (any batch prefix, any build date) and STOPs (--check: REFUSE; --rehearse: WARNING) until each
+# batch is either marked uploaded (it went up on or before LA 10-04: the building tool's --mark-uploaded) or
+# labelled SUPERSEDED_NEVER_UPLOADED (python3 tools/build_seat_moves_bulksheet.py --supersede BATCH, any
+# prefix). --post-pass repeats it on every V_HOLDOUT_ARM campaign.
+# THE DO PAGE (MUST_FIX 2). DoPage.exportBulksheet holds every queued item on a V_HOLDOUT_ARM campaign (cube
+# HoldoutArm, fail closed). It ships with the next dashboard + cube deploy, AFTER step 1 (the view must exist;
+# before it does the hold refuses every item on an existing campaign). Until it is live, nothing is queued on
+# the 12 campaigns from the Do page or the Weekly Run page (V_WEEKLY_RUN_* carry no holdout logic).
+#
 # AFTER THE RUN (plan Task 8, Task 9). K8 and K9b pass only after the next pass (pass 3 of 10-05 in the
 # primary window, pass 1 of 10-06 in the fallback); K9 only after pass 1 of 10-06 (~05:30 UTC): run
-# --post-pass then (it also runs K13). No upload on 10-05; no book from tools/build_weekly_book.py until K9 and
-# K13 read 0 AND the Los Angeles date is 10-06 (07:00 UTC 10-06): every tool's gate, the mend's included, binds
-# trial 2's own controls from CURRENT_DATE('America/Los_Angeles') >= 2026-10-06, and K9 can pass at ~22:30 LA
-# 10-05; no hand change to the 12 controls. HOLDOUT.md §9 becomes "running" on 10-06 (Task 9).
+# --post-pass then (it also runs K13 on the book branch's mend and the PENDING_UPLOAD check). No upload on
+# 10-05; no book built before step 4 uploaded after LA 10-04 (UPLOAD RULE); no book from
+# tools/build_weekly_book.py until K9 and K13 read 0 AND the Los Angeles date is 10-06 (07:00 UTC 10-06): every
+# tool's gate, the mend's included, binds trial 2's own controls from CURRENT_DATE('America/Los_Angeles') >=
+# 2026-10-06, and K9 can pass at ~22:30 LA 10-05; books only from the book branch; nothing queued on the 12
+# from the Do page or Weekly Run until the Do page's hold is live; no hand change to the 12 controls.
+# HOLDOUT.md §9 becomes "running" on 10-06 (Task 9).
 #
 # ---------------------------------------------------------------------------------------------
 # REHEARSED 2026-10-04 (UTC 09:03-09:39, LA date 2026-10-04), on OI.TMP_HT2_R_* copies with the dates pinned to
@@ -306,7 +349,7 @@
 # =============================================================================================
 set -euo pipefail
 
-usage() { sed -n '2,/^# ----/p' "$0" | sed 's/^# \{0,1\}//' | sed -n '1,30p'; }
+usage() { sed -n '2,/^# ----/p' "$0" | sed 's/^# \{0,1\}//' | sed -n '1,32p'; }
 
 MODE=""
 FROM_STEP=1
@@ -315,6 +358,7 @@ FROM_GIVEN=0
 BASE_OVERRIDE=""
 TIP=holdout-t2
 BRANCH_BASE=53326a5
+BOOK_BRANCH=feat/campaign-first-strategy
 while [ $# -gt 0 ]; do
   case $1 in
     --check) MODE=check ;;
@@ -326,6 +370,7 @@ while [ $# -gt 0 ]; do
     --to-step) TO_STEP=${2:?--to-step needs N}; shift ;;
     --base) BASE_OVERRIDE=${2:?--base needs a ref}; shift ;;
     --tip) TIP=${2:?--tip needs a ref}; shift ;;
+    --book-branch) BOOK_BRANCH=${2:?--book-branch needs a branch}; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac
@@ -397,6 +442,7 @@ preflight() {
   git rev-parse -q --verify "$TIP^{commit}" > /dev/null || die "--tip $TIP is not a commit here"
   git merge-base --is-ancestor "$TIP" HEAD || die "HEAD does not contain $TIP: merge holdout-t2 first"
   log "  HEAD contains $TIP ($(git rev-parse --short "$TIP"))"
+  book_branch
   # shellcheck disable=SC2086
   if ! git diff --quiet HEAD -- $FILES || [ -n "$(git ls-files --others --exclude-standard -- $FILES)" ]; then
     if [ "$MODE" = deploy ] || [ "$MODE" = check ]; then
@@ -551,17 +597,106 @@ foreign_all() {
   esac
 }
 
-# the change-log rows on trial 2's 12 controls since LA 2026-10-04 (plan Task 8, "one caution"): INFO
-upload_rows_info() {
-  local ids
-  ids=$(python3 - "$MIG/2026-10-05_holdout_t2_founding.sql" <<'PY'
+# BOOK BRANCH (review of 648f201, MUST_FIX 3). Books are built from the checkout of $BOOK_BRANCH
+# (/Users/ori/Develop/OI, default feat/campaign-first-strategy), not from the checkout this runbook runs in.
+# A run from the holdout-t2 worktree used to pass K7b and K13 on the worktree's own tools while the book
+# checkout still held 53326a5's: a hold on every trial's controls with no end (trial 1's 14, 10 of them
+# trial-2 TREATED units) and a mend with no holdout gate. So (git only, before any BigQuery read):
+#   - $BOOK_BRANCH must contain the $TIP tip (git merge-base --is-ancestor $TIP $BOOK_BRANCH);
+#   - every worktree that has $BOOK_BRANCH checked out builds from its working tree: the four tools there
+#     must equal $BOOK_BRANCH's committed text;
+#   - K7b and K13 read the four tools as committed on $BOOK_BRANCH (git show), never this working tree.
+# --deploy and --post-pass STOP, --check REFUSEs; --rehearse warns and reads $TIP's committed tools instead.
+BOOK_TOOL_FILES="tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py tools/build_weekly_book.py"
+BOOK_TOOLS=""   # $WORK/book_tools: the four tools as committed on TOOLS_REF
+TOOLS_REF=""
+book_branch() {
+  local bad="" wt f
+  git rev-parse -q --verify "$BOOK_BRANCH^{commit}" > /dev/null || die "--book-branch $BOOK_BRANCH is not a commit here"
+  if ! git merge-base --is-ancestor "$TIP" "$BOOK_BRANCH"; then
+    bad="$BOOK_BRANCH ($(git rev-parse --short "$BOOK_BRANCH")), the branch the books are built from, does not contain the $TIP tip ($(git rev-parse --short "$TIP")): its tools hold trial 1's controls with no end and its mend has no holdout gate. Merge $TIP into $BOOK_BRANCH first (header, BOOK BRANCH)"
+  else
+    while IFS= read -r wt; do
+      [ -n "$wt" ] || continue
+      # shellcheck disable=SC2086
+      if ! git -C "$wt" diff --quiet --no-ext-diff "$BOOK_BRANCH" -- $BOOK_TOOL_FILES; then
+        bad="${bad:+$bad; }the checkout $wt (on $BOOK_BRANCH) builds books from a working tree whose tools differ from $BOOK_BRANCH's committed text: $(git -C "$wt" diff --name-only --no-ext-diff "$BOOK_BRANCH" -- $BOOK_TOOL_FILES | tr '\n' ' ')"
+      fi
+    done <<< "$(git worktree list --porcelain | awk -v b="branch refs/heads/$BOOK_BRANCH" '/^worktree /{w=substr($0, 10)} $0 == b {print w}')"
+  fi
+  if [ -z "$bad" ]; then
+    TOOLS_REF=$BOOK_BRANCH
+    log "  book branch: $BOOK_BRANCH ($(git rev-parse --short "$BOOK_BRANCH")) contains $TIP, and its checkout's tools are its committed text; K7b and K13 read $BOOK_BRANCH's tools"
+  else
+    case $MODE in
+      deploy|postpass) die "$bad" ;;
+      check) log "  REFUSE: $bad"; CHECK_REFUSALS=$((CHECK_REFUSALS + 1)); TOOLS_REF=$BOOK_BRANCH ;;
+      *) log "  WARNING (rehearsal): $bad. K7b and K13 read $TIP's committed tools instead"; TOOLS_REF=$TIP ;;
+    esac
+  fi
+  BOOK_TOOLS=$WORK/book_tools
+  mkdir -p "$BOOK_TOOLS/tools"
+  for f in $BOOK_TOOL_FILES; do git show "$TOOLS_REF:$f" > "$BOOK_TOOLS/$f" || die "git show $TOOLS_REF:$f failed"; done
+}
+
+# the change-log rows on trial 2's 12 controls since LA 2026-10-04 (plan Task 8, "one caution"): INFO;
+# and every PENDING_UPLOAD row on them, whatever its batch prefix and build date: STOP (plan Task 8, "a book
+# built before step 4 is never uploaded after LA 10-04"; review of 648f201, MUST_FIX 1)
+t2_control_ids() {
+  python3 - "$MIG/2026-10-05_holdout_t2_founding.sql" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 ids = re.findall(r"\('(\d+)', '(?:[^'\\]|\\.)*', 'HOLDOUT', ", s)
 assert len(ids) == 12, len(ids)
 print(','.join("'%s'" % i for i in ids))
 PY
-) || die "could not read the 12 controls from the founding file"
+}
+
+# pending_sql CAMPAIGN_SET_SQL: PENDING_UPLOAD change-log rows on a set of campaigns, any batch, any date
+pending_sql() {
+  cat <<SQL
+SELECT 'pending_upload_on_controls' AS check_name, IFNULL(SUM(n), 0) AS violations,
+       IFNULL(STRING_AGG(FORMAT('%s: %d row(s) on %s, logged %s', batch_id, n, cids, built), ' · '
+                         ORDER BY built LIMIT 40), 'none') AS detail
+FROM (
+  SELECT batch_id, COUNT(*) AS n, STRING_AGG(DISTINCT campaign_id ORDER BY campaign_id) AS cids,
+         FORMAT_TIMESTAMP('%F %T', MIN(applied_at)) AS built
+  FROM \`$PROJECT.$DS.FACT_PPC_CHANGE_LOG\`
+  WHERE upload_status = 'PENDING_UPLOAD' AND campaign_id IN ($1)
+  GROUP BY batch_id)
+SQL
+}
+
+PENDING_REMEDY="each batch named was either uploaded on or before LA 2026-10-04 (then mark it uploaded: the tool that built it, --mark-uploaded BATCH) or must never be uploaded (label it: python3 tools/build_seat_moves_bulksheet.py --supersede BATCH; it acts on any batch prefix). A book built before step 4 is never uploaded after LA 10-04: rebuild it after K9 and K13 read 0 (plan Task 8)"
+
+# pending_on_controls deploy|postpass: before step 1 the 12 controls of the founding file; after the deploy every
+# campaign V_HOLDOUT_ARM lists (from the assignment to gate_to), whatever the row's build date
+pending_on_controls() {
+  local set n
+  if [ "$1" = postpass ]; then set="SELECT campaign_id FROM \`$PROJECT.$DS.V_HOLDOUT_ARM\`"
+  else set=$(t2_control_ids) || die "could not read the 12 controls from the founding file"; fi
+  pending_sql "$set" > "$WORK/pending_$1.sql"
+  q "pending_$1" "$WORK/pending_$1.sql"
+  tool rows < "$WORK/pending_$1.out" | python3 -c '
+import sys, json
+for l in sys.stdin:
+    r = json.loads(l)
+    print("%s\t%s" % (r["violations"], r["detail"]))' > "$WORK/pending_$1.tsv"
+  n=$(cut -f1 "$WORK/pending_$1.tsv" | head -1)
+  [ -n "$n" ] || die "the PENDING_UPLOAD read returned no row"
+  log "  $([ "$n" = 0 ] && echo 'ok  ' || echo FAIL) PENDING_UPLOAD change-log rows on the $([ "$1" = postpass ] && echo "V_HOLDOUT_ARM campaigns" || echo "12 controls"), any batch, any build date: $n · $(cut -f2- "$WORK/pending_$1.tsv" | head -1)"
+  record "${STEP:-preflight}" "pending_upload_on_controls ($1)" "$n" "$(cut -f2- "$WORK/pending_$1.tsv" | head -1)"
+  [ "$n" = 0 ] && return 0
+  case $MODE in
+    deploy|postpass) die "$n PENDING_UPLOAD row(s) on a control (above): $PENDING_REMEDY" ;;
+    check) log "  REFUSE: $n PENDING_UPLOAD row(s) on a control (above): $PENDING_REMEDY"; CHECK_REFUSALS=$((CHECK_REFUSALS + 1)) ;;
+    *) log "  WARNING (rehearsal): $n PENDING_UPLOAD row(s) on a control (above); --deploy would STOP here" ;;
+  esac
+}
+
+upload_rows_info() {
+  local ids
+  ids=$(t2_control_ids) || die "could not read the 12 controls from the founding file"
   cat > "$WORK/upload_info.sql" <<SQL
 SELECT 'upload_rows_on_t2_controls' AS check_name, COUNT(*) AS violations,
        IFNULL(STRING_AGG(FORMAT('%s %s %s %s %s (%s)', FORMAT_TIMESTAMP('%F %T', applied_at), campaign_id,
@@ -577,6 +712,7 @@ for l in sys.stdin:
     r = json.loads(l)
     print("  INFO change-log rows on the 12 controls since LA 2026-10-04: %s · %s" % (r["violations"], r["detail"]))
     print("       (an SB keyword row among them makes c33 RED on day one: expected, name it in the deploy record)")' | tee -a "$LOG"
+  pending_on_controls deploy
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -743,19 +879,20 @@ PY
 
 k7b() {
   local f n bad=0
-  for f in tools/build_reprice_bulksheet.py tools/build_seasonal_unpause_bulksheet.py tools/build_seat_moves_bulksheet.py tools/build_weekly_book.py; do
-    n=$(grep -c 'DE_HOLDOUT_ASSIGNMENT' "$f" || true)
-    log "  $([ "$n" = 0 ] && echo 'ok  ' || echo FAIL) K7b $f: $n reference(s) to DE_HOLDOUT_ASSIGNMENT"
-    record "step$STEP" "K7b $f" "$n" "grep -c DE_HOLDOUT_ASSIGNMENT"
+  [ -n "$BOOK_TOOLS" ] || die "K7b: the book branch's tools were not read (book_branch did not run)"
+  for f in $BOOK_TOOL_FILES; do
+    n=$(grep -c 'DE_HOLDOUT_ASSIGNMENT' "$BOOK_TOOLS/$f" || true)
+    log "  $([ "$n" = 0 ] && echo 'ok  ' || echo FAIL) K7b $TOOLS_REF:$f: $n reference(s) to DE_HOLDOUT_ASSIGNMENT"
+    record "step$STEP" "K7b $TOOLS_REF:$f" "$n" "grep -c DE_HOLDOUT_ASSIGNMENT"
     [ "$n" = 0 ] || bad=1
   done
   # the weekly book's mend (arm 2) carries its own holdout gate: exactly one V_HOLDOUT_ARM reference in MEND_SQL
   n=$(python3 -c 'import ast, sys
 t = ast.parse(open(sys.argv[1]).read())
 print(sum(x.value.value.count("V_HOLDOUT_ARM") for x in t.body if isinstance(x, ast.Assign)
-          and isinstance(x.targets[0], ast.Name) and x.targets[0].id == "MEND_SQL"))' tools/build_weekly_book.py)
-  log "  $([ "$n" = 1 ] && echo 'ok  ' || echo FAIL) K7b tools/build_weekly_book.py MEND_SQL: $n V_HOLDOUT_ARM reference(s) (expected 1, the mend's holdout gate)"
-  record "step$STEP" "K7b tools/build_weekly_book.py MEND_SQL" "$([ "$n" = 1 ] && echo 0 || echo 1)" "V_HOLDOUT_ARM references in MEND_SQL: $n (expected 1)"
+          and isinstance(x.targets[0], ast.Name) and x.targets[0].id == "MEND_SQL"))' "$BOOK_TOOLS/tools/build_weekly_book.py")
+  log "  $([ "$n" = 1 ] && echo 'ok  ' || echo FAIL) K7b $TOOLS_REF:tools/build_weekly_book.py MEND_SQL: $n V_HOLDOUT_ARM reference(s) (expected 1, the mend's holdout gate)"
+  record "step$STEP" "K7b $TOOLS_REF:tools/build_weekly_book.py MEND_SQL" "$([ "$n" = 1 ] && echo 0 || echo 1)" "V_HOLDOUT_ARM references in MEND_SQL: $n (expected 1)"
   [ "$n" = 1 ] || bad=1
   [ "$bad" = 0 ] || die "K7b: a bulksheet tool still reads DE_HOLDOUT_ASSIGNMENT, or the weekly book's mend lost its holdout gate"
 }
@@ -767,8 +904,9 @@ k13() {
   local asof rc=0
   asof=$(TZ=America/Los_Angeles date +%F)
   if [[ "$asof" < 2026-10-06 ]]; then asof=2026-10-06; fi
-  log "  K13 the weekly book's mend on the trial's controls, the gate read as of LA $asof"
-  python3 "$MIG/2026-10-05_holdout_t2_k13_mend.py" --as-of "$asof" ${PFX:+--prefix "$PFX"} > "$WORK/k13.out" 2>&1 || rc=$?
+  [ -n "$BOOK_TOOLS" ] || die "K13: the book branch's tools were not read (book_branch did not run)"
+  log "  K13 the weekly book's mend on the trial's controls, the gate read as of LA $asof, MEND_SQL from $TOOLS_REF:tools/build_weekly_book.py"
+  python3 "$MIG/2026-10-05_holdout_t2_k13_mend.py" --tool "$BOOK_TOOLS/tools/build_weekly_book.py" --as-of "$asof" ${PFX:+--prefix "$PFX"} > "$WORK/k13.out" 2>&1 || rc=$?
   sed 's/^/    /' "$WORK/k13.out" | tee -a "$LOG"
   record "step$STEP" "K13 the mend on the controls (LA $asof)" "$rc" "$(grep -E '^K13 (gated|ungated)' "$WORK/k13.out" | tr '\n' ' ')"
   [ "$rc" = 0 ]
@@ -1011,6 +1149,9 @@ case $MODE in
     rehearse_drop ;;
   postpass)
     log "POST-PASS CHECKS (read-only)"
+    git rev-parse -q --verify "$TIP^{commit}" > /dev/null || die "--tip $TIP is not a commit here"
+    book_branch
+    pending_on_controls postpass
     kchecks k_postpass 0 K2 K3 K4 K8 K9 K9b || die "post-pass checks: K8 / K9b pass after the first pass gated for trial 2, K9 after pass 1 of 2026-10-06 (its detail says which snapshot is stale)"
     k13 || die "K13: the weekly book's mend prices a control: build every book with --no-mend until it reads 0"
     log "post-pass checks: every one reads 0" ;;
@@ -1043,6 +1184,9 @@ case $MODE in
     while [ "$s" -le "$TO_STEP" ]; do "step$s"; s=$((s + 1)); done
     log "DONE: steps $FROM_STEP-$TO_STEP deployed$([ "$MODE" = rehearse ] && echo ' (rehearsal, objects '"$REHEARSE_PREFIX"'*)') and checked. Record: $RECORD"
     log "NEXT: K8 and K9b after the next pass, K9 after pass 1 of 2026-10-06: $0 --post-pass. No upload on 10-05;"
+    log "      no book built before step 4 uploaded after LA 10-04 (discard, rebuild after K9 and K13);"
     log "      no book from tools/build_weekly_book.py until K9 and K13 read 0 and the LA date is 2026-10-06;"
+    log "      books only from $BOOK_BRANCH; deploy the dashboard + cube (the Do page's HoldoutArm hold) now that"
+    log "      V_HOLDOUT_ARM exists, and until then queue nothing on the 12 from the Do page or Weekly Run;"
     log "      no hand change to the 12 controls." ;;
 esac

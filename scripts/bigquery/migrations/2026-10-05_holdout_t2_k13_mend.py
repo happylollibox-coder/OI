@@ -13,6 +13,9 @@ The gate binds from CURRENT_DATE('America/Los_Angeles') >= gate_from; trial 2's 
 LA 2026-10-06. Run it on LA 2026-10-06 or later, before the first weekly book (plan Task 8), or pass
 --as-of to read the gate on a given LA date. Read-only. Exit 0 = PASS, 1 = FAIL, 2 = could not run.
 
+  --tool FILE      read MEND_SQL from FILE instead of this checkout's tools/build_weekly_book.py. The runbook
+                   passes the book branch's committed text (git show <book-branch>:tools/build_weekly_book.py):
+                   the books are built there, not in the checkout the runbook runs in (review of 648f201)
   --arm-view T     read T instead of `onyga-482313.OI.V_HOLDOUT_ARM` (a TMP_ copy, for a rehearsal)
   --controls IDS   comma-separated campaign ids instead of the live trial's HOLDOUT units
   --as-of DATE     the LA date the gate is read on (default: CURRENT_DATE('America/Los_Angeles'))
@@ -33,8 +36,8 @@ CLOCK = "CURRENT_DATE('America/Los_Angeles') >= h.gate_from"
 ARM = f'`{PROJECT}.OI.V_HOLDOUT_ARM`'
 
 
-def consts():
-    tree = ast.parse(open(TOOL).read())
+def consts(tool=TOOL):
+    tree = ast.parse(open(tool).read())
     out = {}
     for n in tree.body:
         if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) \
@@ -55,12 +58,14 @@ def bq(sql):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--tool', default=TOOL)
     ap.add_argument('--arm-view')
     ap.add_argument('--controls')
     ap.add_argument('--as-of')
     ap.add_argument('--prefix', default='')
     a = ap.parse_args()
-    c = consts()
+    c = consts(a.tool)
+    print(f'K13 source: {a.tool}')
     text = c.get('MEND_SQL', '')
     n_arm, n_gate = text.count('V_HOLDOUT_ARM'), text.count(GATE)
     print(f'K13 text: MEND_SQL V_HOLDOUT_ARM references {n_arm} (expected 1), gate predicates {n_gate} (expected 1)')

@@ -253,6 +253,17 @@ moved and swap arms wholesale.
 2. **Hand-uploading a bid, budget or negative to a HOLDOUT campaign.** The holdout arm's entire
    contract is that no instruction reaches it — from the engine *or* from a person. One upload and
    that unit is contaminated permanently.
+   **The Do page and the Weekly Run page are such a path** (review of holdout-t2, 2026-10-04). The
+   Weekly Run views (`V_WEEKLY_RUN_*`) carry no holdout logic and queue budgets, bids, `STOP_TARGET`
+   and negates into the Do queue; the Do page's export refused only an item matching an engine
+   `EXCLUDE` row (same campaign, keyword-or-term, lever and value; BID, BUDGET and NEGATE only) and
+   failed open when the cube errored. Its campaign-level hold (`DoPage.exportBulksheet` reads the
+   `HoldoutArm` cube over `V_HOLDOUT_ARM` and refuses every queued item on a control, any action, and
+   fails closed) ships with the dashboard and cube deploy after the 2026-10-05 deploy's step 1. **Until
+   it is live, nothing is queued on a HOLDOUT campaign from the Do page or the Weekly Run page.** A book
+   built before the 2026-10-05 deploy's step 4 is never uploaded after LA 2026-10-04 (plan
+   2026-10-03-holdout-restart.md Task 8): the old code that built it holds trial 1's controls, not
+   trial 2's.
 3. **Deliberately moving budget between the arms.** That makes the arms trade with each other and
    the difference stops being an effect.
 4. **Pulling a holdout unit out mid-trial** for a reason correlated with its performance or its
