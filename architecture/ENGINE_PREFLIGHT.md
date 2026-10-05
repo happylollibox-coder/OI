@@ -12,7 +12,7 @@ someone remembers to run it is not a gate. This makes it permanent, mechanical, 
 | `SP_ENGINE_PREFLIGHT` | Judges the day's proposal snapshot. Reads ONLY small tables (`FACT_ENGINE_PROPOSALS` + `FACT_KEYWORD_GUARD`) — never the ceiling views — so it runs in seconds. Writes `T_ENGINE_PREFLIGHT` and stamps `verdict`/`verdict_reason` back onto the day's `FACT_ENGINE_PROPOSALS` partition. Orchestrator Task 20.7, immediately after the proposal snapshot (20.6). |
 | `T_ENGINE_PREFLIGHT` | The judged day: one row per live instruction with `own_rank`, `n_instr`, `verdict`, `verdict_reason`. |
 | `V_ENGINE_PREFLIGHT` | Thin read surface for panels/cube. No logic. |
-| `DE_HOLDOUT_ASSIGNMENT` | (v27.83) The randomized holdout arms. Read here as a third exclusion source; written by `SP_ASSIGN_HOLDOUT` at orchestrator Task 20.55, before the proposal snapshot. Spec: `architecture/HOLDOUT.md`. |
+| `V_HOLDOUT_ARM` | (from 2026-10-05; v27.83 read `DE_HOLDOUT_ASSIGNMENT` directly) The randomized holdout arm that binds today, any trial: one row per control campaign with `gate_from`, `gate_to` and `trial_id`, built from `DE_HOLDOUT_ASSIGNMENT` (written by `SP_ASSIGN_HOLDOUT` at orchestrator Task 20.55, before the proposal snapshot) and the trial registry `V_HOLDOUT_TRIAL`. Read here as a third exclusion source. Spec: `architecture/HOLDOUT.md`. |
 
 ## The checks (in verdict precedence order)
 
@@ -33,11 +33,13 @@ someone remembers to run it is not a gate. This makes it permanent, mechanical, 
 
 Checked **before** all of the above, and it is not an engine-quality judgement at all.
 
-`DE_HOLDOUT_ASSIGNMENT` says this campaign is a randomized **measurement control**: it was drawn
-by coin flip to be left alone for 16 weeks so we can find out what the engine is actually worth.
-Nothing may be exported to it on **any** lever — bid, budget **and** negate — while the trial
-window is open (`eligible_from` .. `trial_end`, i.e. 2026-09-01 .. 2026-12-22). Verdict `EXCLUDE`,
-reason in plain words:
+`V_HOLDOUT_ARM` (the arm that binds today, any trial) says this campaign is a randomized
+**measurement control**: it was drawn by coin flip to be left alone for 16 weeks so we can find out
+what the engine is actually worth. Nothing may be exported to it on **any** lever — bid, budget
+**and** negate — while its arm binds (`CURRENT_DATE('America/Los_Angeles') BETWEEN gate_from AND
+gate_to`; trial 2: 2026-10-05 .. 2027-01-26; trial 1 bound 2026-09-01 .. 2026-10-04 and is archived).
+`T_ENGINE_PREFLIGHT.holdout_trial_id` is the arm's `trial_id`. Verdict `EXCLUDE`, reason in plain
+words:
 
 > *skipped — this campaign is a measurement control: it was randomly chosen to be left alone so we
 > can tell what the engine is actually worth, and no bid, budget or negative may be uploaded to it
@@ -56,16 +58,25 @@ Boundaries, each deliberate:
 - **All levers**, unlike the claim arm. A negative keyword is a real intervention with a real dollar
   effect; letting negates through would make the holdout arm "the engine minus its bid levers" and
   the readout would silently measure the wrong thing.
-- **Time-bounded.** Empty before `eligible_from` and empty again after `trial_end`, with no code
-  change either time. Measured 2026-08-19: 0 rows affected today; the same proposal set inside the
-  window would exclude 25 rows (14 BID, 11 NEGATE) across the 14 holdout campaigns.
+- **Time-bounded.** Empty before `gate_from` and empty again after `gate_to`, with no code change
+  either time. The gate opens a day before the window (`gate_from` = the assignment day) because the
+  first pass of a New York day judges under the previous Los Angeles date. Measured 2026-08-19 (trial
+  1, then read from `DE_HOLDOUT_ASSIGNMENT` between `eligible_from` and `trial_end`): 0 rows affected
+  that day; the same proposal set inside the window would exclude 25 rows (14 BID, 11 NEGATE) across
+  the 14 holdout campaigns.
 - **Fails open.** `LEFT JOIN` + `IS NOT NULL`: a missing table, an empty trial or an unassigned
-  campaign never silences legitimate work.
+  campaign never silences legitimate work. An empty trial registry empties `V_HOLDOUT_ARM`, and
+  `V_ENGINE_HEALTH` `holdout_unit_changed` then reads RED ("no HOLDOUT unit"), so that failure is not
+  silent.
 - **Ordered first.** When a holdout row is also a collision loser both reasons are true, but only
   this one explains why the campaign will not move for four months.
 - **`TREATED` campaigns get no special handling of any kind.** Treatment *is* the status quo.
 - It reuses the existing `EXCLUDE` verdict on purpose, so `DoPage.exportBulksheet`'s refusal
-  enforces it with **no dashboard change**.
+  enforces it for the engine's own rows. That refusal matches (campaign, keyword-or-term, lever, value)
+  on BID, BUDGET and NEGATE only, so it never held a hand-queued or Weekly Run item, a `STOP_TARGET`, an
+  `ADD_PRODUCT_AD` or a campaign pause, enable or rename. Since 2026-10-04 (review of holdout-t2) the
+  export also holds **every** queued item on a campaign the `HoldoutArm` cube lists (`V_HOLDOUT_ARM`),
+  before this gate, and fails closed when that read errors (`architecture/HOLDOUT.md` §6 #2).
 - `T_ENGINE_PREFLIGHT` publishes `is_holdout` / `holdout_trial_id` so an audit can tell a HOLDOUT
   exclusion from a CLAIM or COLLISION one without re-deriving either.
 

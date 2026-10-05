@@ -113,6 +113,93 @@
 -- t6_proto_1791067312): 116.5 slot-s, 15,229,779 bytes processed; prediction_grades_fresh GREEN 0 of
 -- 8,944 rows past due, prediction_regression INFO (YOUNG, 1 of 6 windows per plan),
 -- response_model_unverified INFO 0. Only the lrn_* and c35-c37 CTEs and the final UNION changed.
+-- Holdout restart (deploy 2026-10-05; plan docs/superpowers/plans/2026-10-03-holdout-restart.md §1 rows
+-- 4-5, §2.7, Task 6; pre-deploy review fixes 1-2; no v27.N assigned). Only c18, the c33 CTEs (hu_trial
+-- .. hu_r9) and c33 changed.
+--   c18 seat_holdout_row_on_sheet joins V_HOLDOUT_ARM (the arm that binds today or later, any trial; it
+--   filters unit_type = 'CAMPAIGN') and counts a seat-book row built between the campaign's gate_from and
+--   gate_to; the detail prints MIN(gate_from) of the arm. It no longer reads DE_HOLDOUT_ASSIGNMENT.
+--   c33 holdout_unit_changed reads THE LIVE TRIAL (hu_trial: the is_live row of V_HOLDOUT_TRIAL, newest
+--   assigned_on on a tie, the row V_HOLDOUT_READOUT's k reads), not a literal. R9's terms (hu_gap,
+--   hu_pre_gap) are unchanged. Two terms are added.
+--   TOUCH ALARM: RED while a touch on a HOLDOUT unit of the live trial, dated from its assignment day (LA)
+--   to its trial_end, is 7 or fewer LA days old, or while a BASELINE_DIFF stands; AMBER for any older
+--   touch and for a re-baselined setting (more than one DE_HOLDOUT_BASELINE row for a key). Kinds:
+--   LEDGER (hu_led + hu_pre, as before); NEW_ENTITY (the first DIM_KEYWORD version of a keyword_id or
+--   the first DIM_AD_GROUP version of an ad_group_id, dated by the LA day of TIMESTAMP(effective_from,
+--   'UTC') as V_AMAZON_OBSERVED_CHANGES dates a version); CAMPAIGN_ATTR (DIM_CAMPAIGN version pairs whose
+--   portfolio_id or bidding_strategy differ; sb_campaign_history version pairs whose bid_optimization or
+--   bid_optimization_strategy differ, because DIM_CAMPAIGN carries '' for an SB bidding strategy);
+--   BASELINE_DIFF (undated: placement and shopper-cohort adjustments and SB product targets present by
+--   the presence rule, for the FOUNDING controls only, against the latest DE_HOLDOUT_BASELINE row).
+--   Kinds 2-4 are labelled "seen by the alarm, not censored by R9 — Ori to rule"; R9 is unchanged.
+--   Kinds 2-3 end at trial_end, as kind 1 (hu_led) does.
+--   FEED LIVENESS: RED when any of 15 stamps is more than 36 h old or missing, each read on its own: the
+--   last OK run in LOG_PIPELINE_RUNS of SP_RECORD_OBSERVED_CHANGES, SP_LOAD_DIM_KEYWORD,
+--   SP_LOAD_DIM_CAMPAIGN and SP_LOAD_DIM_AD_GROUP; MAX(_fivetran_synced) of keyword_history,
+--   sb_keyword, targeting_clause_history, campaign_history, sb_campaign_history, ad_group_history,
+--   sb_ad_group_history, campaign_placement_bidding, sb_campaign_bid_adjustments_by_placement,
+--   sb_campaign_bid_adjustments_shopper_cohort, sb_product_target. The detail prints every age.
+--   WHY 36 h (measured 2026-10-04 ~04:55-05:05 UTC): over 30 days each of the four procedures logged
+--   90 OK runs with at most 13.0 h between two (SP_RECORD_OBSERVED_CHANGES: 6 since 2026-10-02 05:02,
+--   13.0 h); the Fivetran project's job history shows a write touching rows on every one of the eleven
+--   tables with at most 12.0 h (ad_group_history), 16.0 h (campaign_history, campaign_placement_bidding)
+--   or 21.0 h (the other eight) between two; time travel at 14 points 6..162 h back read each table's
+--   MAX(_fivetran_synced) 0.0-12.2 h old. The negative mirrors (negative_keyword_history,
+--   campaign_negative_keyword_history, sb_negative_keyword, negative_targeting_clause_history,
+--   sb_negative_product_target; last written 2025-12-29 .. 2026-01-03) and the ad and creative mirrors
+--   (product_ad_history, sb_ad_history, sb_creative_history; 2025-12-28 .. 2026-01-03) had no write in
+--   the 30 days, so they are left out, and the detail's tail names them as what no source can see.
+--   V_SRC_AmazonAds_keyword DOES cover SB keywords: it unions keyword_history, sb_keyword (dated by
+--   _fivetran_synced) and targeting_clause_history, and all 8,415 sb_keyword ids are in DIM_KEYWORD
+--   (read 2026-10-04). It does not carry sb_product_target, hence kind 4.
+--   PLANNING: the first draft (one scalar subquery per term and per detail clause) failed "Not enough
+--   resources for query planning - too many subqueries" on the board filtered to c33. Every CTE
+--   reference is planned again, so the touch, liveness, R9 and kind-4 inputs are each read once into a
+--   one-row aggregate (hu_touch_sum, hu_live, hu_r9, hu_k4_sum).
+--   MEASURED 2026-10-04 05:00-06:05 UTC (LA 2026-10-03) on TMP_HT2_ copies, all dropped afterwards:
+--   this file with comment lines stripped (76,164 bytes), names sed-pointed at a registry copy (Task 2's
+--   rows), an assignment copy (69 trial-1 rows + Task 3's founding file: 59 trial-2 rows, 12 HOLDOUT),
+--   a baseline copy (15 rows on 8 controls by the presence rule) and copies of V_HOLDOUT_TRIAL,
+--   V_HOLDOUT_ARM and V_HOLDOUT_READOUT from this branch.
+--     trial 2, no touch, live sources: GREEN, measured 0; every age 0.1-0.9 h.
+--     the full board on the copy against the live board, read together after pass 1 of 10-04: 37
+--     checks each; all 36 others equal in status and measured; c33 live AMBER 0 (trial 1), copy GREEN 0.
+--     doctored, the date pinned to 2026-10-20 (registry, arm, readout and c33), every input a copy:
+--       observed ledger row on control 130115986205897 dated 10-20: RED, measured 1 (the readout copy
+--       censors its stratum, 10 of 59); dated 10-13 (7 days): RED 1; dated 10-12 (8 days): AMBER 0;
+--       dated 10-05 (before the window): AMBER 0, "published, not censored (pre-declared for T2)".
+--       NEW_ENTITY keyword created 10-20: RED 1, labelled; the same keyword dated 09-30 (before the
+--       assignment): GREEN 0. NEW_ENTITY ad group 10-20: RED 1. CAMPAIGN_ATTR portfolio change 10-20:
+--       RED 1; bidding strategy LEGACY_FOR_SALES -> AUTO_FOR_SALES: RED 1; SB bid_optimization false ->
+--       true on 537046793426450: RED 1. Each RED names the touch, kind, day and "seen by the alarm,
+--       not censored by R9 — Ori to rule".
+--       BASELINE_DIFF: a baseline value altered (53343800376430 TOP 25 -> 30): RED 1, "date unknown";
+--       plus a later re-baseline row carrying a ruling: AMBER 0. ME-COMPETE 365568042533669 TOP 30
+--       re-stamped at the table's latest sync (no baseline row): RED 1 (absent -> 30). A removal
+--       (130115986205897 TOP stamp 12 h back): RED 1 (100 -> absent); plus a NULL re-baseline row:
+--       AMBER 0. The 14 stale SP rows dropped: GREEN 0. 27660342907703's SB target flagged deleted:
+--       RED 1 (bid and state). A LATE ARRIVAL control (SB 111024628782640, present 0% placement and
+--       cohort rows): GREEN 0, named unwatched. An empty watched set (every rule re-prefixed): RED 8,
+--       15 differences, all 12 named unwatched. Undoctored again: GREEN 0.
+--       FEED: a log copy without the OK runs of the last 36 h of each procedure in turn: RED, naming
+--       that procedure only (37.5 h); each of the eleven table copies shifted so its MAX is 37 h old:
+--       RED, naming that table only; a procedure with no row: RED, "missing"; an emptied table: RED,
+--       "missing".
+--     trial 1's live inputs (a registry copy holding trial 1's OPENED row only): RED, measured 4 —
+--     200171414843593, 446868628489343, 75834491759416 and 76054744633802 touched on 2026-09-27, 6 LA
+--     days before 10-03; R9's terms 0 (the readout copy censors 61 of 69, as live). The date pinned to
+--     10-04 (7 days): RED 4; pinned to 10-05 (8 days): AMBER 0. No NEW_ENTITY or CAMPAIGN_ATTR touch
+--     on a trial-1 control since 2026-08-19.
+--     c18 on the pinned copy: GREEN 0, "the arm starts 2026-10-05"; three book rows added (a trial-2
+--     control inside its gate, a trial-1-only control on 10-20, a trial-2 control on 10-03): RED 1.
+--   COST, the board filtered to c33, two runs each, 2026-10-04 ~05:48 UTC: deployed text (trial 1)
+--   106.0 / 112.9 slot-s, 10,641,938 bytes (jobs g4_SLOT_LIVE_1_1791092909_20323,
+--   g4_SLOT_LIVE_2_1791092960_20323); this text on the copies (trial 2) 352.5 / 351.8 slot-s,
+--   17,197,490 bytes, 13-16 s (g4_SLOT_TMP_1_1791092935_20323, g4_SLOT_TMP_2_1791092994_20323). Most
+--   of the increase is the registry: V_HOLDOUT_TRIAL is planned again at each reference of hu_trial and
+--   of the readout's k, and one c33 read read the registry copy 48 times (307 stages). Full board, one
+--   run each, read together: live 33,009.5 slot-s, 50.8 s; copy 11,489.7 slot-s, 28.9 s.
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_ENGINE_HEALTH` AS
 WITH pf AS (SELECT * FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`),
@@ -410,23 +497,26 @@ c17 AS (  -- a launch family is never seated, never judged (house rule 12; V_BOO
           WHERE b.book != 'HARVEST' AND s.row_type IN ('FAMILY', 'SEAT', 'OPEN_SEAT', 'LEAK', 'GAP', 'ABSORB')) > 0, 'RED', 'GREEN'),
     'launch (INVEST) families appear on the register as REFERENCE rows only — never a FAMILY read, never a seat, never a move'
 ),
-c18 AS (  -- house rule 13: a holdout campaign is on no sheet from its eligible_from
+c18 AS (  -- house rule 13: a holdout campaign is on no sheet while its arm binds (V_HOLDOUT_ARM, from 2026-10-05)
   -- Reads the register's two books in the change log by batch prefix (seat_moves_ / reprice_book_)
   -- at EVERY upload status — a superseded book was still a sheet built with a holdout row on it.
+  -- The arm is V_HOLDOUT_ARM (one row per HOLDOUT campaign whose arm binds today or later, any trial;
+  -- it filters unit_type = 'CAMPAIGN'): a book row counts when it was built between the campaign's
+  -- gate_from and gate_to (holdout restart plan 2026-10-03, Task 6).
   SELECT 'seat_holdout_row_on_sheet',
     CAST(COUNT(*) AS FLOAT64),
-    'change-log rows of the seat books (seat_moves_* / reprice_book_*) naming a HOLDOUT-arm campaign, built on or after its eligible_from · red > 0',
+    'change-log rows of the seat books (seat_moves_* / reprice_book_*) naming a HOLDOUT-arm campaign, built while its arm binds (V_HOLDOUT_ARM, gate_from .. gate_to) · red > 0',
     IF(COUNT(*) > 0, 'RED', 'GREEN'),
     CONCAT(CAST(COUNTIF(c.upload_status = 'PENDING_UPLOAD') AS STRING), ' pending · ',
            CAST(COUNTIF(c.upload_status IS NULL) AS STRING), ' applied · ',
            CAST(COUNTIF(c.upload_status NOT IN ('PENDING_UPLOAD') AND c.upload_status IS NOT NULL) AS STRING), ' labelled · ',
-           'the arm starts ', COALESCE((SELECT CAST(MIN(eligible_from) AS STRING) FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` WHERE arm = 'HOLDOUT'), 'never'),
+           'the arm starts ', COALESCE((SELECT CAST(MIN(gate_from) AS STRING) FROM `onyga-482313.OI.V_HOLDOUT_ARM`), 'never'),
            ' — before it a holdout campaign may sit on a book; from it no generator may write one')
   FROM `onyga-482313.OI.FACT_PPC_CHANGE_LOG` c
-  JOIN `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` h
-    ON h.unit_id = c.campaign_id AND h.arm = 'HOLDOUT'
+  JOIN `onyga-482313.OI.V_HOLDOUT_ARM` h
+    ON h.campaign_id = c.campaign_id
   WHERE (c.batch_id LIKE 'seat_moves_%' OR c.batch_id LIKE 'reprice_book_%')
-    AND DATE(c.applied_at, 'America/Los_Angeles') >= h.eligible_from
+    AND DATE(c.applied_at, 'America/Los_Angeles') BETWEEN h.gate_from AND h.gate_to
 ),
 c19 AS (  -- ruling R-f: a "raise" is only ever to a price ABOVE the live bid
   SELECT 'seat_raise_at_or_below_live_bid',
@@ -1017,14 +1107,21 @@ c37 AS (  -- REPORTS: the response model is tested only where an uploaded plan m
 ),
 -- ───────────────────────────────────────────────────────────────────────────────────────────
 -- c33: the holdout's integrity (v27.162, piece-1 plan Task 8, R9 = P-23, audit fix #27; header).
--- hu_asg / hu_led / hu_pre / hu_cens / hu_pre_ro / hu_obs are the six inputs; hu_gap, hu_pre_gap and
--- c33 read nothing else, so HOLDOUT_INTEGRITY_acceptance.sql runs the hu_gap, hu_pre_gap and c33 text
--- verbatim on doctored copies of them. THE TWO MUST CHANGE TOGETHER.
+-- Holdout restart (2026-10-05; plan docs/superpowers/plans/2026-10-03-holdout-restart.md §2.7, Task 6):
+-- it reads THE LIVE TRIAL (hu_trial) and adds the touch alarm (hu_new, hu_attr, hu_k4_*, hu_touch,
+-- hu_red) and feed liveness (hu_live). hu_asg / hu_led / hu_pre / hu_cens / hu_pre_ro / hu_obs feed R9's
+-- terms (hu_gap, hu_pre_gap), unchanged; HOLDOUT_INTEGRITY_acceptance.sql runs this text verbatim on
+-- doctored copies. THE TWO MUST CHANGE TOGETHER.
 -- ───────────────────────────────────────────────────────────────────────────────────────────
-hu_asg AS (  -- the trial's units, both arms (V_HOLDOUT_READOUT's trial)
-  SELECT unit_id, unit_name, arm, stratum, eligible_from, trial_end, assigned_at
-  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE trial_id = 'HOLDOUT-2026Q4-CAMPAIGN' AND unit_type = 'CAMPAIGN'
+hu_trial AS (  -- the live trial: the row V_HOLDOUT_READOUT's k reads
+  SELECT trial_id FROM `onyga-482313.OI.V_HOLDOUT_TRIAL` WHERE is_live
+  QUALIFY ROW_NUMBER() OVER (ORDER BY assigned_on DESC, trial_id DESC) = 1
+),
+hu_asg AS (  -- the trial's units, both arms; assignment_rule decides which controls kind 4 watches
+  SELECT a.unit_id, a.unit_name, a.arm, a.stratum, a.eligible_from, a.trial_end, a.assigned_at,
+         a.assignment_rule
+  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` a JOIN hu_trial USING (trial_id)
+  WHERE a.unit_type = 'CAMPAIGN'
 ),
 hu_chg AS (  -- a change that reached Amazon: a change-log row that was applied, or a change observed on Amazon
   SELECT campaign_id, applied_at FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`
@@ -1072,51 +1169,262 @@ hu_pre_gap AS (  -- HOLDOUT units changed before their window that the readout d
   GROUP BY 1, 2, 3
   HAVING MIN(r.pre_window_change_on) IS NULL OR MIN(r.pre_window_change_on) > MIN(p.change_day)
 ),
-c33 AS (  -- R9 / fix #27: a change on a HOLDOUT campaign inside its window is censored with its stratum; a change between its assignment and its window start is published, and AMBER while Ori has not ruled on it
+-- ── the touch alarm (plan §2.7, review fix 1). A touch on a HOLDOUT unit of the live trial counts from
+-- its assignment day (LA) to its trial_end. Kinds 2-4 are seen by the alarm and NOT censored by R9.
+hu_hold AS (  -- the live trial's HOLDOUT units and the LA days on which a touch counts
+  SELECT unit_id, unit_name, DATE(assigned_at, 'America/Los_Angeles') AS from_day, trial_end
+  FROM hu_asg WHERE arm = 'HOLDOUT'
+),
+hu_new AS (  -- kind 2: a keyword / product target (first DIM_KEYWORD version) or ad group (first DIM_AD_GROUP
+  -- version) created on a control; the ledger never counts a first version. Dated like V_AMAZON_OBSERVED_CHANGES:
+  -- the LA day of TIMESTAMP(effective_from, 'UTC') (Amazon's last_updated_date; an SB keyword's first sync)
+  SELECT h.unit_id, h.unit_name, 'NEW_ENTITY' AS kind, f.change_day, f.what
+  FROM hu_hold h
+  JOIN (
+    SELECT campaign_id, DATE(TIMESTAMP(effective_from, 'UTC'), 'America/Los_Angeles') AS change_day,
+           FORMAT('keyword or target %s created (%s %s)', keyword_id, match_type, keyword_text) AS what
+    FROM `onyga-482313.OI.DIM_KEYWORD`
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY keyword_id ORDER BY effective_from, _fivetran_synced) = 1
+    UNION ALL
+    SELECT campaign_id, DATE(TIMESTAMP(effective_from, 'UTC'), 'America/Los_Angeles'),
+           FORMAT('ad group %s created (%s)', ad_group_id, ad_group_name)
+    FROM `onyga-482313.OI.DIM_AD_GROUP`
+    QUALIFY ROW_NUMBER() OVER (PARTITION BY ad_group_id ORDER BY effective_from, _fivetran_synced) = 1
+  ) f ON f.campaign_id = h.unit_id
+  WHERE f.change_day BETWEEN h.from_day AND h.trial_end
+),
+hu_attr AS (  -- kind 3: a portfolio or bidding-strategy change (DIM_CAMPAIGN version pairs, SP and SB), an SB
+  -- bid-optimization change (sb_campaign_history version pairs; DIM_CAMPAIGN carries '' for SB), and a campaign end
+  -- date set, moved or cleared (campaign_history version pairs for SP, sb_campaign_history for SB; an end date stops
+  -- a control serving, and the ledger records only budget and state), versions ordered as V_AMAZON_OBSERVED_CHANGES
+  -- orders them. Not watched, on purpose: start_date (Amazon rewrote it on 16 SP and several SB campaigns in May
+  -- 2026, 05-12 -> 05-09, with no human touch) and SB rule_based_budget_applicable_rule_id (it flips monthly by itself)
+  SELECT h.unit_id, h.unit_name, 'CAMPAIGN_ATTR' AS kind, v.change_day, v.what
+  FROM hu_hold h
+  JOIN (
+    SELECT campaign_id, DATE(TIMESTAMP(effective_from, 'UTC'), 'America/Los_Angeles') AS change_day,
+           TRIM(CONCAT(
+             IF(portfolio_id IS DISTINCT FROM prev_pf,
+                FORMAT('portfolio %s -> %s ', COALESCE(prev_pf, 'none'), COALESCE(portfolio_id, 'none')), ''),
+             IF(bidding_strategy IS DISTINCT FROM prev_bs,
+                FORMAT('bidding strategy %s -> %s', COALESCE(prev_bs, 'none'), COALESCE(bidding_strategy, 'none')), ''))) AS what
+    FROM (SELECT campaign_id, effective_from, portfolio_id, bidding_strategy,
+                 LAG(portfolio_id) OVER w AS prev_pf, LAG(bidding_strategy) OVER w AS prev_bs,
+                 LAG(effective_from) OVER w AS prev_from
+          FROM `onyga-482313.OI.DIM_CAMPAIGN`
+          WINDOW w AS (PARTITION BY campaign_id ORDER BY effective_from, _fivetran_synced))
+    WHERE prev_from IS NOT NULL
+      AND (portfolio_id IS DISTINCT FROM prev_pf OR bidding_strategy IS DISTINCT FROM prev_bs)
+    UNION ALL
+    SELECT CAST(id AS STRING), DATE(last_updated_date, 'America/Los_Angeles'),
+           FORMAT('end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'), IFNULL(CAST(end_date AS STRING), 'none'))
+    FROM (SELECT id, last_updated_date, end_date, LAG(end_date) OVER w AS prev_end,
+                 LAG(last_updated_date) OVER w AS prev_at
+          FROM `fivetran-hl.amazon_ads.campaign_history`
+          WINDOW w AS (PARTITION BY id ORDER BY last_updated_date, _fivetran_synced))
+    WHERE prev_at IS NOT NULL AND end_date IS DISTINCT FROM prev_end
+    UNION ALL
+    SELECT id, DATE(last_update_date, 'America/Los_Angeles'),
+           TRIM(CONCAT(
+             IF(bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos,
+                FORMAT('SB bid optimization %t / %s -> %t / %s ', prev_bo, COALESCE(prev_bos, 'none'),
+                       bid_optimization, COALESCE(bid_optimization_strategy, 'none')), ''),
+             IF(end_date IS DISTINCT FROM prev_end,
+                FORMAT('SB end date %s -> %s', IFNULL(CAST(prev_end AS STRING), 'none'),
+                       IFNULL(CAST(end_date AS STRING), 'none')), '')))
+    FROM (SELECT id, last_update_date, bid_optimization, bid_optimization_strategy, end_date,
+                 LAG(bid_optimization) OVER w AS prev_bo, LAG(bid_optimization_strategy) OVER w AS prev_bos,
+                 LAG(end_date) OVER w AS prev_end, LAG(last_update_date) OVER w AS prev_at
+          FROM `fivetran-hl.amazon_ads.sb_campaign_history`
+          WINDOW w AS (PARTITION BY id ORDER BY last_update_date, _fivetran_synced))
+    WHERE prev_at IS NOT NULL
+      AND (bid_optimization IS DISTINCT FROM prev_bo OR bid_optimization_strategy IS DISTINCT FROM prev_bos
+           OR end_date IS DISTINCT FROM prev_end)
+  ) v ON v.campaign_id = h.unit_id
+  WHERE v.change_day BETWEEN h.from_day AND h.trial_end
+),
+hu_k4_watch AS (  -- kind 4 watches the founding controls, whether or not they have a baseline row
+  SELECT unit_id FROM hu_asg WHERE arm = 'HOLDOUT' AND STARTS_WITH(assignment_rule, 'FOUNDING')),
+hu_k4_unwatched AS (  -- every other control (LATE ARRIVAL): named in the detail, never compared
+  SELECT unit_id, unit_name, assignment_rule FROM hu_asg
+  WHERE arm = 'HOLDOUT' AND unit_id NOT IN (SELECT unit_id FROM hu_k4_watch)),
+hu_k4_sp  AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`),
+hu_k4_sbp AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`),
+hu_k4_sbc AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`),
+hu_k4_sbt AS (SELECT *, MAX(_fivetran_synced) OVER () AS mx FROM `fivetran-hl.amazon_ads.sb_product_target`),
+hu_k4_present AS (  -- the presence rule: re-stamped by its table's latest sync, and not deleted
+  SELECT campaign_id, CONCAT('SP_PLACEMENT|', placement) AS setting, CAST(percentage AS STRING) AS value
+  FROM hu_k4_sp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_PLACEMENT|', placement), CAST(percentage AS STRING)
+  FROM hu_k4_sbp WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_SHOPPER_COHORT|', audience_id, '|', shopper_cohort_type),
+         CAST(percentage AS STRING)
+  FROM hu_k4_sbc WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR)
+  UNION ALL SELECT campaign_id, CONCAT('SB_TARGET|', id, '|', kv.k), kv.v
+  FROM hu_k4_sbt, UNNEST([STRUCT('bid' AS k, CAST(bid AS STRING) AS v), STRUCT('state', state)]) kv
+  WHERE _fivetran_synced >= TIMESTAMP_SUB(mx, INTERVAL 1 HOUR) AND NOT COALESCE(_fivetran_deleted, FALSE)),
+hu_k4_now AS (  -- today's side of BASELINE_DIFF: the watched controls only
+  SELECT * FROM hu_k4_present WHERE campaign_id IN (SELECT unit_id FROM hu_k4_watch)),
+hu_k4_base AS (  -- the latest baseline row per setting, live trial; a NULL value means absent
+  SELECT b.campaign_id, b.setting, b.value
+  FROM `onyga-482313.OI.DE_HOLDOUT_BASELINE` b JOIN hu_trial USING (trial_id)
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY b.campaign_id, b.setting ORDER BY b.recorded_at DESC) = 1),
+hu_k4_diff AS (  -- BASELINE_DIFF: a changed value, or a setting on one side only
+  SELECT campaign_id, setting, b.value AS base_value, n.value AS now_value
+  FROM hu_k4_base b FULL OUTER JOIN hu_k4_now n USING (campaign_id, setting)
+  WHERE b.value IS DISTINCT FROM n.value),
+hu_k4_rebased AS (  -- settings Ori re-baselined (more than one baseline row for the key): AMBER from then on
+  SELECT b.campaign_id, b.setting, COUNT(*) AS n_rows
+  FROM `onyga-482313.OI.DE_HOLDOUT_BASELINE` b JOIN hu_trial USING (trial_id)
+  GROUP BY 1, 2 HAVING COUNT(*) > 1),
+hu_touch AS (  -- every touch: kinds 1-3 dated, kind 4 undated (change_day NULL: the source keeps no history)
+  SELECT unit_id, unit_name, 'LEDGER' AS kind, change_day,
+         'a change-log row applied, or a change observed on Amazon' AS what FROM hu_led
+  UNION ALL SELECT unit_id, unit_name, 'LEDGER', change_day,
+         'a change-log row applied, or a change observed on Amazon, before the window start' FROM hu_pre
+  UNION ALL SELECT unit_id, unit_name, kind, change_day, what FROM hu_new
+  UNION ALL SELECT unit_id, unit_name, kind, change_day, what FROM hu_attr
+  UNION ALL SELECT d.campaign_id, COALESCE(h.unit_name, '?'), 'BASELINE_DIFF', CAST(NULL AS DATE),
+         FORMAT('%s %s -> %s', d.setting, COALESCE(d.base_value, 'absent'), COALESCE(d.now_value, 'absent'))
+  FROM hu_k4_diff d LEFT JOIN hu_asg h ON h.unit_id = d.campaign_id
+),
+hu_touch_line AS (  -- one clause per (unit, kind, day); RED = a dated touch 7 or fewer LA days old, or an undated one
+  SELECT unit_id, unit_name, kind, change_day, COUNT(*) AS n,
+         STRING_AGG(DISTINCT what, '; ' ORDER BY what LIMIT 4) AS what,
+         (change_day IS NULL
+          OR change_day >= DATE_SUB(CURRENT_DATE('America/Los_Angeles'), INTERVAL 7 DAY)) AS is_red
+  FROM hu_touch GROUP BY 1, 2, 3, 4
+),
+hu_touch_sum AS (  -- the touches in one row (each input is read once: the planner inlines every CTE reference)
+  SELECT COUNTIF(is_red) AS n_red, COUNT(DISTINCT IF(is_red, unit_id, NULL)) AS n_red_units,
+         COUNTIF(NOT is_red) AS n_old,
+         STRING_AGG(IF(is_red, FORMAT('%s (%s) %s %s: %s%s%s', unit_name, unit_id, kind,
+                                      IF(change_day IS NULL, 'date unknown: the source keeps no history',
+                                         FORMAT('on %t', change_day)),
+                                      what, IF(n > 1, FORMAT(' (%d rows)', n), ''),
+                                      IF(kind = 'LEDGER', '', ' — seen by the alarm, not censored by R9 — Ori to rule')),
+                        NULL),
+                    '; ' ORDER BY is_red DESC, IFNULL(change_day, DATE '9999-12-31') DESC, unit_id, kind) AS red_txt,
+         STRING_AGG(IF(NOT is_red, FORMAT('%s (%s) %s on %t: %s%s%s', unit_name, unit_id, kind, change_day, what,
+                                          IF(n > 1, FORMAT(' (%d rows)', n), ''),
+                                          IF(kind = 'LEDGER', '', ' — seen by the alarm, not censored by R9 — Ori to rule')),
+                       NULL),
+                    '; ' ORDER BY is_red, change_day DESC, unit_id, kind LIMIT 12) AS old_txt
+  FROM hu_touch_line
+),
+hu_k4_sum AS (  -- re-baselined settings and unwatched controls, one row
+  SELECT rb.n_rebased, rb.rebased_txt, uw.unwatched_txt
+  FROM (SELECT COUNT(*) AS n_rebased,
+               STRING_AGG(FORMAT('%s %s (%d rows)', campaign_id, setting, n_rows), ', ' ORDER BY campaign_id, setting) AS rebased_txt
+        FROM hu_k4_rebased) rb,
+       (SELECT STRING_AGG(FORMAT('%s (%s): %s', unit_name, unit_id, SPLIT(assignment_rule, ':')[SAFE_OFFSET(0)]), ', ' ORDER BY unit_id) AS unwatched_txt
+        FROM hu_k4_unwatched) uw
+),
+-- ── feed liveness (plan §2.7, review fix 2): minutes since each path's last stamp, each read on its own;
+-- NULL = missing. 30-day measurements behind the 36-hour bar are in the header.
+hu_live AS (
+  SELECT COUNTIF(age_min IS NULL OR age_min > 36 * 60) AS n_stale,
+         STRING_AGG(IF(age_min IS NULL OR age_min > 36 * 60,
+                       IF(age_min IS NULL, CONCAT(src, ' missing'), FORMAT('%s %.1f h', src, age_min / 60)), NULL),
+                    ', ' ORDER BY ord) AS stale_txt,
+         STRING_AGG(IF(age_min IS NULL, CONCAT(src, ' missing'), FORMAT('%s %.1f', src, age_min / 60)), ', ' ORDER BY ord) AS ages_txt
+  FROM (
+    SELECT n.src, n.ord, TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), s.ts, MINUTE) AS age_min
+    FROM UNNEST(ARRAY<STRUCT<src STRING, ord INT64>>[
+      ('SP_RECORD_OBSERVED_CHANGES', 0),
+      ('SP_LOAD_DIM_KEYWORD', 1),
+      ('SP_LOAD_DIM_CAMPAIGN', 2),
+      ('SP_LOAD_DIM_AD_GROUP', 3),
+      ('keyword_history', 4),
+      ('sb_keyword', 5),
+      ('targeting_clause_history', 6),
+      ('campaign_history', 7),
+      ('sb_campaign_history', 8),
+      ('ad_group_history', 9),
+      ('sb_ad_group_history', 10),
+      ('campaign_placement_bidding', 11),
+      ('sb_campaign_bid_adjustments_by_placement', 12),
+      ('sb_campaign_bid_adjustments_shopper_cohort', 13),
+      ('sb_product_target', 14)]) n
+    LEFT JOIN (
+      SELECT procedure_name AS src, MAX(started_at) AS ts FROM `onyga-482313.OI.LOG_PIPELINE_RUNS`
+      WHERE status = 'OK' AND procedure_name IN ('SP_RECORD_OBSERVED_CHANGES', 'SP_LOAD_DIM_KEYWORD', 'SP_LOAD_DIM_CAMPAIGN', 'SP_LOAD_DIM_AD_GROUP')
+      GROUP BY 1
+      UNION ALL SELECT 'keyword_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.keyword_history`
+      UNION ALL SELECT 'sb_keyword', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_keyword`
+      UNION ALL SELECT 'targeting_clause_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.targeting_clause_history`
+      UNION ALL SELECT 'campaign_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.campaign_history`
+      UNION ALL SELECT 'sb_campaign_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_history`
+      UNION ALL SELECT 'ad_group_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.ad_group_history`
+      UNION ALL SELECT 'sb_ad_group_history', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_ad_group_history`
+      UNION ALL SELECT 'campaign_placement_bidding', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.campaign_placement_bidding`
+      UNION ALL SELECT 'sb_campaign_bid_adjustments_by_placement', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_by_placement`
+      UNION ALL SELECT 'sb_campaign_bid_adjustments_shopper_cohort', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_campaign_bid_adjustments_shopper_cohort`
+      UNION ALL SELECT 'sb_product_target', MAX(_fivetran_synced) FROM `fivetran-hl.amazon_ads.sb_product_target`
+    ) s USING (src))
+),
+-- ── R9's terms in one row
+hu_r9 AS (
+  SELECT u.n_hold, u.n_units, o.n AS n_obs, g.n_gap, g.gap_txt, pg.n_pre_gap, pg.pre_gap_txt,
+         STRUCT(pr.n AS n, pr.txt AS txt) AS pre, STRUCT(ld.n AS n, ld.txt AS txt) AS led, cs.n_cens
+  FROM (SELECT COUNTIF(arm = 'HOLDOUT') AS n_hold, COUNT(*) AS n_units FROM hu_asg) u,
+       hu_obs o,
+       (SELECT COUNT(*) AS n_gap,
+               STRING_AGG(FORMAT('%s (%s, %s, %s): its stratum changed on %t, the readout censors it %s',
+                                 unit_name, unit_id, arm, stratum, first_change_day,
+                                 IF(censored_from IS NULL, 'never', FORMAT('from %t', censored_from))),
+                          '; ' ORDER BY first_change_day, unit_id) AS gap_txt
+        FROM hu_gap) g,
+       (SELECT COUNT(*) AS n_pre_gap,
+               STRING_AGG(FORMAT('%s (%s, %s): changed on %t before its window start, the readout publishes it %s',
+                                 unit_name, unit_id, stratum, first_change_day,
+                                 IF(published_on IS NULL, 'never', FORMAT('from %t', published_on))),
+                          '; ' ORDER BY first_change_day, unit_id) AS pre_gap_txt
+        FROM hu_pre_gap) pg,
+       (SELECT COUNT(*) AS n, STRING_AGG(FORMAT('%s %t', unit_name, d), ', ' ORDER BY d, unit_id) AS txt
+        FROM (SELECT unit_id, unit_name, MIN(change_day) AS d FROM hu_pre GROUP BY 1, 2)) pr,
+       (SELECT COUNT(*) AS n, STRING_AGG(FORMAT('%s %t', unit_name, d), ', ' ORDER BY d, unit_id) AS txt
+        FROM (SELECT unit_id, unit_name, MIN(change_day) AS d FROM hu_led GROUP BY 1, 2)) ld,
+       (SELECT COUNT(DISTINCT unit_id) AS n_cens FROM hu_cens) cs
+),
+c33 AS (  -- R9 / fix #27 + the holdout restart's touch alarm and feed liveness (plan 2026-10-03 §2.7, Task 6)
   SELECT 'holdout_unit_changed',
-    CAST((SELECT COUNT(*) FROM hu_gap) + (SELECT COUNT(*) FROM hu_pre_gap) AS FLOAT64),
-    'trial campaigns (either arm) sharing a stratum with a HOLDOUT campaign that changed inside its trial window (a change-log row applied, or a change observed on Amazon), which V_HOLDOUT_READOUT does not censor from that day on, + HOLDOUT campaigns changed between their assignment and their window start that the readout does not publish (PRE_WINDOW_CHANGE) · red > 0 (P-23 / R9, audit fix #27); red when no HOLDOUT unit or no observed-change row is read; amber while a HOLDOUT campaign changed between its assignment and its window start, which R9 does not censor (a ruling for Ori, HOLDOUT.md §6)',
-    CASE WHEN (SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) = 0 THEN 'RED'
-         WHEN (SELECT n FROM hu_obs) = 0 THEN 'RED'
-         WHEN (SELECT COUNT(*) FROM hu_gap) + (SELECT COUNT(*) FROM hu_pre_gap) > 0 THEN 'RED'
-         WHEN (SELECT COUNT(*) FROM hu_pre) > 0 THEN 'AMBER'
+    CAST(r.n_gap + r.n_pre_gap + t.n_red_units AS FLOAT64),
+    'live trial (V_HOLDOUT_TRIAL): trial campaigns sharing a stratum with a HOLDOUT campaign changed inside its window that V_HOLDOUT_READOUT does not censor from that day on (R9, P-23, audit fix #27), + HOLDOUT campaigns changed between their assignment and window start that the readout does not publish (PRE_WINDOW_CHANGE), + HOLDOUT campaigns with a RED touch · red > 0; red on a TOUCH from the assignment day 7 or fewer LA days old (a ledger row; a keyword, target or ad group created; a portfolio, bidding-strategy or SB bid-optimization change) or a standing BASELINE_DIFF (a placement / shopper-cohort adjustment or SB product target that differs from DE_HOLDOUT_BASELINE); red when no HOLDOUT unit or no observed-change row is read, or any feed stamp (4 procedures, 11 Fivetran tables) is > 36 h old or missing; amber on any older touch or a re-baselined setting',
+    CASE WHEN r.n_hold = 0 THEN 'RED'
+         WHEN r.n_obs = 0 THEN 'RED'
+         WHEN r.n_gap + r.n_pre_gap > 0 THEN 'RED'
+         WHEN t.n_red > 0 THEN 'RED'
+         WHEN l.n_stale > 0 THEN 'RED'
+         WHEN t.n_old + k.n_rebased > 0 THEN 'AMBER'
          ELSE 'GREEN' END,
     CONCAT(
-      CASE WHEN (SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) = 0 THEN 'no HOLDOUT unit read from DE_HOLDOUT_ASSIGNMENT · '
-           WHEN (SELECT n FROM hu_obs) = 0 THEN 'the observed-change ledger is empty, so a console change on a HOLDOUT campaign would be invisible · '
+      CASE WHEN r.n_hold = 0 THEN 'no HOLDOUT unit read for the live trial (V_HOLDOUT_TRIAL, DE_HOLDOUT_ASSIGNMENT) · '
+           WHEN r.n_obs = 0 THEN 'the observed-change ledger is empty, so a console change on a HOLDOUT campaign would be invisible · '
            ELSE '' END,
-      IF((SELECT COUNT(*) FROM hu_gap) > 0,
-         CONCAT('NOT CENSORED: ',
-                (SELECT STRING_AGG(FORMAT('%s (%s, %s, %s): its stratum changed on %t, the readout censors it %s',
-                                          unit_name, unit_id, arm, stratum, first_change_day,
-                                          IF(censored_from IS NULL, 'never', FORMAT('from %t', censored_from))),
-                                   '; ' ORDER BY first_change_day, unit_id) FROM hu_gap),
-                ' · '),
+      IF(t.n_red > 0, CONCAT('TOUCHED: ', t.red_txt, ' · '), ''),
+      IF(l.n_stale > 0, CONCAT('FEED STALE (> 36 h or missing): ', l.stale_txt, ' · '), ''),
+      IF(t.n_old > 0, CONCAT('touched more than 7 LA days ago (AMBER): ', t.old_txt,
+                             IF(t.n_old > 12, FORMAT('; and %d more', t.n_old - 12), ''), ' · '), ''),
+      IF(k.n_rebased > 0, CONCAT('re-baselined by Ori (AMBER): ', k.rebased_txt, ' · '), ''),
+      IF(r.n_gap > 0, CONCAT('NOT CENSORED: ', r.gap_txt, ' · '), ''),
+      IF(r.n_pre_gap > 0, CONCAT('NOT PUBLISHED: ', r.pre_gap_txt, ' · '), ''),
+      IF(r.pre.n > 0,
+         CONCAT('published, not censored (pre-declared for T2, plan 2026-10-03 §2.3): ', CAST(r.pre.n AS STRING), ' of ',
+                CAST(r.n_hold AS STRING),
+                ' HOLDOUT campaign(s) changed between their assignment and their window start, which R9 does not censor (first day): ',
+                r.pre.txt, ' · '),
          ''),
-      IF((SELECT COUNT(*) FROM hu_pre_gap) > 0,
-         CONCAT('NOT PUBLISHED: ',
-                (SELECT STRING_AGG(FORMAT('%s (%s, %s): changed on %t before its window start, the readout publishes it %s',
-                                          unit_name, unit_id, stratum, first_change_day,
-                                          IF(published_on IS NULL, 'never', FORMAT('from %t', published_on))),
-                                   '; ' ORDER BY first_change_day, unit_id) FROM hu_pre_gap),
-                ' · '),
-         ''),
-      IF((SELECT COUNT(*) FROM hu_pre) > 0,
-         CONCAT('A RULING FOR ORI: ', CAST((SELECT COUNT(DISTINCT unit_id) FROM hu_pre) AS STRING), ' of ',
-                CAST((SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) AS STRING),
-                ' HOLDOUT campaign(s) changed between their assignment and their window start, which R9 does not censor, so the readout scores them and their stratum-mates as untouched from the window start (first day): ',
-                (SELECT STRING_AGG(FORMAT('%s %t', unit_name, d), ', ' ORDER BY d, unit_id)
-                 FROM (SELECT unit_id, unit_name, MIN(change_day) AS d FROM hu_pre GROUP BY 1, 2)),
-                ' · '),
-         ''),
-      CAST((SELECT COUNT(DISTINCT unit_id) FROM hu_led) AS STRING), ' of ',
-      CAST((SELECT COUNTIF(arm = 'HOLDOUT') FROM hu_asg) AS STRING),
+      CAST(r.led.n AS STRING), ' of ', CAST(r.n_hold AS STRING),
       ' HOLDOUT campaign(s) changed inside the trial window',
-      COALESCE((SELECT CONCAT(' (first day): ', STRING_AGG(FORMAT('%s %t', unit_name, d), ', ' ORDER BY d, unit_id))
-                FROM (SELECT unit_id, unit_name, MIN(change_day) AS d FROM hu_led GROUP BY 1, 2)), ''),
-      ' · the readout censors ', CAST((SELECT COUNT(DISTINCT unit_id) FROM hu_cens) AS STRING), ' of ',
-      CAST((SELECT COUNT(*) FROM hu_asg) AS STRING),
-      ' trial campaigns, both arms, each from the first change in its stratum (R9, HOLDOUT.md §6)')
+      IF(r.led.n > 0, CONCAT(' (first day): ', r.led.txt), ''),
+      ' · the readout censors ', CAST(r.n_cens AS STRING), ' of ', CAST(r.n_units AS STRING),
+      ' trial campaigns, both arms, each from the first change in its stratum (R9, HOLDOUT.md §6) · ',
+      IF(k.unwatched_txt IS NOT NULL,
+         CONCAT('unwatched on kind-4 settings (no baseline is taken for a late arrival): ', k.unwatched_txt, ' · '), ''),
+      'feed ages (h): ', COALESCE(l.ages_txt, 'none read'),
+      ' · not seen by any source: negatives added or removed by hand (the five negative mirrors last written 2025-12-29 .. 2026-01-03), ads and creatives (mirrors last written 2025-12-28 .. 2026-01-03), a change undone before the next sync or two changes between two DIM loads (read as one), a kind-4 setting put back to its baseline value before the board reads it')
+  FROM hu_r9 r, hu_touch_sum t, hu_k4_sum k, hu_live l
 )
 SELECT * FROM c1 UNION ALL SELECT * FROM c2 UNION ALL SELECT * FROM c3
 UNION ALL SELECT * FROM c4 UNION ALL SELECT * FROM c5 UNION ALL SELECT * FROM c6

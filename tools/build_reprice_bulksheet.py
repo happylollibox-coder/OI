@@ -79,9 +79,10 @@ INTERLOCKS
     - SEASON (A5): every bid-down and pause row is checked against the season ledger's
       BLOCK_CUT (V_KEYWORD_CONTEXT_GATE). A blocked row appears in the book WITH its reason
       and is NOT emitted as an executable row — nothing executes-by-hand into a live peak.
-    - HOLDOUT: campaigns in DE_HOLDOUT_ASSIGNMENT arm=HOLDOUT are excluded from their
-      eligible_from date — a hand upload into the holdout invalidates the trial. Asserted on
-      every run; rows allowed today in a holdout campaign are LISTED with the deadline.
+    - HOLDOUT: campaigns in V_HOLDOUT_ARM (a HOLDOUT campaign of any trial whose arm binds today
+      or later) are excluded from their gate date — a hand upload into the holdout invalidates the
+      trial. Asserted on every run; rows allowed today in a holdout campaign are LISTED with the
+      deadline.
     - BRAND DEFENSE: never judged on profit, so never in this book with a profit-based row.
     - PORTFOLIO: echoed on every row. A blank Portfolio ID DETACHES a campaign on Campaign
       rows; on keyword rows Amazon ignores the column, so the echo is a uniform convention,
@@ -572,11 +573,9 @@ m AS (
          is_brand_defense
   FROM `{p}.OI.V_BID_CPC_TRANSFER`
 ),
-hold AS (
-  SELECT CAST(unit_id AS STRING) cid, MIN(eligible_from) eligible_from
-  FROM `{p}.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE arm = 'HOLDOUT' AND unit_type = 'CAMPAIGN'
-  GROUP BY 1
+hold AS (  -- the arm that binds today or later (V_HOLDOUT_ARM); eligible_from = the gate date
+  SELECT campaign_id cid, gate_from eligible_from
+  FROM `{p}.OI.V_HOLDOUT_ARM`
 ),
 bc AS (
   SELECT keyword_text, ANY_VALUE(gate_reason) gate_reason

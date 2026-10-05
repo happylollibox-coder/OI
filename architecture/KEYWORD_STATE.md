@@ -518,9 +518,11 @@ record IS its record.
 - **A5 season interlock:** every bid-down and pause row is checked against the season ledger's
   BLOCK_CUT (`V_KEYWORD_CONTEXT_GATE`, keyword grain); a blocked row appears in the book with its
   reason and is NOT emitted as an executable row.
-- **HOLDOUT:** campaigns in `DE_HOLDOUT_ASSIGNMENT` arm = HOLDOUT are excluded from their
-  `eligible_from` date (2026-09-01) — a hand upload into the holdout invalidates the trial. Rows
-  allowed today in a holdout-arm campaign are LISTED in the README with that deadline (F6).
+- **HOLDOUT:** campaigns in `V_HOLDOUT_ARM` (the arm that binds today, any trial; from 2026-10-05,
+  before which the tool read `DE_HOLDOUT_ASSIGNMENT` arm = HOLDOUT) are excluded from the arm's
+  `gate_from` (read as `eligible_from`; trial 2: 2026-10-05) to its `gate_to` (trial 2: 2027-01-26)
+  — a hand upload into the holdout invalidates the trial. Rows allowed today in a holdout-arm
+  campaign are LISTED in the README with that deadline (F6).
 - Brand-defense campaigns never appear with a profit-based row.
 - CHECK FIRST: rows the per-family N_f collapse newly condemns, and every LOSER pause row.
 - Portfolio echoed on every row (blank DETACHES on Campaign rows; on keyword/target rows Amazon

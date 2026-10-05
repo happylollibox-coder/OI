@@ -512,9 +512,11 @@ park price (`bid_park`) is read from the same table (R-f) — `V_OOB_KEYWORD` pu
 engine activates; nobody here bids.
 
 **Holdout.** Every row that names a campaign — SEAT / LEAK / GAP / NO_CLOCK / ABSORB / UNMAPPED
-and the OPEN_SEAT candidate — in a holdout campaign (`DE_HOLDOUT_ASSIGNMENT`, arm HOLDOUT)
-carries `holdout`, `holdout_eligible_from` and a note; before `eligible_from` the sentence says
-when the campaign joins the arm. From `eligible_from`: every SEAT move (repair, probation,
+and the OPEN_SEAT candidate — in a holdout campaign (from 2026-10-05 read from `V_HOLDOUT_ARM`,
+the arm that binds today, any trial; `holdout_eligible_from` is the arm's `gate_from`) carries
+`holdout`, `holdout_eligible_from` and a note; before `eligible_from` the sentence says when the
+campaign joins the arm. From `eligible_from` until the arm's `gate_to` (after it the campaign leaves
+the view and is an ordinary campaign again): every SEAT move (repair, probation,
 failed, stalled, probe, settling alike) reads "no sheet row — holdout campaign", the LEAK / GAP /
 NO_CLOCK moves read "no sheet row", the ABSORB advisory reads "advisory suppressed" (no freed
 spend is sent there), and the probe queue skips the campaign so no OPEN_SEAT candidate can sit in
@@ -525,7 +527,8 @@ row suppressed, no candidate in a holdout campaign); the copy dropped afterwards
 `FACT_AMAZON_ADS`, `DE_FAMILY_SEAT_LEDGER`, `T_LIFT_PROBES`, `T_OOB_SEAT_ECONOMICS`,
 `V_CAMPAIGN_CAP_STATE` (measured in seconds and tens of MB), `V_PPC_CHANGE_LOG_APPLIED`,
 `FACT_PPC_CHANGE_LOG` (PENDING_UPLOAD only), `DIM_KEYWORD`, `DIM_BRAND_PHRASES`,
-`DE_HOLDOUT_ASSIGNMENT`, `V_BOOK_ASSIGNMENT`. `V_OOB_KEYWORD` is a planner-ceiling view measured
+`V_HOLDOUT_ARM` (the arm that binds today, any trial; from 2026-10-05, before which it read
+`DE_HOLDOUT_ASSIGNMENT`), `V_BOOK_ASSIGNMENT`. `V_OOB_KEYWORD` is a planner-ceiling view measured
 in minutes and is never inlined — its seat economics come through `T_OOB_SEAT_ECONOMICS`. The read
 cost and the wall time are measurements; take them from a dry run and a timed uncached pull, never
 from this file (a wall figure quoted in a report is the report's measurement on that day, not a
@@ -1683,25 +1686,31 @@ ORDER BY started_at DESC LIMIT 9;
 
 ## The holdout rule
 
-`DE_HOLDOUT_ASSIGNMENT` names the campaigns in the HOLDOUT arm of the running trial and the day
-the arm starts, `eligible_from` (house rule 13). Before that day a holdout campaign is an ordinary
-campaign and may sit on a book. From it: every register row that names the campaign — SEAT, LEAK,
-GAP, NO_CLOCK, ABSORB, UNMAPPED, the OPEN_SEAT candidate — carries `holdout`, `holdout_eligible_from`
-and a note; every SEAT move reads "no sheet row — holdout campaign"; LEAK / GAP / NO_CLOCK moves read
-"no sheet row"; the ABSORB advisory reads "advisory suppressed"; the probe queue skips the campaign;
-both projections price its rows at today's cost (nothing may book an improvement from a sheet that
-never lands); the recovered-today figure excludes its dollars; and BOTH generators refuse the row
+From 2026-10-05 the register, both generators and `seat_holdout_row_on_sheet` read `V_HOLDOUT_ARM`
+(the arm that binds today, any trial). It names the campaigns in the HOLDOUT arm whose trial binds
+today or later, the day the arm starts (`gate_from`, published here as `holdout_eligible_from`;
+house rule 13) and its last day (`gate_to`). Before 2026-10-05 they read `DE_HOLDOUT_ASSIGNMENT`
+directly: every trial's HOLDOUT rows, from `eligible_from`, with no end. Before `gate_from` a
+holdout campaign is an ordinary campaign and may sit on a book; after `gate_to` it leaves the view
+and is ordinary again (trial 1's controls that trial 2 drew as TREATED left on 2026-10-05). From
+`gate_from`: every register row that names the campaign — SEAT, LEAK, GAP, NO_CLOCK, ABSORB,
+UNMAPPED, the OPEN_SEAT candidate — carries `holdout`, `holdout_eligible_from` and a note; every
+SEAT move reads "no sheet row — holdout campaign"; LEAK / GAP / NO_CLOCK moves read "no sheet row";
+the ABSORB advisory reads "advisory suppressed"; the probe queue skips the campaign; both
+projections price its rows at today's cost (nothing may book an improvement from a sheet that never
+lands); the recovered-today figure excludes its dollars; and BOTH generators refuse the row
 (`HOLDOUT_EXCLUDED`), so no sheet of any kind carries it. The brief's SEATS line names no campaign,
-so it has nothing to mark. Asserted by B09 / B10 / B11 / B34 on the register, by the generators'
-own live assertions on every build, and standing in `V_ENGINE_HEALTH` `seat_holdout_row_on_sheet`,
-which reads the change log for any seat-book row (`seat_moves_*` / `reprice_book_*`, at any upload
-status) naming a HOLDOUT campaign built on or after its `eligible_from`. Proven twice on `TMP_`
-copies with the date moved into the past (the "holdout branch" records above); re-run that proof
-whenever the rule changes. Read the arm:
+so it has nothing to mark. Asserted by B09 / B10 / B11 / B34 on the register, by the generators' own
+live assertions on every build, and standing in `V_ENGINE_HEALTH` `seat_holdout_row_on_sheet`, which
+reads the change log for any seat-book row (`seat_moves_*` / `reprice_book_*`, at any upload status)
+naming a HOLDOUT campaign built while its arm binds (between `gate_from` and `gate_to`). Proven
+twice on `TMP_` copies with the date moved into the past (the "holdout branch" records above);
+re-run that proof whenever the rule changes. Read the arm:
 
 ```sql
-SELECT arm, COUNT(*) campaigns, MIN(eligible_from) eligible_from, MIN(trial_end) trial_end
-FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` GROUP BY 1;
+-- the arm that binds today or later, any trial (from 2026-10-05)
+SELECT trial_id, COUNT(*) campaigns, MIN(gate_from) gate_from, MAX(gate_to) gate_to
+FROM `onyga-482313.OI.V_HOLDOUT_ARM` GROUP BY 1;
 ```
 
 ## The book loop — generate, Ori uploads, mark
@@ -1750,9 +1759,9 @@ GROUP BY 1, 2 ORDER BY built_on DESC, batch_id;
 No engine reads it. No budget is moved. No seat count is chosen — counts fall out of dollars and
 the engine's seat cost. No change to the verdict ladder, the bar or the floors. No family is
 guessed from a campaign name — unmapped spend is published as unmapped. Holdout campaigns
-(`DE_HOLDOUT_ASSIGNMENT`, arm HOLDOUT, from `eligible_from`) may hold seats and are marked on
-every register row that names them, but are excluded from every sheet the register prescribes,
-from the absorption advisory and from the probe queue.
+(`V_HOLDOUT_ARM`, the arm that binds today, any trial, from `gate_from` to `gate_to`) may hold
+seats and are marked on every register row that names them, but are excluded from every sheet the
+register prescribes, from the absorption advisory and from the probe queue.
 
 
 ## Known limits

@@ -618,7 +618,43 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         }
       }
     }
-    // Refused rows (EXCLUDE hits + declined REVIEWs) — reported after the export, never silent.
+    // ═══ HOLDOUT ARM — a campaign-level hold, fetched FRESH at export time ═══
+    // architecture/HOLDOUT.md §6 #2 (review of holdout-t2, 2026-10-04). The preflight gate above refuses
+    // only an EXCLUDE row on the same (campaign, keyword-or-term, lever) with the same value, and only for
+    // BID / BUDGET / NEGATE; STOP_TARGET, ADD_PRODUCT_AD, pause / enable / rename and everything queued
+    // from the Weekly Run page (T_WEEKLY_RUN_*, which carries no holdout logic) reached a control's sheet.
+    // So: every queued item on a campaign the HoldoutArm cube lists (V_HOLDOUT_ARM, from the assignment to
+    // gate_to; the arm, not this page, decides who is held) is refused, whatever its action. The arm read
+    // fails CLOSED: if it errors, every item on an existing campaign (a campaign id, or a name live on
+    // Amazon) is refused, and only brand-new campaign creates, which cannot be controls, export.
+    const holdoutIds = new Map<string, string>();   // campaign_id -> trial_id
+    const ha = await cubeLoadWithMeta({
+      dimensions: ['HoldoutArm.campaignId', 'HoldoutArm.trialId'],
+    }, 20, { noReauthRedirect: true });
+    const holdoutUnavailable = !!ha.error;
+    if (holdoutUnavailable) {
+      console.warn('[Bulksheet] holdout arm unavailable — every item on an existing campaign is refused:', ha.error);
+    } else {
+      for (const r of ha.data as Record<string, unknown>[]) {
+        const cid = String(r['HoldoutArm.campaignId'] ?? '');
+        if (cid) holdoutIds.set(cid, String(r['HoldoutArm.trialId'] ?? ''));
+      }
+    }
+    const holdoutHold = (item: DoQueueItem): string | null => {
+      const byName = liveIds.get((item.campaign || '').trim().toUpperCase())?.campaign_id || '';
+      const ids = [item.campaign_id || '', byName].filter(Boolean);
+      if (holdoutUnavailable) {
+        return ids.length
+          ? 'HOLDOUT ARM UNREADABLE: refused (fail closed) — the export cannot tell whether this campaign is a holdout control; retry when the cube answers'
+          : null;
+      }
+      const hit = ids.find(id => holdoutIds.has(id));
+      return hit
+        ? `HOLDOUT: campaign ${hit} is a control of ${holdoutIds.get(hit) || 'the live trial'} — nothing is exported to it on any lever (architecture/HOLDOUT.md §6 #2)`
+        : null;
+    };
+
+    // Refused rows (EXCLUDE hits + declined REVIEWs + holdout holds) — reported after the export, never silent.
     const preflightRefused: { item: DoQueueItem; reason: string }[] = [];
 
     import('xlsx').then((XLSX) => {
@@ -808,6 +844,13 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
         const campId = item.campaign_id || '';
         const campName = item.campaign || '';
         const adGroupId = item.ad_group_id || agOverride[item.keyword_id] || '';
+
+        // HOLDOUT hold (see the fetch above): before any other gate, on every action.
+        const held = holdoutHold(item);
+        if (held) {
+          preflightRefused.push({ item, reason: held });
+          continue;
+        }
 
         // ENGINE PREFLIGHT gate (see the fetch above). A hit on (campaign, keyword-or-'', lever)
         // carries the SP's verdict: EXCLUDE never reaches the sheet; REVIEW asks first. A miss is
@@ -1498,10 +1541,16 @@ export function DoPage({ data, onNav }: { data: DashboardData; onNav?: (page: st
       if (preflightUnavailable) {
         alert('⚠ Preflight unavailable — exported WITHOUT the gate (cube unreachable or stale; see console). Verdicts were not checked on this sheet.');
       }
+      if (holdoutUnavailable) {
+        alert('⚠ Holdout arm unavailable — every item on an existing campaign was REFUSED (fail closed; see console). Only new-campaign creates are in this sheet.');
+      }
       // Log the negatives in this export to the owned registry immediately (don't wait for the manual
       // "Uploaded to Amazon" step). Keeps DE_NEGATIVE_KEYWORDS/TARGETS current so already-applied
       // negatives stop re-surfacing as "already exists" bounces. Idempotent + deduped server-side.
-      doQueue.logExportedNegatives(doQueue.items);
+      // Refused items are not in the sheet, so they are not logged (a held control's negative never
+      // reached Amazon).
+      const refusedSet = new Set(preflightRefused.map(r => r.item));
+      doQueue.logExportedNegatives(doQueue.items.filter(i => !refusedSet.has(i)));
     });
   };
 

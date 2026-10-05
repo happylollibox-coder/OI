@@ -5,7 +5,37 @@
 -- do without the changes." This view is the only object in the stack that tries to answer it with
 -- a control group that actually exists.
 --
--- ── READ THIS BEFORE READING ANY NUMBER BELOW ────────────────────────────────────────────────
+-- ── WHICH TRIAL (holdout restart, 2026-10-05; plan docs/superpowers/plans/2026-10-03-holdout-restart.md
+-- Task 6) ──────────────────────────────────────────────────────────────────────────────────────
+-- The view serves THE LIVE TRIAL: CTE k reads its row of V_HOLDOUT_TRIAL (registry DE_HOLDOUT_TRIAL,
+-- newest assigned_on on a tie), the row V_ENGINE_HEALTH holdout_unit_changed and SP_ASSIGN_HOLDOUT
+-- read. Nothing else in the body names a trial. From 2026-10-05 that is trial 2:
+--   trial_id HOLDOUT-2026Q4-CAMPAIGN-T2, seed OI-HOLDOUT-v2|5, 59 campaigns, 12 HOLDOUT clusters;
+--   gate (the export block) from 2026-10-05; window 2026-10-06 .. 2027-01-26; interim safety look
+--   2026-12-15 (a one-time hand query, HOLDOUT.md §8); FIRST READOUT 2027-02-09, never pulled forward.
+--   t_mult 3.27 is carried from trial 1's design; it was not re-derived for 12 clusters.
+--   Ex-ante MDE $2,089 per 14 days: trial 1's $2,261 rescaled by N*sqrt(1/h + 1/t) on trial 1's
+--   noise floor. A larger multiplier for 12 clusters would raise it, so read it as a floor.
+--   The pre-period: -$1,868.51 per 14 days is HALF THE DRAW'S 28-DAY NET (-$3,737.02 / 2, read
+--   2026-10-03), the convention trial 1 used (net_28d_at_assign / 2 below); it is not a measured
+--   14-day net. FACT_AMAZON_ADS summed over the 59 campaigns for 2026-09-19 .. 10-02 read -$2,052.52
+--   (read 2026-10-04; FACT restates as days settle: the same 28 days read -$4,145.07 that day). Either
+--   way the MDE is about 1.0-1.1x the whole quantity being measured, so the warning below applies to
+--   trial 2 unchanged.
+-- Trial 1 (HOLDOUT-2026Q4-CAMPAIGN) is ARCHIVED from 2026-10-05, contaminated (DE_HOLDOUT_TRIAL's
+-- ARCHIVED row, HOLDOUT.md §6). Its 69 rows stay in DE_HOLDOUT_ASSIGNMENT unchanged and this view no
+-- longer computes it. Every number in the sections below is TRIAL 1's, as designed and measured
+-- before the restart; they are kept as the record.
+-- MEASURED 2026-10-04 ~05:50 UTC (LA 2026-10-03) on TMP_HT2_ copies (this body, comment lines
+-- stripped, names sed-pointed at copies; all dropped afterwards): over the deploy's registry rows and
+-- the founding cohort, 1 row, NOT_YET, "not enough data yet — first readout 2027-02-09", no CENSORED
+-- or PRE_WINDOW_CHANGE row; over an empty registry, 0 rows; over a registry holding trial 1's OPENED
+-- row only, the same 69 rows as the deployed view (1 NOT_YET, 61 CENSORED, 7 PRE_WINDOW_CHANGE; 0 rows
+-- differ either way, compared as whole rows). Unit branches (CENSORED + PRE_WINDOW_CHANGE) read once:
+-- deployed 102.0 slot-s, this body on the copies 251.3 slot-s; V_HOLDOUT_TRIAL is planned again at
+-- every reference of k.
+--
+-- ── TRIAL 1 (archived): READ THIS BEFORE READING ANY NUMBER BELOW ───────────────────────────────
 -- THIS IS A HARM DETECTOR, NOT A VALUE CERTIFIER. The design's minimum detectable effect at the
 -- chosen cell (20% share, 16 weeks, 14 holdout clusters) is $2,261 per 14 days. The eligible
 -- population's ENTIRE 14-day net profit is about -$1,288. The MDE is 1.76x the whole quantity
@@ -24,8 +54,8 @@
 -- -$2,470 over four months while the engine ran, and Ori's own scorecard measured account raises
 -- at -$752 against cuts at +$3,051.
 --
--- ── WHY THE VIEW PRINTS NOTHING UNTIL 2027-01-05 ─────────────────────────────────────────────
--- Before the first readout date this view returns exactly ONE estimate row, state NOT_YET, every
+-- ── WHY THE VIEW PRINTS NOTHING UNTIL THE FIRST READOUT (trial 2: 2027-02-09; trial 1 was 2027-01-05)
+-- Before k.first_readout this view returns exactly ONE estimate row, state NOT_YET, every
 -- numeric column NULL (v27.162: beside it, one CENSORED row per censored unit and one
 -- PRE_WINDOW_CHANGE row per HOLDOUT unit changed before its window, which carry dates and a reason
 -- and no number — see "CONTAMINATION AND CENSORING" below). That is deliberate and it
@@ -35,10 +65,10 @@
 --     systematically UNDERSTATES the treated arm's sales. The readout date already contains the
 --     14-day settle. Do not pull it forward.
 --   · A daily-readable estimate on an underpowered trial WILL be read early and over-interpreted.
---     The first plausible-looking number becomes the answer. The interim SAFETY look (2026-11-10,
---     8 weeks observed, can only detect harm above $3,133 per 14 days) is a CIRCUIT BREAKER, not a
---     verdict, and it is a deliberate one-time hand query documented in HOLDOUT.md — not something
---     this standing view leaks every morning.
+--     The first plausible-looking number becomes the answer. The interim SAFETY look (trial 2:
+--     2026-12-15; trial 1 was 2026-11-10, 8 weeks observed, able to detect harm above $3,133 per 14
+--     days only) is a CIRCUIT BREAKER, not a verdict, and it is a deliberate one-time hand query
+--     documented in HOLDOUT.md — not something this standing view leaks every morning.
 --
 -- ── WHAT IS BEING COMPARED ───────────────────────────────────────────────────────────────────
 -- Unit: the CAMPAIGN (see V_HOLDOUT_ELIGIBLE for why not the keyword — holding out a keyword
@@ -163,15 +193,16 @@
 -- =============================================
 CREATE OR REPLACE VIEW `onyga-482313.OI.V_HOLDOUT_READOUT` AS
 WITH
--- ── TRIAL CONSTANTS. Mirrored from SP_ASSIGN_HOLDOUT; if one moves they ALL move together. ────
+-- ── THE LIVE TRIAL (holdout restart, 2026-10-05): its row of V_HOLDOUT_TRIAL, newest assigned_on on a
+-- tie — the row V_ENGINE_HEALTH holdout_unit_changed and SP_ASSIGN_HOLDOUT read. win_start / win_end
+-- = DE_HOLDOUT_ASSIGNMENT.eligible_from / trial_end of its rows; first_readout = win_end + the 14-day
+-- settle, NEVER pulled forward; t_mult and mde_ex_ante_14d are the design's (header, "WHICH TRIAL").
+-- No live trial: k is empty, and so is every row below (no NOT_YET row).
 k AS (
-  SELECT
-    'HOLDOUT-2026Q4-CAMPAIGN' AS trial_id,
-    DATE '2026-09-01' AS win_start,      -- = DE_HOLDOUT_ASSIGNMENT.eligible_from
-    DATE '2026-12-22' AS win_end,        -- = DE_HOLDOUT_ASSIGNMENT.trial_end (16 weeks)
-    DATE '2027-01-05' AS first_readout,  -- win_end + the 14-day settle. NEVER pull this forward.
-    3.27      AS t_mult,                 -- design's cluster multiplier at 14 clusters (t(.975,13)=2.16)
-    2261.0    AS mde_ex_ante_14d         -- the design's own MDE for this cell, per 14 days
+  SELECT trial_id, win_start, win_end, first_readout, t_mult, mde_ex_ante_14d
+  FROM `onyga-482313.OI.V_HOLDOUT_TRIAL`
+  WHERE is_live
+  QUALIFY ROW_NUMBER() OVER (ORDER BY assigned_on DESC, trial_id DESC) = 1
 ),
 anchor AS (SELECT LEAST(MAX(date), `onyga-482313.OI.FN_ADS_ANCHOR_CAP`()) AS d
            FROM `onyga-482313.OI.FACT_AMAZON_ADS`),

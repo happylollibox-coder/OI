@@ -284,6 +284,21 @@
 -- straight " in config.yaml is a YAML delimiter and not a quotation.
 -- WHENEVER A MODEL IS RETIRED, ITS PHRASES ARE ADDED TO THAT SCRIPT IN THE SAME COMMIT. A check
 -- that only knows yesterday's wrong answer passes over today's.
+--
+-- HOLDOUT RESTART (plan docs/superpowers/plans/2026-10-03-holdout-restart.md Task 7; deploy
+-- 2026-10-05). B09's expected holdout set (CTE holdout) reads V_HOLDOUT_ARM, the view the register
+-- itself reads since Task 5 (one row per HOLDOUT campaign whose arm binds today or later, any
+-- trial; eligible_from = its gate_from). Before, it read DE_HOLDOUT_ASSIGNMENT's HOLDOUT rows of
+-- every trial with MIN(eligible_from), so trial 1's controls stayed expected forever.
+-- WHEN IT CAN PASS: only after deploy step 4 of plan Task 8 (V_HOLDOUT_ARM exists and
+-- V_FAMILY_SEAT_REGISTER reads it). This suite reads the view, not the T_FAMILY_SEAT_REGISTER
+-- snapshot, so it does not wait for a pass; the snapshot is HOLDOUT_RESTART_acceptance.sql K9b.
+-- Rehearsal 2026-10-04 on TMP_HT2_ copies (all dropped): B09's text over one read of this branch's
+-- V_FAMILY_SEAT_REGISTER on a copy of V_HOLDOUT_ARM pinned to 2026-10-05 (12 rows, all trial 2;
+-- the read 14,043.7 slot-s): 0 with this CTE (over the pinned arm copy). Negative controls: the old
+-- CTE on the same register copy 67 (over the live table, trial 1 only, and over an assignment copy
+-- holding trial 2's founding rows: 67 both); this CTE on the live T_FAMILY_SEAT_REGISTER (built
+-- 2026-10-04 05:36 UTC, trial 1's controls marked) 49; the old CTE on that snapshot 0.
 -- =============================================================================================
 CREATE TEMP TABLE reg AS SELECT * FROM `onyga-482313.OI.V_FAMILY_SEAT_REGISTER`;
 
@@ -346,8 +361,10 @@ fam AS (SELECT campaign_id, family FROM `onyga-482313.OI.T_FAMILY_BAR`
 brand AS (SELECT DISTINCT CONCAT(r'\b', REGEXP_REPLACE(TRIM(LOWER(phrase), ' |,'), r'([.*+?^${}()|\[\]\\])', r'\\\1'), r'\b') AS rx
           FROM `onyga-482313.OI.DIM_BRAND_PHRASES` WHERE phrase_type = 'BRAND' AND TRIM(LOWER(phrase), ' |,') != ''),
 probes AS (SELECT DISTINCT CAST(keyword_id AS STRING) AS kid FROM `onyga-482313.OI.T_LIFT_PROBES`),
-holdout AS (SELECT unit_id AS campaign_id, MIN(eligible_from) AS eligible_from
-            FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT` WHERE unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT' GROUP BY 1),
+-- the arm the register reads (V_HOLDOUT_ARM: one row per HOLDOUT campaign whose arm binds today or
+-- later, any trial; eligible_from = its gate_from). Holdout restart plan 2026-10-03, Task 7.
+holdout AS (SELECT campaign_id, gate_from AS eligible_from
+            FROM `onyga-482313.OI.V_HOLDOUT_ARM`),
 lastchg AS (
   SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date, old_bid, new_bid
   FROM `onyga-482313.OI.V_PPC_CHANGE_LOG_APPLIED`

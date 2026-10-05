@@ -1146,8 +1146,9 @@ itself: is a 3-day window right in peak, or 7, or 1? Is the boost allowance 0.50
 verdict? **These are settings, not code** — every one is a declared constant — and settings are exactly
 what a control group can test.
 
-The 10 % holdout (`DE_HOLDOUT_ASSIGNMENT`) therefore serves two purposes: the standing engine-vs-nothing
-baseline, and the instrument for questions like these. Rules:
+The 10 % holdout (read through `V_HOLDOUT_ARM`, the arm that binds today, any trial) therefore
+serves two purposes: the standing engine-vs-nothing baseline, and the instrument for questions like
+these. Rules:
 
 - **Never experiment on the control arm.** It is the "do nothing" baseline; contaminating it destroys
   the only clean comparison the account has. Method questions are asked by splitting the *treated*

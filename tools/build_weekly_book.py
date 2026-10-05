@@ -377,7 +377,8 @@ SELECT
   s.settled_roas90, s.is_pt,
   k.kw_spend_28d, k.kw_roas_28d,
   d.campaign_type, d.state AS campaign_state, d.portfolio_id,
-  e.echo_portfolio_id
+  e.echo_portfolio_id,
+  h.gate_from AS holdout_gate_from
 FROM losers l
 JOIN `{P}.OI.FACT_KEYWORD_STATE` s ON CAST(s.campaign_id AS STRING) = l.campaign_id
 JOIN kw k ON k.campaign_id = l.campaign_id AND k.t = LOWER(TRIM(s.target_text))
@@ -388,7 +389,13 @@ LEFT JOIN (SELECT CAST(campaign_id AS STRING) AS cid3,
                     AS echo_portfolio_id
            FROM `{P}.OI.V_SRC_AmazonAds_campaign_history` GROUP BY campaign_id) e
        ON e.cid3 = l.campaign_id
+-- THE HOLDOUT GATE, the same form as the reprice, seats and unpause tools: a campaign whose holdout arm
+-- binds today (a control of any trial, CURRENT_DATE in Los Angeles on or after its gate_from) is never
+-- priced. mend_rows() lists these rows on the Refused sheet from MEND_HELD_SQL (this text, the gate
+-- inverted), so the hold reads as a decision and not an absence.
+LEFT JOIN (SELECT campaign_id AS cid, gate_from FROM `{P}.OI.V_HOLDOUT_ARM`) h ON h.cid = l.campaign_id
 WHERE d.state = 'ENABLED'
+  AND NOT (h.cid IS NOT NULL AND CURRENT_DATE('America/Los_Angeles') >= h.gate_from)
   -- TWO CONDITIONS, AND THE SECOND ONE IS THE ONE THAT MATTERS.
   -- (1) The keyword's OWN recent record condemns it: below its family bar on the settled 28 days.
   -- (2) The LADDER ALSO ALREADY READS IT AS AT-OR-BELOW BAR. Without (2) the first cut of this
@@ -406,6 +413,19 @@ WHERE d.state = 'ENABLED'
   AND s.current_bid > s.bid_floor + 0.005
 ORDER BY l.net_profit_28d ASC, k.kw_spend_28d DESC
 """
+
+# THE HOLDOUT GATE of the mend (review of holdout-t2, 2026-10-04). Before it, arm 2 trimmed bids on
+# keywords in EVERY losing campaign: nothing in it read the holdout arm, and skip_keys holds only the
+# reprice book's EXECUTABLE rows, so a control the reprice tool refused was priced here. Measured on the
+# 12 trial-2 controls on 2026-10-04: 5 trims on 5 keywords in 3 controls. The gate is in MEND_SQL itself
+# (one V_HOLDOUT_ARM reference: K7b); the held rows are read by the same text with the gate inverted and
+# go to the Refused sheet. K13 (scripts/bigquery/migrations/2026-10-05_holdout_t2_k13_mend.py) runs both
+# texts on the trial's controls: gated 0, ungated > 0 whenever a control is losing.
+MEND_HOLD_GATE = "AND NOT (h.cid IS NOT NULL AND CURRENT_DATE('America/Los_Angeles') >= h.gate_from)"
+MEND_HOLD_HELD = "AND (h.cid IS NOT NULL AND CURRENT_DATE('America/Los_Angeles') >= h.gate_from)"
+assert MEND_SQL.count(MEND_HOLD_GATE) == 1 and MEND_SQL.count('V_HOLDOUT_ARM') == 1, \
+    "MEND_SQL must carry the holdout gate exactly once"
+MEND_HELD_SQL = MEND_SQL.replace(MEND_HOLD_GATE, MEND_HOLD_HELD)
 
 
 def mend_budgets(budget_recs, losing, step=MEND_STEP):
@@ -445,13 +465,72 @@ def mend_budgets(budget_recs, losing, step=MEND_STEP):
     return out
 
 
+# THE FINAL HOLDOUT GATE (holdout restart, 2026-10-05; review of 5f83cb4): every row of the assembled
+# book, whatever its source, is checked against the arm that binds TODAY. The sources gate themselves,
+# but --reuse-stage reads source files of any age (the stage directory is shared across days), and a
+# file written before trial 2 was founded carries its controls. bq() exits on a failed query, so a book
+# is never built without this read (fail closed). Not counted by K7b, which counts MEND_SQL only.
+FINAL_HOLD_SQL = """
+SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(gate_from AS STRING) AS gate_from,
+       CAST(gate_to AS STRING) AS gate_to, trial_id
+FROM `{P}.OI.V_HOLDOUT_ARM`
+WHERE CURRENT_DATE('America/Los_Angeles') BETWEEN gate_from AND gate_to
+"""
+
+
+def final_holdout_gate(records, arm=None):
+    """Split records into (kept, held). held = rows on a campaign whose holdout arm binds today, each
+    turned into a Refused row with a HOLDOUT reason. arm: rows of FINAL_HOLD_SQL (read when None)."""
+    if arm is None:
+        arm = bq(FINAL_HOLD_SQL.replace('{P}', PROJECT))
+    held_at = {str(a['campaign_id']): a for a in arm}
+    kept, held = [], []
+    for r in records:
+        a = held_at.get(str(r['audit'].get('campaign_id')))
+        if a is None:
+            kept.append(r)
+            continue
+        why = (f"HOLDOUT: the campaign is a control of {a.get('trial_id')} (V_HOLDOUT_ARM, held "
+               f"{a.get('gate_from')} to {a.get('gate_to')}). This {r.get('source')} row was refused "
+               f"by the book's final holdout gate, not shipped.")
+        held.append({**r, 'sheet': None, 'cells': None,
+                     'audit': {**r['audit'], 'story': why, 'reason': why}})
+    return kept, held
+
+
 def mend_rows(step=MEND_STEP, min_spend=MEND_MIN_SPEND_28D, skip_keys=frozenset()):
-    """Budget cuts and bid trims for campaigns losing money. Returns a list of book records.
+    """Budget cuts and bid trims for campaigns losing money. Returns (records, refused).
 
     skip_keys: (campaign_id, keyword_id) pairs another source already prices. The reprice book is
     already acting on those, and a second opinion on one keyword in one night is two prices, not a
-    stronger one."""
-    rows = bq(MEND_SQL.replace('{P}', PROJECT).replace('{MINSPEND}', repr(float(min_spend))))
+    stronger one.
+
+    refused: the trims the holdout gate withheld (a control whose arm binds today), one Refused row
+    each, whatever skip_keys says: a control is never priced by the mend."""
+    def sql(text):
+        return text.replace('{P}', PROJECT).replace('{MINSPEND}', repr(float(min_spend)))
+    rows = bq(sql(MEND_SQL))
+    refused = []
+    for k in bq(sql(MEND_HELD_SQL)):
+        ob = num(k.get('current_bid'))
+        floor = num(k.get('bid_floor'))
+        would = round(max(ob * (1 - step), floor), 2) if ob is not None and floor is not None else None
+        refused.append({
+            'source': 'mend', 'sheet': None, 'cells': None,
+            'audit': {
+                'disposition': 'MEND_BID_DOWN', 'campaign_id': k['campaign_id'],
+                'campaign': k.get('campaign_name') or '', 'keyword_id': str(k['keyword_id']),
+                'ad_group_id': str(k.get('ad_group_id') or ''),
+                'target': k.get('target_text') or '', 'match': k.get('match_type') or '',
+                'channel': k.get('channel') or '', 'family': k.get('family') or '',
+                'old_bid': repr(ob), 'new_bid': repr(would),
+                'ladder_state': k.get('ladder_state'),
+                'reason': (f"HOLDOUT: the campaign is a holdout control (V_HOLDOUT_ARM, held from "
+                           f"{k.get('holdout_gate_from')}). The mend would trim this bid "
+                           f"${ob if ob is not None else 0:.2f} -> "
+                           f"${would if would is not None else 0:.2f}; a control is never priced "
+                           f"inside its trial, so it is refused, not shipped."),
+            }})
     out, by_campaign = [], defaultdict(list)
     for r in rows:
         by_campaign[r['campaign_id']].append(r)
@@ -515,7 +594,7 @@ def mend_rows(step=MEND_STEP, min_spend=MEND_MIN_SPEND_28D, skip_keys=frozenset(
                     '_step': step,
                     '_never_had_portfolio': never_had,
                 }})
-    return out
+    return out, refused
 
 
 def _f(v, default=None):
@@ -1328,11 +1407,14 @@ def _main(args):
     if not args.no_mend:
         already = {(str(r['audit'].get('campaign_id')), str(r['audit'].get('keyword_id')))
                    for r in records}
-        mend = mend_rows(args.mend_step, skip_keys=already)
+        mend, mend_held = mend_rows(args.mend_step, skip_keys=already)
         records += mend
+        refused += mend_held
         sources.append({'name': 'mend (losing campaigns)', 'ok': True, 'error': None})
         camps = len({r['audit']['campaign_id'] for r in mend})
-        print(f"  mend: {len(mend)} bid trims across {camps} losing campaign(s)")
+        print(f"  mend: {len(mend)} bid trims across {camps} losing campaign(s)"
+              + (f", {len(mend_held)} REFUSED on {len({r['audit']['campaign_id'] for r in mend_held})}"
+                 f" holdout control(s)" if mend_held else ""))
 
     if not args.no_budgets:
         b = budget_rows(args.plan)
@@ -1355,6 +1437,12 @@ def _main(args):
             ob, nb = a.get('_old_budget') or 0, a.get('_new_budget') or 0
             pct = (nb / ob - 1) * 100 if ob else float('nan')
             print(f"       HELD {pct:+7.0f}%  ${ob:8.2f} → ${nb:8.2f}  {a.get('campaign')}")
+
+    records, held = final_holdout_gate(records)
+    refused += held
+    if held:
+        print(f"  holdout gate: {len(held)} row(s) REFUSED on "
+              f"{len({r['audit'].get('campaign_id') for r in held})} control(s) whose arm binds today")
 
     if not records:
         sys.exit("no executable rows from any source — nothing to build")

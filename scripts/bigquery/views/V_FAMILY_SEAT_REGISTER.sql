@@ -219,8 +219,8 @@
 -- T_LIFT_PROBES, T_OOB_SEAT_ECONOMICS (V_OOB_KEYWORD is a planner-ceiling view that takes minutes;
 -- its seat economics are materialised once per pass by SP_REFRESH_CUBE_TABLES), V_CAMPAIGN_CAP_STATE
 -- (measured light: tens of MB, seconds), V_PPC_CHANGE_LOG_APPLIED, FACT_PPC_CHANGE_LOG (the
--- PENDING_UPLOAD book only), DIM_KEYWORD (bid versions), DIM_BRAND_PHRASES, DE_HOLDOUT_ASSIGNMENT,
--- V_BOOK_ASSIGNMENT. Never a ceiling view.
+-- PENDING_UPLOAD book only), DIM_KEYWORD (bid versions), DIM_BRAND_PHRASES, V_HOLDOUT_ARM
+-- (DE_HOLDOUT_ASSIGNMENT before 2026-10-05), V_BOOK_ASSIGNMENT. Never a ceiling view.
 --
 -- WHAT IT NEVER DOES. No engine reads it. No budget is moved. No bid is set. Every sheet it
 -- prescribes is built by a generator and uploaded by Ori. Holdout campaigns are marked on EVERY
@@ -270,11 +270,11 @@ engine_go AS (
   FROM `onyga-482313.OI.T_ENGINE_PREFLIGHT`
   WHERE verdict = 'GO'
   GROUP BY 1, 2),
+-- the arm that binds today or later, any trial (V_HOLDOUT_ARM, holdout restart 2026-10-05, plan
+-- docs/superpowers/plans/2026-10-03-holdout-restart.md Task 5); eligible_from = the gate date
 holdout AS (
-  SELECT unit_id AS campaign_id, MIN(eligible_from) AS eligible_from
-  FROM `onyga-482313.OI.DE_HOLDOUT_ASSIGNMENT`
-  WHERE unit_type = 'CAMPAIGN' AND arm = 'HOLDOUT'
-  GROUP BY 1),
+  SELECT campaign_id AS campaign_id, gate_from AS eligible_from
+  FROM `onyga-482313.OI.V_HOLDOUT_ARM`),
 -- the keyword's latest APPLIED bid change — the raise a stalled probe is parked at (R-b)
 lastchg AS (
   SELECT campaign_id, keyword_id, action, DATE(applied_at, 'America/Los_Angeles') AS chg_date,

@@ -1,14 +1,22 @@
 # HOLDOUT — the randomized trial that answers "is the engine worth anything?"
 
-**Born:** 2026-08-19, v27.83. **Trial id:** `HOLDOUT-2026Q4-CAMPAIGN`.
+**Born:** 2026-08-19, v27.83. **Trial ids:** `HOLDOUT-2026Q4-CAMPAIGN` (trial 1, archived from
+2026-10-05) and **`HOLDOUT-2026Q4-CAMPAIGN-T2` (trial 2, the live trial from 2026-10-05)**.
 **Ori:** *"the main goal of ads is to make more total of dollars that we would do without the changes."*
-**Ori, 2026-08-18:** *"start the holdout."*
+**Ori, 2026-08-18:** *"start the holdout."* **Ori, 2026-10-04, on trial 2's list:** *"ok seed 5, deploy it."*
 
-> **Status, 2026-10-03:** trial 1 (`HOLDOUT-2026Q4-CAMPAIGN`, §0–§8 as written below) is
-> **contaminated and restarts** (Ori, 2026-10-03, option (c)). Its rows are kept unchanged and are
-> archived from 2026-10-05. Trial 2 (`HOLDOUT-2026Q4-CAMPAIGN-T2`) starts its window on 2026-10-06 once
-> Ori approves its list of control campaigns. See §6 "Rulings 2026-10-03" and §9. The plan is
-> `docs/superpowers/plans/2026-10-03-holdout-restart.md`.
+> **Status, from 2026-10-05: the live trial is trial 2, `HOLDOUT-2026Q4-CAMPAIGN-T2`** (§9).
+> - **Size:** 59 campaigns, 12 of them controls.
+> - **Dates:** the export gate binds from 2026-10-05. The window runs 2026-10-06 .. 2027-01-26. The
+>   interim look is 2026-12-15 and the first readout 2027-02-09.
+> - **Approval and deploy:** Ori approved the list on 2026-10-04, and the deploy is on 2026-10-05 by
+>   `scripts/bigquery/migrations/2026-10-05_holdout_t2_deploy.sh`.
+> - **Trial 1** (`HOLDOUT-2026Q4-CAMPAIGN`) is contaminated and archived from 2026-10-05. §0–§8 describe
+>   trial 1 wherever a passage does not say trial 2. Its 69 rows are kept unchanged (§6 "Rulings
+>   2026-10-03").
+> - **How the engine is kept off a control:** every reader that does so reads `V_HOLDOUT_ARM` (the arm
+>   that binds today, any trial). The readout and the board read the live trial from `V_HOLDOUT_TRIAL`.
+> - **Plan:** `docs/superpowers/plans/2026-10-03-holdout-restart.md`.
 
 ---
 
@@ -20,6 +28,10 @@ no bid, no budget, no negative — for 16 weeks. The other 55 run exactly as the
 this account has ever had to "does the engine make money?". **It is also a blunt instrument: it
 can only detect an effect bigger than about $2,261 per 14 days, which is larger than the entire
 14-day net profit of the campaigns under test.** Read §7 before you read any number it produces.
+
+**Trial 2, the live trial from 2026-10-05:** 12 of 59 campaigns are held out from 2026-10-06 for 16
+weeks, and the two groups are compared on 2027-02-09. The MDE is about $2,089 per 14 days, the same
+blunt instrument (§8 "Trial 2's readout", §9).
 
 ---
 
@@ -95,12 +107,18 @@ between its keywords instead of being fooled by it.
 
 | object | role |
 |---|---|
-| `V_HOLDOUT_ELIGIBLE` | Who may enter, and the frozen facts the randomization blocks on. **One consumer only** (`SP_ASSIGN_HOLDOUT`) — it reads `V_CAMPAIGN_CAP_STATE` and `V_LAUNCH_POPULATION`, so nothing hot may touch it. |
-| `DE_HOLDOUT_ASSIGNMENT` | **The arms.** One row per unit, written once, never updated. |
-| `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. |
-| `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. |
-| `V_HOLDOUT_READOUT` | The answer. Silent until 2027-01-05. From v27.162 it also publishes one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed between its assignment and its window start (dates and the reason, never a dollar) — §6 "Contamination". |
-| `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day, or changed before its window and the readout does not publish it; AMBER while a change before the window stands unruled — §6 "Contamination". |
+| `V_HOLDOUT_ELIGIBLE` | Who may enter, and the frozen facts the randomization blocks on. **One consumer only** (`SP_ASSIGN_HOLDOUT`) — it reads `V_CAMPAIGN_CAP_STATE` and `V_LAUNCH_POPULATION`, so nothing hot may touch it. From 2026-10-05 its stock literal is trial 2's (below). |
+| `DE_HOLDOUT_ASSIGNMENT` | **The arms.** One row per unit, written once, never updated. Carries `trial_id`: trial 1's 69 rows and trial 2's founding 59, plus trial 2's late arrivals. |
+| `DE_HOLDOUT_TRIAL` | (trial 2) **Which trial is live.** It is append-only, with one row per event, `OPENED` or `ARCHIVED`. A trial is archived by appending a row, never by editing its assignment rows. Trial 1 has a back-filled `OPENED` row (its v27.83 constants) and an `ARCHIVED` row effective 2026-10-05 that states its contamination. Trial 2's `OPENED` row carries its seed, dates, `t_mult`, MDE and Ori's words. |
+| `V_HOLDOUT_TRIAL` | (trial 2) One row per trial: `gate_from`, `gate_to` = `LEAST(win_end, archived_from − 1)`, `win_start`, `win_end`, `interim_look`, `first_readout`, `is_live`, `status_today`. Exactly one trial is live. The readout, the board and `SP_ASSIGN_HOLDOUT` read that row. |
+| `V_HOLDOUT_ARM` | (trial 2) **The gate: the arm that binds today, any trial.** One row per control campaign whose arm binds today or later: `campaign_id`, `gate_from`, `gate_to`, `trial_id`. Every reader that keeps the engine off a control reads it. A hold ends on its trial's last day, and a trial-1 control that trial 2 drew as TREATED is released on 2026-10-05. **A trial with no `OPENED` row is invisible to it**, so an empty registry empties the gate, and the board then reads RED ("no HOLDOUT unit"). |
+| `DE_HOLDOUT_BASELINE` | (trial 2, amendment 2026-10-04) Append-only. Each founding control's value, at the assignment, of the settings no source can date: placement and shopper-cohort bid adjustments, and SB product targets' bid and state (§6 "What the alarm sees"). Written once by the founding script, for the founding controls only. A late arrival gets no row and is unwatched on these settings (§6, kind 4). The script records only **present** settings: a row counts only when its source table's latest sync re-stamped it and it is not flagged deleted (§6, kind 4). A later row carries Ori's ruling on a difference. Its value is NULL when he rules that a setting is gone. Read by `holdout_unit_changed`. |
+| `SP_ASSIGN_HOLDOUT` | Assigns unassigned eligible units. Append-only, idempotent. Orchestrator **Task 20.55**, before the proposal snapshot. From 2026-10-05 it writes into **the live trial only, and late arrivals only**. A founding cohort is written once from the approved list, never by this procedure, and it writes nothing into a trial that has no founding rows. |
+| `SP_ENGINE_PREFLIGHT` | The gate. A **third** exclusion source beside collision and claim: `HOLDOUT`, covering **all** levers. Verdict `EXCLUDE`. Reads `V_HOLDOUT_ARM` (the arm that binds today, any trial), between `gate_from` and `gate_to`. |
+| the other gate readers | `V_PLAN_WINDOW_JUDGMENT`, `V_FAMILY_SEAT_REGISTER` and the three bulksheet generators and the weekly book's mend (`build_weekly_book.py` `MEND_SQL`, added 2026-10-04) (`build_reprice_bulksheet.py`, `build_seasonal_unpause_bulksheet.py`, `build_seat_moves_bulksheet.py`) read `V_HOLDOUT_ARM` (the arm that binds today, any trial). Their `eligible_from` is the arm's `gate_from`. Their snapshots `T_FAMILY_SEAT_REGISTER` and `FACT_PLAN_NEXT_WEEK` follow on the next rebuild. |
+| `V_HOLDOUT_READOUT` | The answer, for **the live trial** (read from `V_HOLDOUT_TRIAL`). It is silent until that trial's `first_readout`: 2027-01-05 for trial 1, **2027-02-09 for trial 2**. From v27.162 it also publishes one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed between its assignment and its window start (dates and the reason, never a dollar) — §6 "Contamination". Trial 1's record is reproduced with `HOLDOUT_INTEGRITY_acceptance.sql`'s `led` and `pre` statements and trial 1's constants. |
+| `V_ENGINE_HEALTH` `holdout_unit_changed` | v27.162: RED when a HOLDOUT campaign changed inside its window and the readout does not censor it and its stratum-mates from that day, or changed before its window and the readout does not publish it; AMBER while a change before the window stands unruled — §6 "Contamination". **From 2026-10-05** it reads the live trial and adds two terms. The **touch alarm** is RED for 7 Los Angeles days after any touch on a control, then AMBER. **Feed liveness** is RED when a feed is more than 36 hours old. §6 "What the alarm sees". |
+| `V_ENGINE_HEALTH` `seat_holdout_row_on_sheet` | A seat-book row naming a control built while its arm binds (between `gate_from` and `gate_to` of `V_HOLDOUT_ARM`). |
 
 ### The eligible population — 69 campaigns, $26,377 / 28d
 
@@ -117,6 +135,14 @@ The Bunny/LolliBall list is a **frozen literal** in the view, on purpose. Readin
 `risk_state` would (a) drag `V_LOW_STOCK_ADS` — at BigQuery's planning ceiling — into the plan,
 and (b) let the trial's *population* drift with performance, which is a selection artifact of
 exactly the kind this design exists to kill.
+
+**Trial 2's literal is `('LolliBall')`.** The same four rules were re-applied on trial 2's design date,
+2026-10-03, and the stock rule was re-graded that day:
+- LolliBall is CRITICAL (21.6 days of binding cover) and stays out.
+- Bunny is OK (159.4 days, with 6,000 units arriving 10-07), so it is in.
+
+That gives 59 campaigns, $30,114 per 28 days, in five families (Bottle, Bunny, Fresh, LolliME, Lollibox).
+The literal stays frozen for the same reason as before.
 
 ---
 
@@ -168,6 +194,46 @@ ad dollar and the treated arm at −$0.110, worth about **$146 per 14 days**, ~6
 `V_HOLDOUT_READOUT` publishes the pre-period for both arms and reports a **change-score** estimate
 alongside the raw one for exactly this reason.
 
+### Trial 2's draw (computed 2026-10-03, approved by Ori 2026-10-04)
+
+The same method, declared before it ran. Only the seed prefix changes, along with the two criteria that
+scale with the population:
+
+```
+stratum        = channel | CAP/UNC | LNC/GRD                     (frozen at the draw)
+seq_in_stratum = 0-based rank in stratum by spend_28d DESC, campaign_id   (fresh for trial 2;
+                 CONTINUED by late arrivals, never recomputed)
+offset         = MOD(ABS(FARM_FINGERPRINT(seed || '|' || stratum)), 5)
+arm            = HOLDOUT iff MOD(seq_in_stratum + offset, 5) = 0, else TREATED
+seed           = 'OI-HOLDOUT-v2|' || seed_index, the FIRST seed_index = 0, 1, 2, … passing:
+  A1  exactly ROUND(N / 5) controls          (trial 2: 12 = ROUND(59 / 5))
+  A2  control share of eligible 28-day ad dollars in [0.18, 0.22]
+  A3  every eligible family present among the controls (five)
+```
+
+- **The result is `seed_index = 5`** (`OI-HOLDOUT-v2|5`), the first pass. Indices 0–4 fail:
+  - 0 gives 14 controls;
+  - 1 gives 12 controls at 16.1%;
+  - 2 gives 11 controls;
+  - 3 gives 11 controls at 24.4%;
+  - 4 gives 14 controls covering 4 families.
+- **The acceptance region** is 18,190 of the 390,625 offset vectors (4.66%). The permutation inference
+  of §8 permutes inside it.
+- **The founding cohort is written once, from the literal list Ori approved, and never re-drawn live.**
+  - The population reads live views, which cannot be pinned to the design date.
+  - Its fingerprint is `4171456845817687166`, over `unit_id|arm|stratum|seq` ordered by `unit_id`.
+  - Each row's `assignment_rule` starts `FOUNDING (approved list)`.
+- **Late arrivals.** `SP_ASSIGN_HOLDOUT` assigns campaigns that become eligible after 2026-10-03, on
+  first sight, by the same seed, with `seq_in_stratum` continuing the stratum's count. Their
+  `assignment_rule` starts `LATE ARRIVAL (first sight)`.
+- **Realized balance**, controls against treated:
+  - 12 against 47 campaigns;
+  - 21.01% against 78.99% of the 28-day ad dollars;
+  - net per ad dollar −0.141 against −0.120, a gap worth about $68 per 14 days;
+  - five families each.
+
+  The full table and the 59-row draw are in the plan, §3.
+
 ---
 
 ## 6. The frozen-arm rule, and what invalidates the trial
@@ -187,6 +253,17 @@ moved and swap arms wholesale.
 2. **Hand-uploading a bid, budget or negative to a HOLDOUT campaign.** The holdout arm's entire
    contract is that no instruction reaches it — from the engine *or* from a person. One upload and
    that unit is contaminated permanently.
+   **The Do page and the Weekly Run page are such a path** (review of holdout-t2, 2026-10-04). The
+   Weekly Run views (`V_WEEKLY_RUN_*`) carry no holdout logic and queue budgets, bids, `STOP_TARGET`
+   and negates into the Do queue; the Do page's export refused only an item matching an engine
+   `EXCLUDE` row (same campaign, keyword-or-term, lever and value; BID, BUDGET and NEGATE only) and
+   failed open when the cube errored. Its campaign-level hold (`DoPage.exportBulksheet` reads the
+   `HoldoutArm` cube over `V_HOLDOUT_ARM` and refuses every queued item on a control, any action, and
+   fails closed) ships with the dashboard and cube deploy after the 2026-10-05 deploy's step 1. **Until
+   it is live, nothing is queued on a HOLDOUT campaign from the Do page or the Weekly Run page.** A book
+   built before the 2026-10-05 deploy's step 4 is never uploaded after LA 2026-10-04 (plan
+   2026-10-03-holdout-restart.md Task 8): the old code that built it holds trial 1's controls, not
+   trial 2's.
 3. **Deliberately moving budget between the arms.** That makes the arms trade with each other and
    the difference stops being an effect.
 4. **Pulling a holdout unit out mid-trial** for a reason correlated with its performance or its
@@ -228,7 +305,8 @@ both arms, from the day of the contamination**, so the comparison inside each st
   that day the unit's dollars and proposals leave the estimate; it is rated on its own days before
   it.
 - One `CENSORED` row per censored unit names the unit, its arm and stratum, both dates and the change
-  that triggered the stratum. The ALL row's sentence (from 2027-01-05) says how many units were cut.
+  that triggered the stratum. The ALL row's sentence (from the trial's first readout) says how many
+  units were cut.
 - **Changes before the window are not censored** (the window, and R9, start on `eligible_from`).
   One `PRE_WINDOW_CHANGE` row per HOLDOUT unit changed from its assignment day (Los Angeles) to the
   day before its `eligible_from` names the changes day by day (logged and observed rows counted
@@ -340,6 +418,10 @@ over 16 weeks", not a fixed policy. This is a decision Ori must make; the trial 
    - The reason: it turns RED only when `V_HOLDOUT_READOUT` *fails* to censor a change, and the readout
      censors from the same ledger on the same read. The restart adds a touch term: RED for 7 days after
      any change on a control, then AMBER. It also adds a feed-liveness term. Plan §2.7.
+   - **Widened before the deploy** (pre-deploy review of 2026-10-03, amendment of 2026-10-04):
+     - the touch term also reads changes the ledger does not record, wherever a source carries them;
+     - feed liveness watches every path and source table on its own;
+     - what no source can see is stated below, under "What the alarm sees".
 2. **A seated keyword that later becomes a probe keeps the question it was seated with.**
    - This is a money-plan ruling, recorded here because it came in the same reply.
    - It confirms piece-1 follow-up G1 (builder v27.168): the incumbent is costed by its kept
@@ -350,7 +432,9 @@ over 16 weeks", not a fixed policy. This is a decision Ori must make; the trial 
    (queries in the plan, Appendix A):
    - the ledger's latest `OBSERVED` row is 2026-09-28 04:11 UTC, the 09-27 Los Angeles evening batch
      with the two pauses and the FRESH-VIDEO/ BROAD SB sync;
-   - the latest logged change is 2026-08-25;
+   - the latest change-log row is 2026-08-25 21:44 UTC. It belongs to batch `weekly_book_20260825_214435`,
+     which is still `PENDING_UPLOAD` and was never uploaded. The latest logged change that was *applied*
+     is 2026-08-24 17:28 UTC (`seasonal_unpause_20260824_1728`; wording corrected 2026-10-04);
    - the keyword mirror `V_SRC_AmazonAds_keyword` synced at 2026-10-03 11:09 UTC, and all 34,037
      keywords in it carry the bid and state of their current `DIM_KEYWORD` version;
    - since 09-27, `SP_LOAD_DIM_KEYWORD` and `SP_LOAD_DIM_CAMPAIGN` each logged 21 OK runs, and
@@ -375,6 +459,97 @@ and no estimate was ever read.
   preflight apply **no end date** at all.
 - Appended as-is, trial 2's rows would leave all 14 trial-1 controls frozen beside trial 2's 12.
 - They all switch to one view of the arm that binds today (plan §1, §2.1).
+
+### What the alarm sees, and what it cannot see (trial 2, from 2026-10-05)
+
+**R9 is unchanged.** The readout censors only what `FACT_PPC_CHANGE_LOG` records (an applied logged
+change, or an observed one), inside the window (Ori, 2026-10-02). **The alarm sees more than R9 censors.** `holdout_unit_changed` reads the live
+trial's controls from their assignment day. It is RED for 7 Los Angeles days after any of the following,
+then AMBER for as long as any control was ever touched, and it names each one:
+
+1. **A ledger change** (`FACT_PPC_CHANGE_LOG`, logged or observed):
+   - a keyword or product-target bid or state;
+   - a campaign budget or state;
+   - an ad-group default bid or state.
+
+   R9 censors one inside the window. One on 2026-10-05 is published as `PRE_WINDOW_CHANGE`.
+2. **A new keyword, product target or ad group on a control.** The source is the entity's first version
+   in `DIM_KEYWORD` or `DIM_AD_GROUP`. The ledger never counts a creation.
+3. **A portfolio move, a bidding-strategy change, or a campaign end date.**
+   - SP: `DIM_CAMPAIGN` versions on `portfolio_id` and `bidding_strategy`.
+   - SB: the `bid_optimization` settings in Fivetran's `sb_campaign_history`.
+   - SP and SB: an **end date** set, moved or cleared by hand: `end_date` on version pairs of Fivetran's
+     `campaign_history` (SP) and `sb_campaign_history` (SB). An end date stops a control serving, and the
+     ledger records only budget and state, so before 2026-10-04 the board stayed GREEN on it. Measured
+     2026-01-01 .. 2026-10-04: 2 such edits account-wide (SP, August), one of them on T2 control
+     `51727823265377` MINT-SP/BROAD (Back to School), end 2026-09-28 -> none on 08-09; 0 on SB.
+   - **Not watched, on purpose:** `start_date` (Amazon rewrote it on 16 SP and several SB campaigns in
+     May 2026, 05-12 -> 05-09, with no human touch: a false RED) and SB
+     `rule_based_budget_applicable_rule_id` (it flips monthly by itself).
+4. **A placement or shopper-cohort bid adjustment, or an SB product target's bid or state, that differs
+   from its value at the assignment.**
+   - These sources have no history and no date, so a change is visible only against
+     `DE_HOLDOUT_BASELINE`.
+   - **A row in these tables is not necessarily a live setting.** A Fivetran sync re-stamps only the
+     rows Amazon still returns. A removed adjustment keeps its old row and its old stamp, and the
+     three adjustment tables have no `_fivetran_deleted` flag to mark it. The SP table holds no 0%
+     row, so an SP adjustment set to 0% most likely disappears the same way.
+   - Measured 2026-10-04: 14 of the 195 SP placement rows were last stamped between 2026-03-17 and
+     08-14, on 13 campaigns that have no re-stamped row. Two of them are control ME-COMPETE
+     `365568042533669`'s top-of-search 30% and product-page 15%, stamped 2026-06-23. These are almost
+     certainly adjustments removed months ago.
+   - **So a setting counts only when its row was re-stamped by its table's latest sync** (within one
+     hour of that table's newest stamp) and is not flagged deleted. The baseline, the board and the
+     restart check K12 all use this one rule. A removed adjustment then shows as a difference. A stale
+     row that Fivetran later drops changes nothing, because it was already absent.
+   - By that rule, 7 of the 12 controls carry placement rows, 6 of them with a non-zero adjustment.
+     1 carries a shopper-cohort row and 1 an SB product target: 15 settings on 8 controls. ME-COMPETE
+     carries none.
+   - **Which controls it watches.** The live trial's founding controls (`assignment_rule` starting
+     `FOUNDING`), whether or not they have a baseline row. Four of the 12 carry no setting today,
+     ME-COMPETE among them. An adjustment put on one of them later is present on one side only, and
+     it reads RED.
+   - **A late-arrival control is not watched on these settings.** That is a control whose
+     `assignment_rule` starts `LATE ARRIVAL`. No baseline is taken for it and its settings are never
+     compared. The board names it as unwatched, by its `assignment_rule`. Comparing it would read RED
+     with nothing touched, because it has no baseline and most SB campaigns carry 0% placement rows.
+     Kinds 1–3 still watch it.
+   - Such a difference is RED while it stands, because there is no date to age it.
+   - Ori's ruling on it is recorded as a new baseline row, after which it reads AMBER. When he rules
+     that a setting is gone, that row's value is NULL, meaning absent. If the setting comes back
+     later, it reads RED again.
+   - **This matters for BOX-VIDEO/PT (Competitors, Purple, A1) `27660342907703`**, the largest control.
+     Its one target is an SB product target, which no ledger row, and so no R9 censoring, can ever see.
+
+**Kinds 2–4 are seen by the alarm and not censored by R9.** The board's detail says "seen by the alarm,
+not censored by R9 — Ori to rule". Each one is a ruling for Ori, and nothing is decided automatically.
+
+**What no source can see** (measured 2026-10-04; also in the tail of the board's detail on every read):
+- **Negatives added or removed by hand.** Fivetran's five negative tables have not been written since
+  2025-12-29 .. 2026-01-03. `DE_NEGATIVE_KEYWORDS` holds only the negatives OI uploads itself.
+- **Ads and creatives.** Fivetran's product-ad, SB-ad and SB-creative tables are frozen the same way
+  (last written 2025-12-28 .. 2026-01-03).
+- **A change undone before the next sync,** and two changes between two loads, which read as one
+  change carrying the later value.
+- **A kind-4 setting put back to its baseline value** before the board reads it.
+- **A late-arrival control's kind-4 settings.** It has no baseline, so they are never compared. The
+  board names each such control as unwatched.
+- **Not a touch at all:** Amazon's own automation, such as dynamic bidding and any budget rule already
+  in place, which runs in both arms. That is a shared confounder and is fine (§6 #5 above).
+
+Ori was told on 2026-10-04: **"the safest rule is not to open these 12 campaigns at all."** The rule of
+§6 #2 stands for every kind of change, seen or not.
+
+**Feed liveness.** "No change seen" and "the feed stalled" must not read the same. The board is RED when
+any of the following is more than 36 hours old:
+- the last OK run of `SP_RECORD_OBSERVED_CHANGES`, `SP_LOAD_DIM_KEYWORD`, `SP_LOAD_DIM_CAMPAIGN` or
+  `SP_LOAD_DIM_AD_GROUP`;
+- the last sync of any one of the eleven Fivetran tables that the ledger and the alarm read.
+
+Measured 2026-10-04: the procedures' largest gap between OK runs over 30 days is 13 hours, and each
+table's largest gap between syncs is at most 21 hours. Each sync re-stamps every row Amazon still
+returns (not every row in the table), so a table's newest stamp moves with each sync and not only on a
+change. The queries are in the plan, Appendix C.
 
 ---
 
@@ -432,7 +607,7 @@ materially — the largest eligible campaign is 11.2% of the money on its own.
 
 ## 8. Reading it out
 
-- **First readout: 2027-01-05.** `V_HOLDOUT_READOUT` returns exactly one estimate row before that
+- **First readout: 2027-01-05** (trial 1; trial 2's is 2027-02-09, below). `V_HOLDOUT_READOUT` returns exactly one estimate row before that
   date — state `NOT_YET`, all numerics `NULL`, verdict `not enough data yet — first readout
   2027-01-05` — and, from v27.162, one `CENSORED` row per censored unit and one `PRE_WINDOW_CHANGE`
   row per HOLDOUT unit changed before its window, which carry dates and a reason and no number (§6
@@ -441,7 +616,7 @@ materially — the largest eligible campaign is 11.2% of the money on its own.
   final window before 2027-01-05 systematically **understates the treated arm's sales**, because
   the treated arm has more recent changes by construction. The readout date already contains the
   14-day settle. **Do not let anyone pull it forward.**
-- **Interim safety look: 2026-11-10** (8 weeks observed). It can only detect harm above **$3,133 per
+- **Interim safety look: 2026-11-10** (trial 1; trial 2's is 2026-12-15) (8 weeks observed). It can only detect harm above **$3,133 per
   14 days**. It is a **circuit breaker, not a verdict**, and it is a deliberate one-time hand query,
   not something the standing view leaks every morning — a daily-readable estimate on an underpowered
   trial *will* be read early and the first plausible-looking number *will* become the answer.
@@ -476,12 +651,73 @@ engine ran, and Ori's own scorecard measured account **raises at −$752** again
 *"The engine is doing large harm"* is a live and plausible hypothesis — and it is the one hypothesis
 this trial can actually settle within a quarter.
 
+### Trial 2's readout (`HOLDOUT-2026Q4-CAMPAIGN-T2`)
+
+Trial 1's horizon rule is re-applied: 16 weeks, then the 14-day settle, and the interim look at 8 weeks
+plus the settle. **Everything above applies unchanged**, with these dates and numbers:
+
+| | trial 2 |
+|---|---|
+| assignment, and the export gate opens (`gate_from`) | 2026-10-05 |
+| window start (`eligible_from`; the estimate and R9 start here) | 2026-10-06 |
+| last day enforced (`trial_end`) | 2027-01-26 |
+| **interim safety look** (one-time hand query, a circuit breaker, not a verdict) | **2026-12-15** |
+| **first readout** (never pulled forward) | **2027-02-09** |
+
+- **Before 2027-02-09 the readout returns one estimate row.** Its state is `NOT_YET`, every numeric is
+  `NULL`, and its verdict names 2027-02-09. Beside it come the `CENSORED` and `PRE_WINDOW_CHANGE` rows,
+  which carry dates and reasons and never a number.
+- **The band and the MDE.** `t_mult` 3.27 is carried from trial 1's design and was not re-derived for 12
+  clusters. The ex-ante MDE is **$2,089 per 14 days**: trial 1's $2,261 rescaled to 12 / 47 on trial 1's
+  noise floor. A larger multiplier for 12 clusters would raise it, so read it as a floor.
+- **The MDE is about the size of the whole quantity being measured.** `FACT_AMAZON_ADS` summed over the
+  59 campaigns reads −$2,052.52 for 2026-09-19 .. 10-02 (read 2026-10-04). §7's warning applies
+  unchanged.
+- **Inference:** a permutation p-value inside trial 2's acceptance region (§5, "Trial 2's draw"), with
+  12 clusters.
+- **Pre-registered sensitivity checks.** Both are exploratory, like the action-class rows, and the `ALL`
+  row is the trial:
+  - **leave-one-out**, as in trial 1;
+  - **without the 10 former trial-1 controls** (pre-registered 2026-10-03). Trial 2 drew all 10 of trial
+    1's still-eligible controls as TREATED. Those campaigns had no engine instruction from 2026-09-01
+    (hand changes aside), and the engine resumes on them from 2026-10-05, so the treated arm opens with
+    a catch-up burst. That burst is part of the treatment, and the estimate stays unbiased. This row
+    shows how much of the estimate it carries. The 10 campaigns:
+    - `66467422009617` BOTTLE-VIDEO/PT (Competitors, Truth Or Dare, D1);
+    - `279837860088128` BOTTLE-SP/AUTO;
+    - `446868628489343` FRESH-VIDEO/ BROAD;
+    - `227290137740434` FRESH-SP/PT (Competitors, Pink, A1);
+    - `190387447939462` ME-SP/BROAD (Mint, journaling kit for g);
+    - `130253181662559` ME-SP/PHRASE (tween-girl-birthday-gift, Purple);
+    - `47108762429478` BOX-VIDEO Competitor;
+    - `200171414843593` BOX-SP/BROAD (Hunter, Gift for Girl);
+    - `488973733209950` BOX-SP/AUTO (White);
+    - `350259814389755` BOX-SP/BROAD- gifts for girls 10-12.
+- **Known exposure:** LolliME carries 74% of the control dollars. If LolliME enters ACTUAL CRITICAL, §6's
+  censoring rule leaves 5 controls ($59.47 a day) and 29 treated campaigns.
+- **The verbatim sentence** of "What the trial will let you say" reads, for trial 2: 16 weeks from 6 Oct
+  to 26 Jan, the 47 campaigns the engine managed against the 12 it was forbidden to touch, a 95%
+  interval of plus or minus $2,089. The treatment is the engine as it evolved over those weeks (§6,
+  "The engine is a moving target", still unruled).
+
 ---
 
-## 9. Trial 2 — `HOLDOUT-2026Q4-CAMPAIGN-T2` (proposed 2026-10-03, waiting for Ori's OK on the list)
+## 9. Trial 2 — `HOLDOUT-2026Q4-CAMPAIGN-T2` (approved 2026-10-04, deploying 2026-10-05)
 
-**Nothing below is deployed.** The plan is `docs/superpowers/plans/2026-10-03-holdout-restart.md`: the
-design, the tasks, checks K1–K11, the deploy timing and the full 59-row draw.
+**Status: approved 2026-10-04, deploying 2026-10-05.**
+- **Ori's words** (2026-10-04, after asking "explain seed 5"): **"ok seed 5, deploy it"**. The list below
+  is approved unchanged.
+- **No date moves**, because the OK came before 2026-10-05 22:00 Los Angeles.
+- **The deploy** runs on 2026-10-05 by `scripts/bigquery/migrations/2026-10-05_holdout_t2_deploy.sh`,
+  in the window the plan's Task 8 sets. That window opens after the second orchestrator pass of 10-05
+  ends and stops by 15:40 UTC. The fallback is after the third pass ends, finishing by 04:40 UTC on
+  10-06.
+- **The window opens on 2026-10-06.** The plan's Task 9 replaces this status with "running from
+  2026-10-06" and the measured results.
+- **The record:** the trial-2 `OPENED` row's `ruling` reads `Ori 2026-10-03: restart from 2026-10-06
+  with a fresh draw by the same method. List approved by Ori on 2026-10-04: "ok seed 5, deploy it".`
+- **The plan** is `docs/superpowers/plans/2026-10-03-holdout-restart.md`. It holds the design, the
+  tasks, checks K1–K12, the deploy timing and the full 59-row draw.
 
 **Dates** (trial 1's horizon rule: 16 weeks, then the 14-day settle; interim look 8 weeks + settle):
 
@@ -494,7 +730,8 @@ design, the tasks, checks K1–K11, the deploy timing and the full 59-row draw.
 | first readout | 2027-02-09 |
 
 The gate opens a day before the window because of how the passes fall:
-- The orchestrator's first pass of a New York day runs at about 05:30 UTC, which is the previous day in
+- The orchestrator's first pass of a New York day starts at 05:00 UTC, and its preflight runs at about
+  05:30 UTC (measured over 7 days to 2026-10-03). That is the previous day in
   Los Angeles. Every gate reader compares a Los Angeles date.
 - So the pass that builds the book uploaded on 10-06 judges under LA 10-05.
 - A change on a control on 10-05 itself is published as `PRE_WINDOW_CHANGE` and not censored. This is
@@ -555,4 +792,9 @@ floor, and it is a floor.
 
 The plan keeps the first passing seed, because the rule was declared before the draw ran.
 
-**Ori's OK:** _pending_.
+**Ori's OK:** 2026-10-04, *"ok seed 5, deploy it"* (after asking "explain seed 5"). The list is
+approved unchanged and the dates stand.
+
+**The alarm for trial 2** is §6, "What the alarm sees, and what it cannot see". **The readout** is §8,
+"Trial 2's readout". **Hand changes:** none to these 12 campaigns from the assignment on 2026-10-05 to
+2027-01-26 (§6 #2). Some kinds of change, such as negatives, ads and creatives, reach no surface at all.
