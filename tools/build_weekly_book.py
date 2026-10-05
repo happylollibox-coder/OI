@@ -465,6 +465,39 @@ def mend_budgets(budget_recs, losing, step=MEND_STEP):
     return out
 
 
+# THE FINAL HOLDOUT GATE (holdout restart, 2026-10-05; review of 5f83cb4): every row of the assembled
+# book, whatever its source, is checked against the arm that binds TODAY. The sources gate themselves,
+# but --reuse-stage reads source files of any age (the stage directory is shared across days), and a
+# file written before trial 2 was founded carries its controls. bq() exits on a failed query, so a book
+# is never built without this read (fail closed). Not counted by K7b, which counts MEND_SQL only.
+FINAL_HOLD_SQL = """
+SELECT CAST(campaign_id AS STRING) AS campaign_id, CAST(gate_from AS STRING) AS gate_from,
+       CAST(gate_to AS STRING) AS gate_to, trial_id
+FROM `{P}.OI.V_HOLDOUT_ARM`
+WHERE CURRENT_DATE('America/Los_Angeles') BETWEEN gate_from AND gate_to
+"""
+
+
+def final_holdout_gate(records, arm=None):
+    """Split records into (kept, held). held = rows on a campaign whose holdout arm binds today, each
+    turned into a Refused row with a HOLDOUT reason. arm: rows of FINAL_HOLD_SQL (read when None)."""
+    if arm is None:
+        arm = bq(FINAL_HOLD_SQL.replace('{P}', PROJECT))
+    held_at = {str(a['campaign_id']): a for a in arm}
+    kept, held = [], []
+    for r in records:
+        a = held_at.get(str(r['audit'].get('campaign_id')))
+        if a is None:
+            kept.append(r)
+            continue
+        why = (f"HOLDOUT: the campaign is a control of {a.get('trial_id')} (V_HOLDOUT_ARM, held "
+               f"{a.get('gate_from')} to {a.get('gate_to')}). This {r.get('source')} row was refused "
+               f"by the book's final holdout gate, not shipped.")
+        held.append({**r, 'sheet': None, 'cells': None,
+                     'audit': {**r['audit'], 'story': why, 'reason': why}})
+    return kept, held
+
+
 def mend_rows(step=MEND_STEP, min_spend=MEND_MIN_SPEND_28D, skip_keys=frozenset()):
     """Budget cuts and bid trims for campaigns losing money. Returns (records, refused).
 
@@ -1404,6 +1437,12 @@ def _main(args):
             ob, nb = a.get('_old_budget') or 0, a.get('_new_budget') or 0
             pct = (nb / ob - 1) * 100 if ob else float('nan')
             print(f"       HELD {pct:+7.0f}%  ${ob:8.2f} → ${nb:8.2f}  {a.get('campaign')}")
+
+    records, held = final_holdout_gate(records)
+    refused += held
+    if held:
+        print(f"  holdout gate: {len(held)} row(s) REFUSED on "
+              f"{len({r['audit'].get('campaign_id') for r in held})} control(s) whose arm binds today")
 
     if not records:
         sys.exit("no executable rows from any source — nothing to build")
