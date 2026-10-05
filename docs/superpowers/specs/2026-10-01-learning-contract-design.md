@@ -454,7 +454,7 @@ numbers, each beside the query that produced it (§14.3), re-run before this sec
 Also recorded 2026-10-03: a seated keyword that later becomes a probe keeps the question it was
 seated with (builder v27.168, confirmed by Ori); Ori made no change on Amazon after 2026-09-27.
 
-**D3's budget clause (raised 2026-10-03 by the Task-1 review) — ruled: the recommended form.** D3
+**D3's budget clause (raised 2026-10-03 by the Task-1 review) — ruled: the recommended form.** Put to Ori again on 2026-10-04 ("when the plan cuts a campaign's budget, the forecast caps that campaign's spend at the new budget — do you confirm?"); on 2026-10-05 he answered "if you can go them go", read as confirming the recommended form. D3
 ruled "a campaign budget cut applied proportionally", and §6 first wrote it as `LEAST(1, Σ DO_NOTHING
 spend × planned / current ÷ Σ ACT spend)`. That form also cuts campaigns whose `ACT` run rate is
 already at or below the new budget, where the budget cannot bind (E8). Recommended: `LEAST(1,
